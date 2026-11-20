@@ -26,9 +26,7 @@ import {
 } from 'lucide-react';
 import {
   blendWithWhite,
-  getAvatarBg,
   getGroupDefaultColor,
-  getInitials,
   PASTEL_SWATCHES,
 } from '../../constants/colors';
 import { DEFAULT_LOMLOE_KEY_COMPETENCES } from '../../data/lomloeReligion';
@@ -3022,28 +3020,20 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       title={`${displayName} — 1 clic: seleccionar fila · Doble clic: abrir ficha del alumno`}
                       className="w-full h-full flex items-center justify-between gap-2 text-left hover:text-blue-700 transition-colors overflow-hidden"
                     >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span
-                          className="w-[2em] h-[2em] rounded-full flex items-center justify-center text-[0.83em] font-bold text-slate-700 shrink-0 border border-black/5"
-                          style={{ backgroundColor: getAvatarBg(student.id) }}
-                        >
-                          {getInitials(student.firstName, student.lastName)}
-                        </span>
-                        <div className="min-w-0">
-                          <div className="text-[1em] font-semibold text-slate-900 truncate">
-                            {displayName}
-                          </div>
-                          {stGroup && !activeBook.groupByGroups && (
-                            <div className="mt-0.5 flex items-center gap-1">
-                              <span
-                                style={{ backgroundColor: stGrpColor }}
-                                className="px-1.5 py-0 rounded-full text-[0.79em] font-bold text-slate-700 border border-black/5 truncate max-w-[130px] leading-tight"
-                              >
-                                {stGroup}
-                              </span>
-                            </div>
-                          )}
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[1em] font-semibold text-slate-900 truncate">
+                          {displayName}
                         </div>
+                        {stGroup && !activeBook.groupByGroups && (
+                          <div className="mt-0.5 flex items-center gap-1">
+                            <span
+                              style={{ backgroundColor: stGrpColor }}
+                              className="px-1.5 py-0 rounded-full text-[0.79em] font-bold text-slate-700 border border-black/5 truncate max-w-[130px] leading-tight"
+                            >
+                              {stGroup}
+                            </span>
+                          </div>
+                        )}
                       </div>
                       <span className="text-[0.83em] text-slate-400 tabular-nums shrink-0">
                         {rIdx + 1}
