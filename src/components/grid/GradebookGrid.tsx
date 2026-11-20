@@ -164,7 +164,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setColumnGroupSummaryOverride,
     reorderStudents,
     selectGroupCategory,
-    assignStudentsToGroup,
     toggleGroupCollapsed,
     setCellData,
     setMultipleCellsData,
@@ -194,7 +193,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   const [selectedStudentRowId, setSelectedStudentRowId] = useState<string | null>(null);
   const [quickCounterColumnId, setQuickCounterColumnId] = useState<string | null>(null);
   const [selectedColumnTarget, setSelectedColumnTarget] = useState<SelectedColumnTarget | null>(null);
-  const [batchDraft, setBatchDraft] = useState('');
   const [copyToast, setCopyToast] = useState<string | null>(null);
   const copyToastTimerRef = useRef<number | null>(null);
 
@@ -212,8 +210,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   const [addMenuPos, setAddMenuPos] = useState<{ top: number; left: number }>({ top: 120, left: 200 });
   const [showSortMenu, setShowSortMenu] = useState(false);
   const [showCategoryMenu, setShowCategoryMenu] = useState(false);
-  const [showBatchGroupMenu, setShowBatchGroupMenu] = useState(false);
-  const [batchNewGroupDraft, setBatchNewGroupDraft] = useState('');
   const [showAddSummaryMenu, setShowAddSummaryMenu] = useState(false);
   const [addGroupSummaryMenu, setAddGroupSummaryMenu] = useState<{
     top: number;
@@ -270,7 +266,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       setShowAddColMenu(false);
       setShowSortMenu(false);
       setShowCategoryMenu(false);
-      setShowBatchGroupMenu(false);
       setShowAddSummaryMenu(false);
       setAddGroupSummaryMenu(null);
       setSummaryCellPicker(null);
@@ -293,7 +288,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setSelectedColumnTarget(null);
     setSelectedGroupColCell(null);
     setSelectedSummaryCell(null);
-    setBatchDraft('');
     setInlineEdit(null);
     setLomloePicker(null);
   }, [activeBook?.id, activeTab?.id]);
@@ -700,7 +694,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setSelectedColumnTarget(null);
     setSelectedGroupColCell(null);
     setSelectedSummaryCell(null);
-    setBatchDraft('');
   }, []);
 
   const showCopyToast = useCallback((msg: string) => {
@@ -1704,40 +1697,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   })();
 
   const totalActiveStudents = activeBook.students.filter((s) => !s.isHidden).length;
-  const barEditableTargets =
-    selectedColumnTarget?.kind === 'COL' && canTypeInline(selectedColumnTarget.col)
-      ? visibleStudents.map((s) => ({
-          studentId: s.id,
-          columnId: selectedColumnTarget.col.id,
-        }))
-      : editableNumericTargets;
-  const barClearableTargets =
-    selectedColumnTarget?.kind === 'COL' &&
-    !activeTab.isLocked &&
-    !selectedColumnTarget.col.isLocked &&
-    selectedColumnTarget.col.type !== 'AVERAGE'
-      ? visibleStudents.map((s) => ({
-          studentId: s.id,
-          columnId: selectedColumnTarget.col.id,
-        }))
-      : clearableTargets;
-  const distinctSelectedStudentIds = Array.from(
-    new Set(
-      selectedKeys.size > 0
-        ? Array.from(selectedKeys)
-            .map((k) => k.split('::')[0])
-            .filter(Boolean)
-        : selectedTargets.map((t) => t.studentId)
-    )
-  );
-
-  const handleApplyBatchBar = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (barEditableTargets.length === 0) return;
-    const parsed = parseMixedInput(batchDraft);
-    setMultipleCellsData(barEditableTargets, parsed.grade, parsed.comment);
-    setBatchDraft('');
-  };
 
   // Shared renderer for standalone columns (rowSpan=2 in Row 1) and child columns (in Row 2)
   const renderColumnHeaderCell = (col: ColumnEntity, isStandalone: boolean) => {
@@ -4423,217 +4382,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           className="fixed bottom-16 right-5 z-50 px-3.5 py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold shadow-lg pointer-events-none"
         >
           {copyToast}
-        </div>
-      )}
-
-      {/* Multi-selection or Column-selection contextual batch action bar */}
-      {(selectedKeys.size > 1 || selectedTargets.length > 1 || selectedColumnTarget !== null) && (
-        <div
-          role="region"
-          aria-label="Acciones para selección múltiple"
-          className="shrink-0 border-t border-blue-200 bg-blue-50/95 backdrop-blur-xs px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs z-20"
-        >
-          <div className="flex items-center gap-2 font-semibold text-blue-950">
-            {selectedColumnTarget ? (
-              <>
-                <span className="px-2 py-0.5 rounded-full bg-blue-600 text-white text-[11px] font-bold">
-                  Columna
-                </span>
-                <span className="truncate max-w-[200px]">
-                  {selectedColumnTarget.kind === 'COL'
-                    ? selectedColumnTarget.col.title
-                    : selectedColumnTarget.folder.title}
-                </span>
-                <span className="text-[11px] font-normal text-blue-800 hidden sm:inline">
-                  (Cmd/Ctrl+C copia siempre en orden alfabético por apellidos · Doble clic edita)
-                </span>
-              </>
-            ) : (
-              <>
-                <span className="px-2 py-0.5 rounded-full bg-blue-600 text-white text-[11px] font-bold tabular-nums">
-                  {Math.max(selectedKeys.size, selectedTargets.length)}
-                </span>
-                <span>celdas seleccionadas</span>
-                <span className="text-[11px] font-normal text-blue-800 hidden sm:inline">
-                  (Escribe directamente o usa esta barra · Shift+Clic rango · Cmd/Ctrl+Clic salteadas)
-                </span>
-              </>
-            )}
-          </div>
-
-          <form onSubmit={handleApplyBatchBar} className="flex flex-wrap items-center gap-1.5">
-            {selectedColumnTarget?.kind !== 'FOLDER' && (
-              <>
-                <input
-                  type="text"
-                  value={batchDraft}
-                  onChange={(e) => setBatchDraft(e.target.value)}
-                  disabled={barEditableTargets.length === 0}
-                  aria-label="Nota o comentario para celdas seleccionadas"
-                  placeholder="Nota común (ej: 8.5 bien)"
-                  className="w-48 px-2.5 py-1.5 rounded-lg border border-blue-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 disabled:opacity-50"
-                />
-                <button
-                  type="submit"
-                  disabled={barEditableTargets.length === 0 || !batchDraft.trim()}
-                  className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-semibold flex items-center gap-1 transition-colors"
-                >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Aplicar ({barEditableTargets.length})</span>
-                </button>
-              </>
-            )}
-
-            {/* Quick assign selected students into a group (existing or created on the fly) */}
-            {distinctSelectedStudentIds.length > 0 && (
-              <div className="relative" onMouseDown={(e) => e.stopPropagation()}>
-              <button
-                type="button"
-                onClick={() => setShowBatchGroupMenu((v) => !v)}
-                title="Incluir los alumnos seleccionados en un grupo"
-                className="px-3 py-1.5 rounded-lg border border-indigo-200 bg-white hover:bg-indigo-50 text-indigo-800 font-semibold flex items-center gap-1 transition-colors"
-              >
-                <Layers className="w-3.5 h-3.5" />
-                <span>Grupo ({distinctSelectedStudentIds.length})</span>
-                <ChevronDown className="w-3 h-3 opacity-70" />
-              </button>
-
-              {showBatchGroupMenu && (
-                <div className="absolute bottom-full right-0 mb-1.5 w-64 rounded-2xl border border-slate-200 bg-white shadow-xl p-2 z-50 text-xs space-y-2">
-                  <div className="px-1.5 pt-0.5 font-bold text-slate-800 flex items-center justify-between">
-                    <span>Asignar {distinctSelectedStudentIds.length} alumnos a:</span>
-                  </div>
-
-                  {/* Quick create new group on the fly */}
-                  <div className="flex items-center gap-1 px-1">
-                    <input
-                      type="text"
-                      value={batchNewGroupDraft}
-                      onChange={(e) => setBatchNewGroupDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          const clean = batchNewGroupDraft.trim();
-                          if (!clean) return;
-                          assignStudentsToGroup(distinctSelectedStudentIds, clean);
-                          showCopyToast(
-                            `${distinctSelectedStudentIds.length} alumnos añadidos a "${clean}"`
-                          );
-                          setBatchNewGroupDraft('');
-                          setShowBatchGroupMenu(false);
-                        }
-                      }}
-                      placeholder="Nuevo grupo..."
-                      className="flex-1 border border-slate-300 rounded-lg px-2 py-1 text-xs bg-white focus:outline-none focus:border-indigo-500"
-                    />
-                    <button
-                      type="button"
-                      disabled={!batchNewGroupDraft.trim()}
-                      onClick={() => {
-                        const clean = batchNewGroupDraft.trim();
-                        if (!clean) return;
-                        assignStudentsToGroup(distinctSelectedStudentIds, clean);
-                        showCopyToast(
-                          `${distinctSelectedStudentIds.length} alumnos añadidos a "${clean}"`
-                        );
-                        setBatchNewGroupDraft('');
-                        setShowBatchGroupMenu(false);
-                      }}
-                      className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-semibold"
-                    >
-                      Crear
-                    </button>
-                  </div>
-
-                  {effectiveGroups.length > 0 && (
-                    <div className="max-h-40 overflow-y-auto divide-y divide-slate-100 border-t border-slate-100 pt-1">
-                      {effectiveGroups.map((grp) => (
-                        <button
-                          key={grp.id}
-                          type="button"
-                          onClick={() => {
-                            assignStudentsToGroup(distinctSelectedStudentIds, grp.name);
-                            showCopyToast(
-                              `${distinctSelectedStudentIds.length} alumnos incluidos en "${grp.name}"`
-                            );
-                            setShowBatchGroupMenu(false);
-                          }}
-                          className="w-full px-2 py-1.5 text-left flex items-center gap-2 hover:bg-indigo-50 rounded-lg font-medium text-slate-800"
-                        >
-                          <span
-                            className="w-3 h-3 rounded-full border border-black/15 shrink-0"
-                            style={{ backgroundColor: grp.color }}
-                          />
-                          <span className="truncate">{grp.name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="border-t border-slate-100 pt-1 flex items-center justify-between gap-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        assignStudentsToGroup(distinctSelectedStudentIds, undefined);
-                        showCopyToast('Alumnos quitados de su grupo');
-                        setShowBatchGroupMenu(false);
-                      }}
-                      className="px-2 py-1 rounded-lg text-rose-600 hover:bg-rose-50 font-semibold"
-                    >
-                      Quitar de grupo
-                    </button>
-                    {onOpenGroupsManager && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowBatchGroupMenu(false);
-                          onOpenGroupsManager();
-                        }}
-                        className="px-2 py-1 rounded-lg text-indigo-700 hover:bg-indigo-50 font-semibold"
-                      >
-                        Editar grupos...
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={copySelectionToClipboard}
-              title={
-                selectedColumnTarget
-                  ? 'Copiar columna entera en orden alfabético por apellidos (Apellidos A–Z)'
-                  : 'Copiar celdas seleccionadas (rúbricas siempre en 0–10)'
-              }
-              className="px-3 py-1.5 rounded-lg border border-blue-200 bg-white hover:bg-blue-50 text-blue-800 font-semibold flex items-center gap-1 transition-colors"
-            >
-              <Copy className="w-3.5 h-3.5" />
-              <span>{selectedColumnTarget ? 'Copiar columna (Apellidos A–Z)' : 'Copiar'}</span>
-            </button>
-            {selectedColumnTarget?.kind !== 'FOLDER' && (
-              <button
-                type="button"
-                disabled={barClearableTargets.length === 0}
-                onClick={() => clearMultipleCells(barClearableTargets)}
-                className="px-3 py-1.5 rounded-lg border border-rose-200 bg-white hover:bg-rose-50 disabled:opacity-40 text-rose-700 font-semibold flex items-center gap-1 transition-colors"
-              >
-                <Eraser className="w-3.5 h-3.5" />
-                <span>Borrar ({barClearableTargets.length})</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={clearAllSelection}
-              title="Deseleccionar (Esc)"
-              aria-label="Cerrar barra de selección múltiple"
-              className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-blue-100"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </form>
         </div>
       )}
 
