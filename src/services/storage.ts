@@ -21,6 +21,7 @@ import type {
 } from '../types/gradebook';
 
 const LOCAL_KEY = 'cuaderno_profesor_v3_workspace';
+const UI_PREFS_KEY = 'cuaderno_profesor_ui_prefs_v1';
 const IDB_NAME = 'cuaderno_profesor_v3_db';
 const IDB_STORE = 'workspaces';
 const IDB_KEY = 'primary';
@@ -139,6 +140,8 @@ function hydrateBook(
         colorMode: c.colorMode ?? 'NONE',
         headerOrientation: c.headerOrientation ?? 'HORIZONTAL',
         isLocked: Boolean(c.isLocked),
+        editorMode: c.editorMode ?? undefined,
+        counterStep: typeof c.counterStep === 'number' ? c.counterStep : undefined,
         rubricShowPercentage: Boolean(c.rubricShowPercentage),
         summaryRowOverrides: c.summaryRowOverrides ?? undefined,
         groupSummaryRowOverrides: c.groupSummaryRowOverrides ?? undefined,
@@ -248,6 +251,10 @@ export function hydrateWorkspace(raw: Partial<GradebookWorkspace>): GradebookWor
           ? raw.settings.defaultFolderWidth
           : 68,
       showLomloeRow: raw.settings?.showLomloeRow ?? true,
+      collapsedSchools:
+        raw.settings?.collapsedSchools && typeof raw.settings.collapsedSchools === 'object'
+          ? raw.settings.collapsedSchools
+          : {},
     },
     updatedAt: raw.updatedAt ?? new Date().toISOString(),
   };
@@ -271,16 +278,135 @@ function openIdb(): Promise<IDBDatabase | null> {
   });
 }
 
-export async function loadLocalWorkspace(): Promise<GradebookWorkspace | null> {
+export interface UiMenuPrefs {
+  updatedAt: string;
+  activeMode: 'CLASS' | 'TEMPLATE';
+  activeClassId: string | null;
+  activeTemplateId: string | null;
+  activeTabByBook: Record<string, string>;
+  sidebarVisible: boolean;
+  collapsedSchools: Record<string, boolean>;
+  collapsedFoldersById: Record<string, boolean>;
+  collapsedGroupsByBook: Record<string, string[]>;
+}
+
+export function loadLocalWorkspaceSync(): GradebookWorkspace | null {
   try {
     const rawStr = localStorage.getItem(LOCAL_KEY);
     if (rawStr) {
-      const parsed = hydrateWorkspace(JSON.parse(rawStr));
-      if (parsed) return parsed;
+      return hydrateWorkspace(JSON.parse(rawStr));
     }
   } catch {
     // ignore corrupted localStorage
   }
+  return null;
+}
+
+export function loadUiMenuPrefs(): UiMenuPrefs | null {
+  try {
+    const rawStr = localStorage.getItem(UI_PREFS_KEY);
+    if (!rawStr) return null;
+    const parsed = JSON.parse(rawStr);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed as UiMenuPrefs;
+  } catch {
+    return null;
+  }
+}
+
+export function saveUiMenuPrefs(ws: GradebookWorkspace): void {
+  try {
+    const collapsedFoldersById: Record<string, boolean> = {};
+    const collapsedGroupsByBook: Record<string, string[]> = {};
+    for (const book of [...ws.classes, ...ws.templates]) {
+      if (book.collapsedGroups && book.collapsedGroups.length > 0) {
+        collapsedGroupsByBook[book.id] = book.collapsedGroups;
+      }
+      for (const tab of book.tabs) {
+        for (const f of tab.folders) {
+          collapsedFoldersById[f.id] = Boolean(f.isCollapsed);
+        }
+      }
+    }
+    const prefs: UiMenuPrefs = {
+      updatedAt: ws.updatedAt,
+      activeMode: ws.activeMode,
+      activeClassId: ws.activeClassId,
+      activeTemplateId: ws.activeTemplateId,
+      activeTabByBook: ws.activeTabByBook ?? {},
+      sidebarVisible: ws.settings.sidebarVisible,
+      collapsedSchools: ws.settings.collapsedSchools ?? {},
+      collapsedFoldersById,
+      collapsedGroupsByBook,
+    };
+    localStorage.setItem(UI_PREFS_KEY, JSON.stringify(prefs));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function mergeNewerLocalUiPrefs(
+  remote: GradebookWorkspace,
+  prefs: UiMenuPrefs | null
+): { workspace: GradebookWorkspace; merged: boolean } {
+  if (!prefs || !prefs.updatedAt) {
+    return { workspace: remote, merged: false };
+  }
+  const localTs = Date.parse(prefs.updatedAt);
+  const remoteTs = Date.parse(remote.updatedAt);
+  if (!Number.isFinite(localTs) || (Number.isFinite(remoteTs) && remoteTs >= localTs)) {
+    return { workspace: remote, merged: false };
+  }
+
+  const classIds = new Set(remote.classes.map((c) => c.id));
+  const templateIds = new Set(remote.templates.map((t) => t.id));
+  const applyFolderAndGroupState = (book: ClassBook): ClassBook => ({
+    ...book,
+    collapsedGroups: prefs.collapsedGroupsByBook[book.id] ?? book.collapsedGroups,
+    tabs: book.tabs.map((tab) => ({
+      ...tab,
+      folders: tab.folders.map((f) =>
+        f.id in prefs.collapsedFoldersById
+          ? { ...f, isCollapsed: Boolean(prefs.collapsedFoldersById[f.id]) }
+          : f
+      ),
+    })),
+  });
+
+  const mergedWs: GradebookWorkspace = {
+    ...remote,
+    activeMode: prefs.activeMode ?? remote.activeMode,
+    activeClassId:
+      prefs.activeClassId && classIds.has(prefs.activeClassId)
+        ? prefs.activeClassId
+        : remote.activeClassId,
+    activeTemplateId:
+      prefs.activeTemplateId && templateIds.has(prefs.activeTemplateId)
+        ? prefs.activeTemplateId
+        : remote.activeTemplateId,
+    activeTabByBook: {
+      ...(remote.activeTabByBook ?? {}),
+      ...(prefs.activeTabByBook ?? {}),
+    },
+    settings: {
+      ...remote.settings,
+      sidebarVisible:
+        typeof prefs.sidebarVisible === 'boolean'
+          ? prefs.sidebarVisible
+          : remote.settings.sidebarVisible,
+      collapsedSchools:
+        prefs.collapsedSchools ?? remote.settings.collapsedSchools ?? {},
+    },
+    classes: remote.classes.map(applyFolderAndGroupState),
+    templates: remote.templates.map(applyFolderAndGroupState),
+    updatedAt: prefs.updatedAt,
+  };
+  return { workspace: mergedWs, merged: true };
+}
+
+export async function loadLocalWorkspace(): Promise<GradebookWorkspace | null> {
+  const sync = loadLocalWorkspaceSync();
+  if (sync) return sync;
 
   const db = await openIdb();
   if (!db) return null;
@@ -297,6 +423,7 @@ export async function loadLocalWorkspace(): Promise<GradebookWorkspace | null> {
 }
 
 export async function saveLocalWorkspace(ws: GradebookWorkspace): Promise<void> {
+  saveUiMenuPrefs(ws);
   const clean = sanitizeForRtdb(ws);
   try {
     localStorage.setItem(LOCAL_KEY, JSON.stringify(clean));
@@ -320,6 +447,7 @@ export async function saveLocalWorkspace(ws: GradebookWorkspace): Promise<void> 
 export async function clearLocalWorkspace(): Promise<void> {
   try {
     localStorage.removeItem(LOCAL_KEY);
+    localStorage.removeItem(UI_PREFS_KEY);
   } catch {
     // ignore
   }

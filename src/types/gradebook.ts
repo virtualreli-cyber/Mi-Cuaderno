@@ -1,5 +1,11 @@
 export type ColumnType = 'NUMERIC' | 'AVERAGE' | 'RUBRIC';
 
+export type ColumnEditorMode =
+  | 'STANDARD'
+  | 'COUNTER_POS'
+  | 'COUNTER_NEG'
+  | 'QUICK_COUNTER';
+
 export type ColorMode = 'NONE' | 'TEXT_ONLY' | 'CELL_BG';
 
 export type FolderSummaryMode =
@@ -162,6 +168,10 @@ export interface ColumnEntity {
   passThreshold: number;
   colorMode: ColorMode;
   // Type-specific configurations
+  /** Modo de edición para columnas numéricas (estándar, contador +/- o contador rápido) */
+  editorMode?: ColumnEditorMode;
+  /** Incremento/decremento por clic para los modos de contador (por defecto 1) */
+  counterStep?: number;
   averageConfig?: AverageConfig;
   rubricId?: string;
   /** Por defecto false: las rúbricas se muestran convertidas de % a 0–10. Si true ("No convertir"), muestra el %. Al copiar siempre se copia 0–10. */
@@ -273,6 +283,8 @@ export interface ViewSettings {
   defaultFolderWidth?: number;
   /** Mostrar fila LOMLOE debajo de las cabeceras por defecto */
   showLomloeRow?: boolean;
+  /** Estado plegado/abierto de las secciones/centros del panel lateral de clases */
+  collapsedSchools?: Record<string, boolean>;
 }
 
 export interface GradebookWorkspace {

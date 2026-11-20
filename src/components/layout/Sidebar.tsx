@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import {
   Building2,
   ChevronDown,
@@ -41,9 +41,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
     selectTemplate,
     deleteBook,
     saveBookAsTemplate,
+    updateSettings,
   } = useGradebook();
 
-  const [collapsedSchools, setCollapsedSchools] = useState<Record<string, boolean>>({});
+  const collapsedSchools = workspace.settings.collapsedSchools ?? {};
 
   const groupedClasses = useMemo(() => {
     const groups = new Map<string, ClassBook[]>();
@@ -233,10 +234,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <button
                       type="button"
                       onClick={() =>
-                        setCollapsedSchools((prev) => ({
-                          ...prev,
-                          [grp.key]: !prev[grp.key],
-                        }))
+                        updateSettings({
+                          collapsedSchools: {
+                            ...collapsedSchools,
+                            [grp.key]: !isCollapsed,
+                          },
+                        })
                       }
                       style={{
                         backgroundColor: blendWithWhite(accentHex, 0.72),

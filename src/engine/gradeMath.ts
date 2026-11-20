@@ -175,6 +175,31 @@ export function clampGradeForColumn(value: number | null, col: ColumnEntity): nu
   return roundTo(clamped, col.decimals);
 }
 
+/**
+ * Increments or decrements a grade cell by `delta` (e.g. +1, -0.5) respecting the
+ * column bounds and decimal precision. Empty cells start from 0 (or minValue if > 0).
+ */
+export function applyCounterDelta(
+  currentGrade: number | null | undefined,
+  delta: number,
+  col: ColumnEntity
+): number {
+  const base =
+    currentGrade !== null && currentGrade !== undefined && !Number.isNaN(currentGrade)
+      ? currentGrade
+      : col.minValue > 0
+        ? col.minValue
+        : 0;
+  const stepDecimals = (() => {
+    const str = String(Math.abs(delta));
+    const dot = str.indexOf('.');
+    return dot >= 0 ? Math.min(3, str.length - dot - 1) : 0;
+  })();
+  const nextRaw = roundTo(base + delta, Math.max(col.decimals, stepDecimals));
+  const clamped = Math.max(col.minValue, Math.min(col.maxValue, nextRaw));
+  return roundTo(clamped, Math.max(col.decimals, stepDecimals));
+}
+
 export function computeRubricPercentage(
   rubric: RubricEntity,
   evalData: RubricCellEval | undefined

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createSeedWorkspace, DEFAULT_RUBRICS } from '../../data/seedData';
 import {
+  applyCounterDelta,
   buildAlphabeticalColumnCopyText,
   computeColumnSummaryMetric,
   computeFolderSummary,
@@ -550,5 +551,29 @@ describe('Weighted Averages, Cross-Tab Chaining, Rubrics & Folders', () => {
       (s) => afterRecalc.cells[cellKey(s.id, 'col-nota-ev-test')]?.grade ?? null
     );
     expect(afterGrades).toEqual(beforeGrades);
+  });
+
+  it('increments and decrements grades cleanly via applyCounterDelta respecting bounds and decimal steps', () => {
+    const col: ColumnEntity = {
+      id: 'c-cnt',
+      folderId: null,
+      title: 'Positivos',
+      color: '#FFFFFF',
+      width: 90,
+      orderIndex: 0,
+      type: 'NUMERIC',
+      editorMode: 'QUICK_COUNTER',
+      counterStep: 0.5,
+      minValue: -5,
+      maxValue: 10,
+      decimals: 2,
+      passThreshold: 5,
+      colorMode: 'NONE',
+    };
+    expect(applyCounterDelta(null, 0.5, col)).toBe(0.5);
+    expect(applyCounterDelta(0.5, 0.5, col)).toBe(1);
+    expect(applyCounterDelta(9.75, 0.5, col)).toBe(10);
+    expect(applyCounterDelta(null, -0.5, col)).toBe(-0.5);
+    expect(applyCounterDelta(-4.75, -0.5, col)).toBe(-5);
   });
 });

@@ -21,6 +21,7 @@ import { compareLomloeCodes, resolveBookCurriculum } from '../../engine/lomloe';
 import { getCanonicalItemOrder } from '../../engine/tabLayout';
 import type {
   ColorMode,
+  ColumnEditorMode,
   ColumnEntity,
   ColumnType,
 } from '../../types/gradebook';
@@ -70,7 +71,9 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
   const [orientation, setOrientation] = useState<'HORIZONTAL' | 'VERTICAL'>('HORIZONTAL');
   const [isLocked, setIsLocked] = useState(false);
 
-  // Numeric settings (defaults: 0-10, 2 decimals)
+  // Numeric & counter editor settings (defaults: 0-10, 2 decimals)
+  const [editorMode, setEditorMode] = useState<ColumnEditorMode>('STANDARD');
+  const [counterStep, setCounterStep] = useState<number>(1);
   const [minValue, setMinValue] = useState(0);
   const [maxValue, setMaxValue] = useState(10);
   const [decimals, setDecimals] = useState(2);
@@ -152,6 +155,12 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
       setFolderId(editingColumn.folderId ?? '');
       setOrientation(editingColumn.headerOrientation ?? 'HORIZONTAL');
       setIsLocked(Boolean(editingColumn.isLocked));
+      setEditorMode(editingColumn.editorMode ?? 'STANDARD');
+      setCounterStep(
+        typeof editingColumn.counterStep === 'number' && editingColumn.counterStep > 0
+          ? editingColumn.counterStep
+          : 1
+      );
       setMinValue(editingColumn.minValue);
       setMaxValue(editingColumn.maxValue);
       setDecimals(editingColumn.decimals);
@@ -180,6 +189,8 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
       setFolderId(presetFolderId ?? '');
       setOrientation('HORIZONTAL');
       setIsLocked(false);
+      setEditorMode('STANDARD');
+      setCounterStep(1);
       setMinValue(0);
       setMaxValue(10);
       setDecimals(2);
@@ -269,6 +280,18 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    const safeStep = Math.max(0.05, Number(String(counterStep).replace(',', '.')) || 1);
+    const stepDecs = (() => {
+      const s = String(safeStep);
+      const dot = s.indexOf('.');
+      return dot >= 0 ? Math.min(3, s.length - dot - 1) : 0;
+    })();
+    const rawDecimals = Math.max(0, Math.min(3, Number(decimals)));
+    const effectiveDecimals =
+      type === 'NUMERIC' && editorMode !== 'STANDARD'
+        ? Math.max(rawDecimals, stepDecs)
+        : rawDecimals;
+
     const payload = {
       folderId: folderId || null,
       title: title.trim() || 'Columna',
@@ -279,9 +302,11 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
       type,
       headerOrientation: orientation,
       isLocked,
+      editorMode: type === 'NUMERIC' ? editorMode : undefined,
+      counterStep: type === 'NUMERIC' && editorMode !== 'STANDARD' ? safeStep : undefined,
       minValue: Number(minValue),
       maxValue: Number(maxValue),
-      decimals: Math.max(0, Math.min(3, Number(decimals))),
+      decimals: effectiveDecimals,
       passThreshold: Number(passThreshold),
       colorMode,
       averageConfig:
@@ -365,7 +390,7 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
                 {
                   v: 'NUMERIC',
                   label: 'Nota numérica',
-                  desc: 'Escala 0–10 (2 dec.) + texto',
+                  desc: 'Escala, teclado o contadores',
                   icon: Pencil,
                 },
                 {
@@ -405,6 +430,106 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
             })}
           </div>
         </div>
+
+        {/* Numeric Cell Editing Mode (Standard vs Positive/Negative Counter vs Quick Counter +/-) */}
+        {type === 'NUMERIC' && (
+          <div className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/40 space-y-3">
+            <div>
+              <label className="block font-bold text-slate-800 mb-1.5">
+                Forma de edición de las celdas
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {(
+                  [
+                    {
+                      v: 'STANDARD',
+                      label: 'Estándar',
+                      desc: 'Doble clic abre el editor',
+                    },
+                    {
+                      v: 'COUNTER_POS',
+                      label: 'Contador (+)',
+                      desc: 'Doble clic suma puntos',
+                    },
+                    {
+                      v: 'COUNTER_NEG',
+                      label: 'Contador (-)',
+                      desc: 'Doble clic resta puntos',
+                    },
+                    {
+                      v: 'QUICK_COUNTER',
+                      label: 'Contador rápido (+/-)',
+                      desc: 'Doble clic abre + y - en toda la columna',
+                    },
+                  ] as const
+                ).map((m) => {
+                  const isSel = editorMode === m.v;
+                  return (
+                    <button
+                      key={m.v}
+                      type="button"
+                      onClick={() => setEditorMode(m.v)}
+                      className={`p-2 rounded-xl border text-left transition-all ${
+                        isSel
+                          ? 'border-indigo-500 bg-white text-indigo-950 ring-1 ring-indigo-300 shadow-2xs'
+                          : 'border-slate-200 bg-white/75 text-slate-700 hover:bg-white'
+                      }`}
+                    >
+                      <div className="font-bold text-[11.5px] leading-tight">{m.label}</div>
+                      <div className="text-[10.5px] text-slate-500 mt-0.5 leading-snug">
+                        {m.desc}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {editorMode !== 'STANDARD' && (
+              <div className="pt-2 border-t border-indigo-200/70 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="font-semibold text-slate-700">
+                    Puntos por pulsación:
+                  </label>
+                  <input
+                    type="number"
+                    min={0.05}
+                    step="0.05"
+                    value={counterStep}
+                    onChange={(e) => setCounterStep(Number(e.target.value))}
+                    className="w-20 border border-slate-300 rounded-lg px-2 py-1 bg-white font-bold tabular-nums text-center"
+                  />
+                  <div className="flex items-center gap-1">
+                    {[0.25, 0.5, 1, 2].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setCounterStep(preset)}
+                        className={`px-2 py-0.5 rounded-lg border text-[11px] font-semibold tabular-nums ${
+                          counterStep === preset
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        {String(preset).replace('.', ',')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {editorMode === 'COUNTER_NEG' && minValue >= 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setMinValue(-10)}
+                    className="px-2.5 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 text-[11px] font-semibold border border-amber-300"
+                  >
+                    Permitir negativos (Mín: -10)
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Basic Info */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">

@@ -31,6 +31,7 @@ import {
 import { DEFAULT_LOMLOE_KEY_COMPETENCES } from '../../data/lomloeReligion';
 import { useGradebook } from '../../context/GradebookContext';
 import {
+  applyCounterDelta,
   buildAlphabeticalColumnCopyText,
   clampGradeForColumn,
   COLUMN_SUMMARY_OPTIONS,
@@ -190,6 +191,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     columnId: string;
   } | null>(null);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
+  const [selectedStudentRowId, setSelectedStudentRowId] = useState<string | null>(null);
+  const [quickCounterColumnId, setQuickCounterColumnId] = useState<string | null>(null);
   const [selectedColumnTarget, setSelectedColumnTarget] = useState<SelectedColumnTarget | null>(null);
   const [batchDraft, setBatchDraft] = useState('');
   const [copyToast, setCopyToast] = useState<string | null>(null);
@@ -285,6 +288,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setSelectedCoord(null);
     setAnchorCoord(null);
     setSelectedKeys(new Set());
+    setSelectedStudentRowId(null);
+    setQuickCounterColumnId(null);
     setSelectedColumnTarget(null);
     setSelectedGroupColCell(null);
     setSelectedSummaryCell(null);
@@ -292,6 +297,53 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setInlineEdit(null);
     setLomloePicker(null);
   }, [activeBook?.id, activeTab?.id]);
+
+  // Clear stale selectedColumnTarget if that column/folder was deleted
+  useEffect(() => {
+    if (!selectedColumnTarget || !activeTab) return;
+    if (
+      selectedColumnTarget.kind === 'COL' &&
+      !activeTab.columns.some((c) => c.id === selectedColumnTarget.col.id)
+    ) {
+      setSelectedColumnTarget(null);
+    } else if (
+      selectedColumnTarget.kind === 'FOLDER' &&
+      !activeTab.folders.some((f) => f.id === selectedColumnTarget.folder.id)
+    ) {
+      setSelectedColumnTarget(null);
+    }
+  }, [selectedColumnTarget, activeTab]);
+
+  // Hide quick-counter +/- column buttons & student row selection whenever selection moves elsewhere
+  useEffect(() => {
+    if (
+      selectedStudentRowId &&
+      (selectedCoord !== null ||
+        selectedColumnTarget !== null ||
+        selectedGroupColCell !== null ||
+        selectedSummaryCell !== null)
+    ) {
+      setSelectedStudentRowId(null);
+    }
+    if (!quickCounterColumnId) return;
+    if (
+      !selectedCoord ||
+      selectedCoord.columnId !== quickCounterColumnId ||
+      selectedColumnTarget !== null ||
+      selectedGroupColCell !== null ||
+      selectedSummaryCell !== null ||
+      selectedStudentRowId !== null
+    ) {
+      setQuickCounterColumnId(null);
+    }
+  }, [
+    quickCounterColumnId,
+    selectedCoord,
+    selectedColumnTarget,
+    selectedGroupColCell,
+    selectedSummaryCell,
+    selectedStudentRowId,
+  ]);
 
   // Synchronous focus on mount so fast keystrokes immediately enter the inline input
   useLayoutEffect(() => {
@@ -559,6 +611,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
   const selectSingleCell = useCallback((studentId: string, columnId: string) => {
     const k = cellKey(studentId, columnId);
+    setSelectedStudentRowId(null);
     setSelectedColumnTarget(null);
     setSelectedGroupColCell(null);
     setSelectedSummaryCell(null);
@@ -590,6 +643,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           next.add(cellKey(visibleStudents[r].id, slotIdsInOrder[c]));
         }
       }
+      setSelectedStudentRowId(null);
       setSelectedColumnTarget(null);
       setSelectedGroupColCell(null);
       setSelectedSummaryCell(null);
@@ -602,6 +656,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
   // Clicking a column or folder header selects ONLY the header itself (no body cells highlighted)
   const selectEntireColumn = useCallback((col: ColumnEntity) => {
+    setSelectedStudentRowId(null);
     setSelectedColumnTarget({ kind: 'COL', col });
     setSelectedGroupColCell(null);
     setSelectedSummaryCell(null);
@@ -613,6 +668,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
   const selectFolderSummaryColumn = useCallback(
     (folder: FolderEntity, childCols: ColumnEntity[]) => {
+      setSelectedStudentRowId(null);
       setSelectedColumnTarget({ kind: 'FOLDER', folder, childCols });
       setSelectedGroupColCell(null);
       setSelectedSummaryCell(null);
@@ -624,29 +680,23 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     []
   );
 
-  const selectEntireStudentRow = useCallback(
-    (studentId: string) => {
-      const next = new Set<string>();
-      for (const col of visibleColumns) {
-        next.add(cellKey(studentId, col.id));
-      }
-      setSelectedColumnTarget(null);
-      setSelectedGroupColCell(null);
-      setSelectedSummaryCell(null);
-      setSelectedKeys(next);
-      if (visibleColumns.length > 0) {
-        const first = { studentId, columnId: visibleColumns[0].id };
-        setSelectedCoord(first);
-        setAnchorCoord(first);
-      }
-    },
-    [visibleColumns]
-  );
+  const selectEntireStudentRow = useCallback((studentId: string) => {
+    setSelectedStudentRowId(studentId);
+    setSelectedColumnTarget(null);
+    setSelectedGroupColCell(null);
+    setSelectedSummaryCell(null);
+    setSelectedKeys(new Set());
+    setSelectedCoord(null);
+    setAnchorCoord(null);
+    wrapperRef.current?.focus({ preventScroll: true });
+  }, []);
 
   const clearAllSelection = useCallback(() => {
     setSelectedCoord(null);
     setAnchorCoord(null);
     setSelectedKeys(new Set());
+    setSelectedStudentRowId(null);
+    setQuickCounterColumnId(null);
     setSelectedColumnTarget(null);
     setSelectedGroupColCell(null);
     setSelectedSummaryCell(null);
@@ -686,6 +736,26 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     if (!activeBook) return null;
     if (selectedColumnTarget) {
       return buildAlphabeticalColumnCopyText(activeBook, selectedColumnTarget).text;
+    }
+
+    if (selectedStudentRowId && !selectedCoord && selectedKeys.size === 0) {
+      if (displaySlots.length === 0) return null;
+      return displaySlots
+        .map((slot) => {
+          if (slot.kind === 'FOLDER_SUMMARY') {
+            const val = computeFolderSummary(
+              slot.folder,
+              slot.childCols,
+              selectedStudentRowId,
+              activeBook
+            );
+            return val !== null ? formatGrade(val, 2) : '';
+          }
+          const cell = activeBook.cells[cellKey(selectedStudentRowId, slot.col.id)];
+          const gradeStr = formatCellCopyValue(cell?.grade ?? null, slot.col);
+          return gradeStr || cell?.comment || '';
+        })
+        .join('\t');
     }
 
     const keysToRead =
@@ -745,7 +815,25 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         return sortedCols.map((c) => cols.get(c) ?? '').join('\t');
       })
       .join('\n');
-  }, [activeBook, selectedColumnTarget, selectedKeys, selectedCoord, visibleStudents, displaySlots]);
+  }, [
+    activeBook,
+    selectedColumnTarget,
+    selectedStudentRowId,
+    selectedKeys,
+    selectedCoord,
+    visibleStudents,
+    displaySlots,
+  ]);
+
+  const stepCellByDelta = useCallback(
+    (studentId: string, col: ColumnEntity, delta: number) => {
+      if (!activeBook || activeTab?.isLocked || col.isLocked || col.type !== 'NUMERIC') return;
+      const existing = activeBook.cells[cellKey(studentId, col.id)];
+      const nextGrade = applyCounterDelta(existing?.grade ?? null, delta, col);
+      setCellData(studentId, col.id, nextGrade, existing?.comment ?? '');
+    },
+    [activeBook, activeTab?.isLocked, setCellData]
+  );
 
   const copySelectionToClipboard = useCallback(() => {
     if (selectedColumnTarget) {
@@ -1115,6 +1203,32 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       }
 
       if (!selectedCoord) {
+        if (selectedStudentRowId) {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            setSelectedStudentRowId(null);
+            return;
+          }
+          const stIdx = visibleStudents.findIndex((s) => s.id === selectedStudentRowId);
+          if (stIdx >= 0) {
+            if (e.key === 'ArrowDown' && stIdx < visibleStudents.length - 1) {
+              e.preventDefault();
+              setSelectedStudentRowId(visibleStudents[stIdx + 1].id);
+              return;
+            }
+            if (e.key === 'ArrowUp' && stIdx > 0) {
+              e.preventDefault();
+              setSelectedStudentRowId(visibleStudents[stIdx - 1].id);
+              return;
+            }
+            if (e.key === 'ArrowRight' && slotIdsInOrder.length > 0) {
+              e.preventDefault();
+              selectSingleCell(selectedStudentRowId, slotIdsInOrder[0]);
+              focusCell(selectedStudentRowId, slotIdsInOrder[0]);
+              return;
+            }
+          }
+        }
         if (isArrowKey && visibleStudents.length > 0 && slotIdsInOrder.length > 0) {
           selectSingleCell(visibleStudents[0].id, slotIdsInOrder[0]);
           focusCell(visibleStudents[0].id, slotIdsInOrder[0]);
@@ -1178,6 +1292,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         setLomloePicker(null);
         setSummaryCellPicker(null);
         setSelectedSummaryCell(null);
+        setQuickCounterColumnId(null);
         // Escape keeps cell selection intact without deselecting
       } else if (e.key.length === 1 && !isMod && !e.altKey) {
         if (selectedTargets.length > 1) {
@@ -1204,6 +1319,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   }, [
     inlineEdit,
     selectedCoord,
+    selectedStudentRowId,
     selectedTargets.length,
     editableNumericTargets,
     clearableTargets,
@@ -2913,6 +3029,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               for (const student of bucket.students) {
                 const rIdx = runningRowIdx++;
                 const rowBg = rIdx % 2 === 0 ? '#FFFFFF' : '#F6F8FA';
+                const isStudentRowSelected = selectedStudentRowId === student.id;
                 const displayName =
                   workspace.settings.nameFormat === 'FIRST_LAST'
                     ? `${student.firstName} ${student.lastName}`
@@ -2921,9 +3038,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
                 rows.push(
                 <tr key={student.id} style={{ height: rowH }}>
-                  {/* Sticky Student Name Cell (1 click selects row, double click opens student card) */}
+                  {/* Sticky Student Name Cell (1 click selects row in iDoceo style, double click opens student card) */}
                   <th
                     scope="row"
+                    aria-selected={isStudentRowSelected}
                     draggable={activeBook.sortMode === 'MANUAL'}
                     onDragStart={() => setDragStudentId(student.id)}
                     onDragOver={(e) => {
@@ -2947,11 +3065,16 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       setDragStudentId(null);
                     }}
                     style={{ backgroundColor: rowBg, height: rowH }}
-                    className="sticky left-0 z-20 border-r-2 border-b border-slate-200 px-2.5 py-1 text-left font-normal relative"
+                    className={`sticky left-0 z-20 border-r-2 border-b border-slate-200 px-2.5 py-1 text-left font-normal relative ${
+                      isStudentRowSelected ? 'student-row-selected' : ''
+                    }`}
                   >
                     <button
                       type="button"
-                      onClick={() => selectEntireStudentRow(student.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        selectEntireStudentRow(student.id);
+                      }}
                       onDoubleClick={() => onEditStudent(student)}
                       title={`${displayName} — 1 clic: seleccionar fila · Doble clic: abrir ficha del alumno`}
                       className="w-full h-full flex items-center justify-between gap-2 text-left hover:text-blue-700 transition-colors overflow-hidden"
@@ -3015,6 +3138,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                               const anchor = anchorCoord ?? selectedCoord ?? clicked;
                               selectRangeToCell(anchor, clicked, isMod);
                             } else if (isMod) {
+                              setSelectedStudentRowId(null);
                               const next = new Set(selectedKeys);
                               if (next.has(fCellKey)) next.delete(fCellKey);
                               else next.add(fCellKey);
@@ -3042,7 +3166,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                               ? 'cell-selected z-10'
                               : isFolderCellInMulti
                                 ? 'cell-multi-selected z-10'
-                                : 'hover:brightness-98'
+                                : isStudentRowSelected
+                                  ? 'student-row-cell-tint'
+                                  : 'hover:brightness-98'
                           }`}
                         >
                           {val !== null ? formatGrade(val, 2) : ''}
@@ -3062,6 +3188,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     const isInline =
                       inlineEdit?.studentId === student.id &&
                       inlineEdit?.columnId === col.id;
+                    const isQuickCounterActive =
+                      quickCounterColumnId === col.id &&
+                      col.type === 'NUMERIC' &&
+                      !col.isLocked &&
+                      !activeTab?.isLocked;
+                    const counterStepVal =
+                      typeof col.counterStep === 'number' && col.counterStep > 0
+                        ? col.counterStep
+                        : 1;
 
                     const colors = resolveCellColors(grade, col);
                     const isStandaloneColored =
@@ -3128,6 +3263,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             const anchor = anchorCoord ?? selectedCoord ?? clicked;
                             selectRangeToCell(anchor, clicked, isMod);
                           } else if (isMod) {
+                            setSelectedStudentRowId(null);
                             const next = new Set(selectedKeys);
                             if (next.has(key)) {
                               next.delete(key);
@@ -3155,7 +3291,18 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           if (col.type === 'RUBRIC') {
                             onOpenRubricGrader(student, col);
                           } else if (col.type === 'NUMERIC') {
-                            onOpenCellModal(student, col);
+                            const editorMode = col.editorMode ?? 'STANDARD';
+                            if (editorMode === 'COUNTER_POS') {
+                              stepCellByDelta(student.id, col, counterStepVal);
+                            } else if (editorMode === 'COUNTER_NEG') {
+                              stepCellByDelta(student.id, col, -counterStepVal);
+                            } else if (editorMode === 'QUICK_COUNTER') {
+                              if (!activeTab?.isLocked && !col.isLocked) {
+                                setQuickCounterColumnId(col.id);
+                              }
+                            } else {
+                              onOpenCellModal(student, col);
+                            }
                           } else {
                             onEditColumn(col);
                           }
@@ -3170,7 +3317,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             ? 'cell-selected z-10'
                             : isInMultiSelection
                               ? 'cell-multi-selected z-10'
-                              : 'hover:brightness-98'
+                              : isStudentRowSelected
+                                ? 'student-row-cell-tint'
+                                : 'hover:brightness-98'
                         }`}
                       >
                         {/* Discreet corner indicator for manually-edited rubric cells */}
@@ -3268,6 +3417,57 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                               className="absolute inset-0 w-full h-full opacity-0 cursor-text"
                             />
                           </div>
+                        ) : isQuickCounterActive ? (
+                          <div className="flex items-center justify-between gap-0.5 h-full w-full overflow-hidden">
+                            <button
+                              type="button"
+                              data-quick-counter-btn="minus"
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                selectSingleCell(student.id, col.id);
+                                stepCellByDelta(student.id, col, -counterStepVal);
+                              }}
+                              onDoubleClick={(e) => e.stopPropagation()}
+                              title={`Restar ${counterStepVal} a ${displayName}`}
+                              aria-label={`Restar ${counterStepVal} a ${displayName}`}
+                              className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 rounded-md bg-rose-50 hover:bg-rose-100 active:scale-95 border border-rose-200 text-rose-700 font-bold text-xs flex items-center justify-center shadow-2xs"
+                            >
+                              −
+                            </button>
+                            <div className="min-w-0 flex-1 flex flex-col items-center justify-center overflow-hidden leading-tight">
+                              <span
+                                style={{ fontSize: `${scaledGradeFs}px` }}
+                                className="font-bold tabular-nums leading-tight truncate"
+                              >
+                                {grade !== null ? formatCellDisplayGrade(grade, col, false) : '—'}
+                              </span>
+                              {comment && (
+                                <span
+                                  title={comment}
+                                  className="max-w-full truncate text-[0.75em] font-normal text-slate-500"
+                                >
+                                  {comment}
+                                </span>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              data-quick-counter-btn="plus"
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                selectSingleCell(student.id, col.id);
+                                stepCellByDelta(student.id, col, counterStepVal);
+                              }}
+                              onDoubleClick={(e) => e.stopPropagation()}
+                              title={`Sumar ${counterStepVal} a ${displayName}`}
+                              aria-label={`Sumar ${counterStepVal} a ${displayName}`}
+                              className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 rounded-md bg-emerald-50 hover:bg-emerald-100 active:scale-95 border border-emerald-200 text-emerald-700 font-bold text-xs flex items-center justify-center shadow-2xs"
+                            >
+                              +
+                            </button>
+                          </div>
                         ) : (
                           <div className="flex flex-col items-center justify-center h-full overflow-hidden leading-tight">
                             {grade !== null && (
@@ -3303,7 +3503,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     );
                   })}
 
-                  <td className="border-b border-slate-200 bg-slate-50/40" />
+                  <td
+                    className={`border-b border-slate-200 bg-slate-50/40 ${
+                      isStudentRowSelected ? 'student-row-cell-tint' : ''
+                    }`}
+                  />
                 </tr>
                 );
               }

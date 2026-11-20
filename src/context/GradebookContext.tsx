@@ -54,8 +54,12 @@ import {
   clearLocalWorkspace,
   loadFirebaseWorkspace,
   loadLocalWorkspace,
+  loadLocalWorkspaceSync,
+  loadUiMenuPrefs,
+  mergeNewerLocalUiPrefs,
   saveFirebaseWorkspace,
   saveLocalWorkspace,
+  saveUiMenuPrefs,
   subscribeFirebaseWorkspace,
 } from '../services/storage';
 import {
@@ -278,8 +282,20 @@ interface GradebookContextValue {
 const GradebookContext = createContext<GradebookContextValue | null>(null);
 
 export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [workspace, setWorkspace] = useState<GradebookWorkspace>(() => createSeedWorkspace());
-  const [hydrated, setHydrated] = useState(false);
+  const initialLocalSync = useRef<GradebookWorkspace | null | undefined>(undefined);
+  if (initialLocalSync.current === undefined) {
+    initialLocalSync.current = loadLocalWorkspaceSync();
+  }
+  const [workspace, setWorkspace] = useState<GradebookWorkspace>(() => {
+    const base =
+      initialLocalSync.current && initialLocalSync.current.classes.length > 0
+        ? initialLocalSync.current
+        : createSeedWorkspace();
+    return mergeNewerLocalUiPrefs(base, loadUiMenuPrefs()).workspace;
+  });
+  const [hydrated, setHydrated] = useState(() =>
+    Boolean(initialLocalSync.current && initialLocalSync.current.classes.length > 0)
+  );
   const [undoStack, setUndoStack] = useState<GradebookWorkspace[]>([]);
 
   const [user, setUser] = useState<User | null>(null);
@@ -288,27 +304,30 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [syncError, setSyncError] = useState<string | null>(null);
 
   const cloudWriteTimer = useRef<number | null>(null);
+  const pendingCloudUserRef = useRef<string | null>(null);
   const lastRemoteUpdatedAtRef = useRef<string | null>(null);
   const lastWrittenUpdatedAtRef = useRef<string | null>(null);
   const cloudReadyRef = useRef(false);
   const workspaceRef = useRef<GradebookWorkspace>(workspace);
   workspaceRef.current = workspace;
 
-  // Hydrate offline workspace immediately
+  // Hydrate offline IDB workspace fallback when synchronous localStorage had no workspace
   useEffect(() => {
+    if (hydrated) return;
     let alive = true;
     loadLocalWorkspace().then((local) => {
       if (!alive) return;
       if (local && local.classes.length > 0) {
-        setWorkspace(local);
-        workspaceRef.current = local;
+        const next = mergeNewerLocalUiPrefs(local, loadUiMenuPrefs()).workspace;
+        setWorkspace(next);
+        workspaceRef.current = next;
       }
       setHydrated(true);
     });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [hydrated]);
 
   // Optional Firebase Auth + Realtime Sync
   useEffect(() => {
@@ -341,11 +360,19 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       try {
         const remote = await loadFirebaseWorkspace(nextUser.uid);
         if (remote && remote.classes.length > 0) {
+          const { workspace: mergedWs, merged } = mergeNewerLocalUiPrefs(
+            remote,
+            loadUiMenuPrefs()
+          );
           lastRemoteUpdatedAtRef.current = remote.updatedAt;
-          lastWrittenUpdatedAtRef.current = remote.updatedAt;
-          setWorkspace(remote);
-          workspaceRef.current = remote;
-          await saveLocalWorkspace(remote);
+          lastWrittenUpdatedAtRef.current = merged ? null : remote.updatedAt;
+          setWorkspace(mergedWs);
+          workspaceRef.current = mergedWs;
+          await saveLocalWorkspace(mergedWs);
+          if (merged) {
+            lastWrittenUpdatedAtRef.current = mergedWs.updatedAt;
+            await saveFirebaseWorkspace(nextUser.uid, mergedWs);
+          }
         } else {
           // Upload latest local data on first sign-in when remote branch is empty
           const localLatest = (await loadLocalWorkspace()) ?? workspaceRef.current;
@@ -368,10 +395,11 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             ) {
               return;
             }
+            const nextRemote = mergeNewerLocalUiPrefs(remoteWs, loadUiMenuPrefs()).workspace;
             lastRemoteUpdatedAtRef.current = remoteWs.updatedAt;
-            setWorkspace(remoteWs);
-            workspaceRef.current = remoteWs;
-            saveLocalWorkspace(remoteWs);
+            setWorkspace(nextRemote);
+            workspaceRef.current = nextRemote;
+            saveLocalWorkspace(nextRemote);
             setSyncStatus('synced');
           },
           (err) => {
@@ -392,7 +420,7 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Save locally & debounce cloud sync
+  // Save locally & debounce cloud sync (plus flush on pagehide / visibilitychange)
   useEffect(() => {
     if (!hydrated) return;
     saveLocalWorkspace(workspace);
@@ -409,7 +437,10 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (cloudWriteTimer.current) window.clearTimeout(cloudWriteTimer.current);
       setSyncStatus('syncing');
       const snapshot = workspace;
+      pendingCloudUserRef.current = user.uid;
       cloudWriteTimer.current = window.setTimeout(async () => {
+        cloudWriteTimer.current = null;
+        pendingCloudUserRef.current = null;
         try {
           lastWrittenUpdatedAtRef.current = snapshot.updatedAt;
           await saveFirebaseWorkspace(user.uid, snapshot);
@@ -419,9 +450,33 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           setSyncStatus('error');
           setSyncError(err instanceof Error ? err.message : 'Error al guardar en la nube');
         }
-      }, 450);
+      }, 350);
     }
   }, [workspace, hydrated, user]);
+
+  useEffect(() => {
+    const flushNow = () => {
+      const latest = workspaceRef.current;
+      saveUiMenuPrefs(latest);
+      if (cloudWriteTimer.current && pendingCloudUserRef.current) {
+        window.clearTimeout(cloudWriteTimer.current);
+        cloudWriteTimer.current = null;
+        const uid = pendingCloudUserRef.current;
+        pendingCloudUserRef.current = null;
+        lastWrittenUpdatedAtRef.current = latest.updatedAt;
+        void saveFirebaseWorkspace(uid, latest);
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flushNow();
+    };
+    window.addEventListener('pagehide', flushNow);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pagehide', flushNow);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
 
   const isTemplateMode = workspace.activeMode === 'TEMPLATE';
 

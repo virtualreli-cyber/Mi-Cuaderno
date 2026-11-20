@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronLeft, ChevronRight, Edit3, Plus, RotateCcw, Scale, Trash2 } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Edit3, FileText, Plus, RotateCcw, Scale, Trash2 } from 'lucide-react';
 import { getRubricLevelPastelColor } from '../../constants/colors';
 import { useGradebook } from '../../context/GradebookContext';
 import {
@@ -9,6 +9,10 @@ import {
   makeId,
   normalizeRubricLevels,
 } from '../../engine/gradeMath';
+import {
+  DEFAULT_RUBRIC_IMPORT_TEMPLATE,
+  parseRubricFromText,
+} from '../../engine/rubricParser';
 import {
   cellKey,
   type ColumnEntity,
@@ -419,6 +423,7 @@ interface RubricBuilderModalProps {
 export const RubricBuilderModal: React.FC<RubricBuilderModalProps> = ({ open, onClose }) => {
   const { workspace, saveRubric, deleteRubric, updateSettings } = useGradebook();
   const [editing, setEditing] = useState<RubricEntity | null>(null);
+  const [showTextImport, setShowTextImport] = useState(false);
   const builderGridRef = useRef<HTMLDivElement>(null);
   const rubricZoom = workspace.settings.rubricZoom ?? 1;
   usePinchZoom(
@@ -514,14 +519,24 @@ export const RubricBuilderModal: React.FC<RubricBuilderModalProps> = ({ open, on
             </button>
           </div>
         ) : (
-          <button
-            type="button"
-            onClick={startNewRubric}
-            className="px-3.5 py-1.5 rounded-xl bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 flex items-center gap-1"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Nueva rúbrica</span>
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowTextImport(true)}
+              className="px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-800 text-xs font-semibold hover:bg-indigo-100 flex items-center gap-1"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>Importar con texto</span>
+            </button>
+            <button
+              type="button"
+              onClick={startNewRubric}
+              className="px-3.5 py-1.5 rounded-xl bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 flex items-center gap-1"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Nueva rúbrica</span>
+            </button>
+          </div>
         )
       }
     >
@@ -817,6 +832,217 @@ export const RubricBuilderModal: React.FC<RubricBuilderModalProps> = ({ open, on
           </div>
         </div>
       )}
+
+      <RubricTextImportModal
+        open={showTextImport}
+        onClose={() => setShowTextImport(false)}
+        onImportAndEdit={(imported) => {
+          setShowTextImport(false);
+          setEditing({ ...imported, id: '' });
+        }}
+        onImportAndSave={(imported) => {
+          saveRubric({ ...imported, id: '' });
+          setShowTextImport(false);
+        }}
+      />
+    </Modal>
+  );
+};
+
+// ============================================================================
+// 3. Text-to-Rubric Importer Modal (pre-filled with clear editable example)
+// ============================================================================
+interface RubricTextImportModalProps {
+  open: boolean;
+  onClose: () => void;
+  onImportAndEdit: (rubric: RubricEntity) => void;
+  onImportAndSave: (rubric: RubricEntity) => void;
+}
+
+const RubricTextImportModal: React.FC<RubricTextImportModalProps> = ({
+  open,
+  onClose,
+  onImportAndEdit,
+  onImportAndSave,
+}) => {
+  const [rawText, setRawText] = useState(DEFAULT_RUBRIC_IMPORT_TEMPLATE);
+
+  useEffect(() => {
+    if (open && !rawText.trim()) {
+      setRawText(DEFAULT_RUBRIC_IMPORT_TEMPLATE);
+    }
+  }, [open, rawText]);
+
+  const parsed = useMemo(() => parseRubricFromText(rawText), [rawText]);
+  const weightSum = useMemo(
+    () => parsed.rubric?.criteria.reduce((s, c) => s + c.weight, 0) ?? 0,
+    [parsed.rubric]
+  );
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Importar rúbrica desde texto"
+      subtitle="Edita el modelo de ejemplo o pega tu rúbrica (separada por |, tabulaciones de Excel/Word o lista)"
+      maxWidthClass="w-[min(980px,96vw)]"
+    >
+      <div className="p-5 space-y-4 text-xs">
+        <div className="p-3 rounded-xl border border-indigo-200 bg-indigo-50/50 text-slate-700 leading-relaxed flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <strong>¿Cómo escribirla?</strong> Sigue el formato del modelo: cabecera opcional con{' '}
+            <code className="px-1 py-0.5 rounded bg-white border border-indigo-100">Título:</code>,{' '}
+            luego fila de niveles con su porcentaje entre paréntesis{' '}
+            <code className="px-1 py-0.5 rounded bg-white border border-indigo-100">
+              Excelente (100%) | Notable (75%) ...
+            </code>{' '}
+            y una fila por criterio{' '}
+            <code className="px-1 py-0.5 rounded bg-white border border-indigo-100">
+              Criterio (40%) | desc...
+            </code>
+            . También puedes pegar directamente tablas de Word, Excel o ChatGPT.
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setRawText(DEFAULT_RUBRIC_IMPORT_TEMPLATE)}
+              className="px-2.5 py-1 rounded-lg border border-indigo-200 bg-white hover:bg-indigo-100 text-indigo-800 font-semibold"
+            >
+              Cargar modelo de ejemplo
+            </button>
+            <button
+              type="button"
+              onClick={() => setRawText('')}
+              className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 font-semibold"
+            >
+              Vaciar
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label
+            htmlFor="rubric-text-import-area"
+            className="block font-bold text-slate-800 mb-1"
+          >
+            Texto de la rúbrica (incluye el modelo de ejemplo listo para adaptar)
+          </label>
+          <textarea
+            id="rubric-text-import-area"
+            rows={10}
+            value={rawText}
+            onChange={(e) => setRawText(e.target.value)}
+            placeholder={DEFAULT_RUBRIC_IMPORT_TEMPLATE}
+            className="w-full font-mono text-[11.5px] leading-relaxed border border-slate-300 rounded-xl p-3 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400"
+          />
+        </div>
+
+        {/* Live Detection Preview */}
+        {parsed.errors.length > 0 ? (
+          <div className="p-3 rounded-xl border border-rose-200 bg-rose-50 text-rose-800 space-y-1">
+            <div className="font-bold">No se ha podido detectar la rúbrica:</div>
+            {parsed.errors.map((err, i) => (
+              <div key={i}>• {err}</div>
+            ))}
+          </div>
+        ) : parsed.rubric ? (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="font-bold text-slate-800">
+                Vista previa detectada: <span className="text-indigo-700">{parsed.rubric.title}</span>{' '}
+                <span className="text-slate-500 font-normal">
+                  ({parsed.rubric.criteria.length} criterios · {parsed.rubric.levels.length} niveles ·
+                  escala {parsed.rubric.minScore}–{parsed.rubric.maxScore} · suma de pesos{' '}
+                  {Math.round(weightSum * 100) / 100}%)
+                </span>
+              </div>
+              {parsed.warnings.length > 0 && (
+                <div className="text-[11px] text-amber-700 font-medium">
+                  {parsed.warnings.join(' · ')}
+                </div>
+              )}
+            </div>
+
+            <div className="border border-slate-200 rounded-xl overflow-x-auto max-h-60 overflow-y-auto">
+              <table className="w-full table-fixed border-collapse text-[11px]">
+                <colgroup>
+                  <col className="w-[22%]" />
+                  {parsed.rubric.levels.map((lvl) => (
+                    <col
+                      key={`prev-col-${lvl.id}`}
+                      style={{ width: `${78 / parsed.rubric!.levels.length}%` }}
+                    />
+                  ))}
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th className="p-2 border-b border-r border-slate-200 bg-slate-100 text-left font-bold">
+                      Criterio (%)
+                    </th>
+                    {parsed.rubric.levels.map((lvl) => (
+                      <th
+                        key={lvl.id}
+                        style={{ backgroundColor: lvl.color }}
+                        className="p-2 border-b border-r border-slate-200 last:border-r-0 text-center font-bold text-slate-900"
+                      >
+                        <div>{lvl.title}</div>
+                        <div className="text-[10px] opacity-80">{lvl.percentage}%</div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {parsed.rubric.criteria.map((crit) => (
+                    <tr key={crit.id} className="border-b border-slate-200 last:border-b-0">
+                      <td className="p-2 border-r border-slate-200 bg-slate-50 font-semibold text-slate-900 align-top">
+                        <div>{crit.title}</div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">{crit.weight}%</div>
+                      </td>
+                      {parsed.rubric!.levels.map((lvl) => (
+                        <td
+                          key={lvl.id}
+                          className="p-2 border-r border-slate-200 last:border-r-0 align-top text-slate-700 whitespace-pre-wrap break-words"
+                        >
+                          {parsed.rubric!.descriptors[`${crit.id}::${lvl.id}`] || (
+                            <span className="text-slate-300 italic">—</span>
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap items-center justify-end gap-2 pt-3 border-t border-slate-200">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 font-medium hover:bg-slate-50"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            disabled={!parsed.rubric}
+            onClick={() => parsed.rubric && onImportAndEdit(parsed.rubric)}
+            className="px-4 py-2 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-800 font-semibold hover:bg-indigo-100 disabled:opacity-40"
+          >
+            Importar y editar
+          </button>
+          <button
+            type="button"
+            disabled={!parsed.rubric}
+            onClick={() => parsed.rubric && onImportAndSave(parsed.rubric)}
+            className="px-4 py-2 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-700 disabled:opacity-40 flex items-center gap-1.5"
+          >
+            <Check className="w-3.5 h-3.5" />
+            <span>Importar y guardar</span>
+          </button>
+        </div>
+      </div>
     </Modal>
   );
 };
