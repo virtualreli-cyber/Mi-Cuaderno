@@ -1,0 +1,8 @@
+node_modules
+dist
+backups
+Datos de referencia para la web
+.env
+.env.local
+.DS_Store
+*.tsbuildinfo
