@@ -26,7 +26,6 @@ import {
 } from 'lucide-react';
 import {
   blendWithWhite,
-  getGroupDefaultColor,
   PASTEL_SWATCHES,
 } from '../../constants/colors';
 import { DEFAULT_LOMLOE_KEY_COMPETENCES } from '../../data/lomloeReligion';
@@ -231,6 +230,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     bucketKey: string;
     slotKey: string;
   } | null>(null);
+  const [selectedSummaryCell, setSelectedSummaryCell] = useState<string | null>(null);
   const [groupColAction, setGroupColAction] = useState<{
     bucketKey: string;
     bucketName: string;
@@ -273,6 +273,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       setSummaryCellPicker(null);
       setGroupColAction(null);
       setSelectedGroupColCell(null);
+      setSelectedSummaryCell(null);
       setLomloePicker(null);
     };
     document.addEventListener('mousedown', close);
@@ -286,6 +287,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setSelectedKeys(new Set());
     setSelectedColumnTarget(null);
     setSelectedGroupColCell(null);
+    setSelectedSummaryCell(null);
     setBatchDraft('');
     setInlineEdit(null);
     setLomloePicker(null);
@@ -559,6 +561,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     const k = cellKey(studentId, columnId);
     setSelectedColumnTarget(null);
     setSelectedGroupColCell(null);
+    setSelectedSummaryCell(null);
     setSelectedCoord({ studentId, columnId });
     setAnchorCoord({ studentId, columnId });
     setSelectedKeys(new Set([k]));
@@ -589,6 +592,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       }
       setSelectedColumnTarget(null);
       setSelectedGroupColCell(null);
+      setSelectedSummaryCell(null);
       setAnchorCoord(anchor);
       setSelectedCoord(target);
       setSelectedKeys(next);
@@ -600,6 +604,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   const selectEntireColumn = useCallback((col: ColumnEntity) => {
     setSelectedColumnTarget({ kind: 'COL', col });
     setSelectedGroupColCell(null);
+    setSelectedSummaryCell(null);
     setSelectedKeys(new Set());
     setSelectedCoord(null);
     setAnchorCoord(null);
@@ -610,6 +615,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     (folder: FolderEntity, childCols: ColumnEntity[]) => {
       setSelectedColumnTarget({ kind: 'FOLDER', folder, childCols });
       setSelectedGroupColCell(null);
+      setSelectedSummaryCell(null);
       setSelectedKeys(new Set());
       setSelectedCoord(null);
       setAnchorCoord(null);
@@ -626,6 +632,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       }
       setSelectedColumnTarget(null);
       setSelectedGroupColCell(null);
+      setSelectedSummaryCell(null);
       setSelectedKeys(next);
       if (visibleColumns.length > 0) {
         const first = { studentId, columnId: visibleColumns[0].id };
@@ -642,6 +649,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setSelectedKeys(new Set());
     setSelectedColumnTarget(null);
     setSelectedGroupColCell(null);
+    setSelectedSummaryCell(null);
     setBatchDraft('');
   }, []);
 
@@ -1168,6 +1176,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       } else if (e.key === 'Escape') {
         e.preventDefault();
         setLomloePicker(null);
+        setSummaryCellPicker(null);
+        setSelectedSummaryCell(null);
         // Escape keeps cell selection intact without deselecting
       } else if (e.key.length === 1 && !isMod && !e.altKey) {
         if (selectedTargets.length > 1) {
@@ -1513,75 +1523,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     const fitted = Math.max(56, Math.min(220, Math.ceil(maxHeaderNeeded)));
     prevAutoFitSizesRef.current.set('headerHeight', { prev: currentH, fitted });
     updateSettings({ headerHeight: fitted });
-  };
-
-  // Student row height resize by dragging the bottom border of any student row
-  const startRowHeightResize = (e: React.PointerEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    justResizedRef.current = true;
-    const startY = e.clientY;
-    const startH = workspace.settings.rowHeight;
-
-    const onMove = (ev: PointerEvent) => {
-      if (Math.abs(ev.clientY - startY) > 2) {
-        prevAutoFitSizesRef.current.delete('rowHeight');
-      }
-      const clamped = Math.max(
-        34,
-        Math.min(140, Math.round(startH + (ev.clientY - startY) / gridZoom))
-      );
-      updateSettings({ rowHeight: clamped });
-    };
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.setTimeout(() => {
-        justResizedRef.current = false;
-      }, 200);
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  };
-
-  const toggleAutoFitRowHeight = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!activeBook) return;
-    const currentH = workspace.settings.rowHeight;
-    const saved = prevAutoFitSizesRef.current.get('rowHeight');
-    if (saved && Math.abs(currentH - saved.fitted) <= 2) {
-      prevAutoFitSizesRef.current.delete('rowHeight');
-      updateSettings({ rowHeight: saved.prev });
-      return;
-    }
-
-    let hasGradeAndComment = false;
-    let hasGroupBadge = false;
-    for (const st of visibleStudents) {
-      if (!activeBook.groupByGroups && getStudentActiveGroup(st, activeBook)) {
-        hasGroupBadge = true;
-      }
-      for (const col of visibleColumns) {
-        const cell = activeBook.cells[cellKey(st.id, col.id)];
-        if (cell?.grade !== null && cell?.grade !== undefined && cell?.comment?.trim()) {
-          hasGradeAndComment = true;
-          break;
-        }
-      }
-      if (hasGradeAndComment) break;
-    }
-
-    const gradeCommentNeed = hasGradeAndComment
-      ? Math.ceil(baseGradeFs * 1.25 + baseTextFs * 0.85 * 1.25 + 14)
-      : Math.ceil(baseGradeFs * 1.35 + 16);
-    const studentNeed = hasGroupBadge
-      ? Math.ceil(baseTextFs * 2.3 + 16)
-      : Math.ceil(baseTextFs * 1.6 + 18);
-    const fitted = Math.max(38, Math.min(120, Math.max(gradeCommentNeed, studentNeed)));
-
-    prevAutoFitSizesRef.current.set('rowHeight', { prev: currentH, fitted });
-    updateSettings({ rowHeight: fitted });
   };
 
   if (!activeBook || !activeTab) {
@@ -2977,11 +2918,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     ? `${student.firstName} ${student.lastName}`
                     : `${student.lastName}, ${student.firstName}`;
                 const stGroup = getStudentActiveGroup(student, activeBook);
-                const stGrpColor = stGroup
-                  ? effectiveGroups.find(
-                      (g) => g.name.toLowerCase() === stGroup.toLowerCase()
-                    )?.color ?? getGroupDefaultColor(stGroup)
-                  : undefined;
 
                 rows.push(
                 <tr key={student.id} style={{ height: rowH }}>
@@ -3024,32 +2960,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         <div className="text-[1em] font-semibold text-slate-900 truncate">
                           {displayName}
                         </div>
-                        {stGroup && !activeBook.groupByGroups && (
-                          <div className="mt-0.5 flex items-center gap-1">
-                            <span
-                              style={{ backgroundColor: stGrpColor }}
-                              className="px-1.5 py-0 rounded-full text-[0.79em] font-bold text-slate-700 border border-black/5 truncate max-w-[130px] leading-tight"
-                            >
-                              {stGroup}
-                            </span>
-                          </div>
-                        )}
                       </div>
                       <span className="text-[0.83em] text-slate-400 tabular-nums shrink-0">
                         {rIdx + 1}
                       </span>
                     </button>
-                    {/* Bottom-Edge Row Height Resize Handle (Double-click = auto-fit / restore) */}
-                    <div
-                      role="separator"
-                      aria-orientation="horizontal"
-                      aria-label={`Cambiar altura de filas (${displayName})`}
-                      title="Arrastra para ajustar altura de las filas · Doble clic: autoajustar al contenido"
-                      onClick={(e) => e.stopPropagation()}
-                      onDoubleClick={toggleAutoFitRowHeight}
-                      onPointerDown={startRowHeightResize}
-                      className="absolute left-0 bottom-0 w-full h-1.5 cursor-row-resize hover:bg-blue-500/50 transition-colors z-20"
-                    />
                   </th>
 
                   {/* Data Cells & Continuous iDoceo Folder Summary Columns (individual cell selection!) */}
@@ -3411,7 +3326,37 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       <th
                         scope="row"
                         style={{ height: summaryRowH }}
-                        className="sticky left-0 z-20 bg-slate-50/95 border-r-2 border-b border-slate-200 px-2 py-0.5 text-left font-normal"
+                        className={`sticky left-0 z-20 bg-slate-50/95 border-r-2 border-b border-slate-200 px-2 py-0.5 text-left font-normal ${
+                          selectedSummaryCell === `group::${bucket.key}::header::${gRowIdx}`
+                            ? 'ring-2 ring-inset ring-blue-600'
+                            : ''
+                        }`}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setGroupColAction(null);
+                          setAddGroupSummaryMenu(null);
+                          setSummaryCellPicker(null);
+                          setSelectedGroupColCell(null);
+                          setSelectedCoord(null);
+                          setSelectedKeys(new Set());
+                          setSelectedColumnTarget(null);
+                          setSelectedSummaryCell(`group::${bucket.key}::header::${gRowIdx}`);
+                        }}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                          setGroupColAction(null);
+                          setAddGroupSummaryMenu(null);
+                          setSelectedSummaryCell(`group::${bucket.key}::header::${gRowIdx}`);
+                          setSummaryCellPicker({
+                            scope: 'GROUP',
+                            rowIndex: gRowIdx,
+                            target: { kind: 'GLOBAL' },
+                            top: Math.max(12, Math.min(window.innerHeight - 320, rect.top - 90)),
+                            left: Math.min(window.innerWidth - 250, rect.left),
+                          });
+                        }}
                       >
                         <div className="flex items-center justify-between gap-1">
                           <button
@@ -3419,9 +3364,21 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             onMouseDown={(e) => e.stopPropagation()}
                             onClick={(e) => {
                               e.stopPropagation();
+                              setGroupColAction(null);
+                              setAddGroupSummaryMenu(null);
+                              setSummaryCellPicker(null);
+                              setSelectedGroupColCell(null);
+                              setSelectedCoord(null);
+                              setSelectedKeys(new Set());
+                              setSelectedColumnTarget(null);
+                              setSelectedSummaryCell(`group::${bucket.key}::header::${gRowIdx}`);
+                            }}
+                            onDoubleClick={(e) => {
+                              e.stopPropagation();
                               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                               setGroupColAction(null);
                               setAddGroupSummaryMenu(null);
+                              setSelectedSummaryCell(`group::${bucket.key}::header::${gRowIdx}`);
                               setSummaryCellPicker({
                                 scope: 'GROUP',
                                 rowIndex: gRowIdx,
@@ -3430,7 +3387,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                                 left: Math.min(window.innerWidth - 250, rect.left),
                               });
                             }}
-                            title="Cambiar estadística de grupo (se aplica a todos los grupos y columnas)"
+                            title="Doble clic para cambiar estadística de grupo (se aplica a todos los grupos)"
                             className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white hover:bg-indigo-50 border border-slate-200 text-[0.8em] font-bold text-slate-700 hover:text-indigo-700 truncate max-w-[148px]"
                           >
                             <Sigma style={smallIconStyle} className="text-indigo-600 shrink-0" />
@@ -3496,6 +3453,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           threshold,
                           decimals
                         );
+                        const isSelectedGrpCell =
+                          selectedSummaryCell === `group::${bucket.key}::${gRowIdx}::${slot.key}`;
 
                         return (
                           <td
@@ -3511,9 +3470,21 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             onMouseDown={(e) => e.stopPropagation()}
                             onClick={(e) => {
                               e.stopPropagation();
+                              setGroupColAction(null);
+                              setAddGroupSummaryMenu(null);
+                              setSummaryCellPicker(null);
+                              setSelectedGroupColCell(null);
+                              setSelectedCoord(null);
+                              setSelectedKeys(new Set());
+                              setSelectedColumnTarget(null);
+                              setSelectedSummaryCell(`group::${bucket.key}::${gRowIdx}::${slot.key}`);
+                            }}
+                            onDoubleClick={(e) => {
+                              e.stopPropagation();
                               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                               setGroupColAction(null);
                               setAddGroupSummaryMenu(null);
+                              setSelectedSummaryCell(`group::${bucket.key}::${gRowIdx}::${slot.key}`);
                               setSummaryCellPicker({
                                 scope: 'GROUP',
                                 rowIndex: gRowIdx,
@@ -3529,8 +3500,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                                 left: Math.max(12, Math.min(window.innerWidth - 250, rect.left)),
                               });
                             }}
-                            title={`${bucket.name} · ${metricOpt?.label ?? ''}: ${formatted || '—'} · Clic para cambiar (se aplica a todos los grupos)`}
-                            className="border-r border-b border-slate-200 px-1 py-0.5 text-center align-middle cursor-pointer hover:brightness-95 transition-all"
+                            title={`${bucket.name} · ${metricOpt?.label ?? ''}: ${formatted || '—'} · Doble clic para cambiar (se aplica a todos los grupos)`}
+                            className={`border-r border-b border-slate-200 px-1 py-0.5 text-center align-middle cursor-pointer hover:brightness-95 transition-all ${
+                              isSelectedGrpCell ? 'ring-2 ring-inset ring-blue-600 z-10' : ''
+                            }`}
                           >
                             <div className="font-bold text-slate-900 tabular-nums text-[0.88em] leading-tight truncate">
                               {formatted || '—'}
@@ -3601,7 +3574,35 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   style={{ height: sumRowH }}
                   className={`sticky left-0 z-20 bg-slate-100 border-r-2 border-b border-slate-300 ${
                     rowIdx === 0 ? 'border-t-2 border-t-slate-300' : ''
-                  } px-2 py-0.5 text-left font-normal`}
+                  } px-2 py-0.5 text-left font-normal ${
+                    selectedSummaryCell === `table::header::${rowIdx}`
+                      ? 'ring-2 ring-inset ring-blue-600'
+                      : ''
+                  }`}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSummaryCellPicker(null);
+                    setGroupColAction(null);
+                    setAddGroupSummaryMenu(null);
+                    setSelectedGroupColCell(null);
+                    setSelectedCoord(null);
+                    setSelectedKeys(new Set());
+                    setSelectedColumnTarget(null);
+                    setSelectedSummaryCell(`table::header::${rowIdx}`);
+                  }}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setSelectedSummaryCell(`table::header::${rowIdx}`);
+                    setSummaryCellPicker({
+                      scope: 'TABLE',
+                      rowIndex: rowIdx,
+                      target: { kind: 'GLOBAL' },
+                      top: Math.max(12, Math.min(window.innerHeight - 320, rect.top - 120)),
+                      left: Math.min(window.innerWidth - 240, rect.left),
+                    });
+                  }}
                 >
                   <div className="flex items-center justify-between gap-1">
                     <button
@@ -3609,7 +3610,19 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       onMouseDown={(e) => e.stopPropagation()}
                       onClick={(e) => {
                         e.stopPropagation();
+                        setSummaryCellPicker(null);
+                        setGroupColAction(null);
+                        setAddGroupSummaryMenu(null);
+                        setSelectedGroupColCell(null);
+                        setSelectedCoord(null);
+                        setSelectedKeys(new Set());
+                        setSelectedColumnTarget(null);
+                        setSelectedSummaryCell(`table::header::${rowIdx}`);
+                      }}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
                         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                        setSelectedSummaryCell(`table::header::${rowIdx}`);
                         setSummaryCellPicker({
                           scope: 'TABLE',
                           rowIndex: rowIdx,
@@ -3618,7 +3631,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           left: Math.min(window.innerWidth - 240, rect.left),
                         });
                       }}
-                      title="Cambiar resumen de esta fila (extensible a todas las columnas)"
+                      title="Doble clic para cambiar resumen de esta fila (extensible a todas las columnas)"
                       className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white/90 hover:bg-white border border-slate-200 text-[0.84em] font-bold text-slate-700 hover:text-blue-700 truncate max-w-[165px]"
                     >
                       <Sigma style={smallIconStyle} className="text-blue-600 shrink-0" />
@@ -3627,7 +3640,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => removeSummaryRow(rowIdx)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeSummaryRow(rowIdx);
+                      }}
                       title="Eliminar esta fila de resumen"
                       aria-label={`Eliminar fila de resumen ${globalOpt.label}`}
                       className="p-0.5 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 shrink-0"
@@ -3661,6 +3677,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     threshold,
                     decimals
                   );
+                  const isSelectedCell = selectedSummaryCell === `table::${rowIdx}::${slot.key}`;
 
                   return (
                     <td
@@ -3676,7 +3693,19 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       onMouseDown={(e) => e.stopPropagation()}
                       onClick={(e) => {
                         e.stopPropagation();
+                        setSummaryCellPicker(null);
+                        setGroupColAction(null);
+                        setAddGroupSummaryMenu(null);
+                        setSelectedGroupColCell(null);
+                        setSelectedCoord(null);
+                        setSelectedKeys(new Set());
+                        setSelectedColumnTarget(null);
+                        setSelectedSummaryCell(`table::${rowIdx}::${slot.key}`);
+                      }}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
                         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                        setSelectedSummaryCell(`table::${rowIdx}::${slot.key}`);
                         setSummaryCellPicker({
                           scope: 'TABLE',
                           rowIndex: rowIdx,
@@ -3692,10 +3721,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           left: Math.max(12, Math.min(window.innerWidth - 250, rect.left)),
                         });
                       }}
-                      title={`${metricOpt?.label ?? ''}: ${formatted || '—'} · Clic para cambiar resumen de esta columna`}
+                      title={`${metricOpt?.label ?? ''}: ${formatted || '—'} · Doble clic para cambiar resumen de esta columna`}
                       className={`border-r border-b border-slate-300 ${
                         rowIdx === 0 ? 'border-t-2 border-t-slate-300' : ''
-                      } px-1 py-0.5 text-center font-bold text-slate-800 tabular-nums cursor-pointer hover:brightness-95 transition-all text-[0.9em]`}
+                      } px-1 py-0.5 text-center font-bold text-slate-800 tabular-nums cursor-pointer hover:brightness-95 transition-all text-[0.9em] ${
+                        isSelectedCell ? 'ring-2 ring-inset ring-blue-600 z-10' : ''
+                      }`}
                     >
                       <div className="truncate">{formatted || '—'}</div>
                       {overrideMetric && overrideMetric !== globalMetric && overrideMetric !== 'NONE' && (
