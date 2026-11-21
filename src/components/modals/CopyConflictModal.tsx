@@ -66,6 +66,7 @@ export const CopyConflictModal: React.FC<CopyConflictModalProps> = ({
     return (
       <Modal
         open
+        isNested
         closedBy="closerequest"
         onClose={onCancel}
         title="¡Atención! El elemento contiene notas de alumnos"
@@ -130,6 +131,7 @@ export const CopyConflictModal: React.FC<CopyConflictModalProps> = ({
   return (
     <Modal
       open
+      isNested
       closedBy="closerequest"
       onClose={onCancel}
       title="Elemento igual o similar encontrado"

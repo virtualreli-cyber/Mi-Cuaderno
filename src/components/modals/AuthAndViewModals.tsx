@@ -10,6 +10,7 @@ import {
   RefreshCw,
   RotateCcw,
   Trash2,
+  Undo2,
 } from 'lucide-react';
 import { useGradebook } from '../../context/GradebookContext';
 import { Modal } from '../common/Modal';
@@ -333,6 +334,9 @@ export const ViewSettingsModal: React.FC<{
     updateSettings,
     applyUniformColumnWidth,
     applyUniformFolderWidth,
+    canUndoAspect,
+    undoAspect,
+    beginAspectChange,
     loadDemoData,
     resetAll,
   } = useGradebook();
@@ -373,10 +377,35 @@ export const ViewSettingsModal: React.FC<{
     >
       <div className="p-5 space-y-4 text-xs">
         {appliedHint && (
-          <div className="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 font-semibold">
+          <div
+            role="status"
+            className="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 font-semibold"
+          >
             {appliedHint}
           </div>
         )}
+
+        <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-2xl border border-indigo-200/80 bg-indigo-50/70">
+          <div className="text-[11px] text-indigo-950">
+            <span className="font-bold">Historial de aspecto independiente</span>
+            <span className="block text-[10px] text-indigo-800/80">
+              Cmd+Z solo deshace notas y datos. Usa este botón para revertir cambios de aspecto.
+            </span>
+          </div>
+          <button
+            type="button"
+            disabled={!canUndoAspect}
+            onClick={() => {
+              undoAspect();
+              flashHint('Último cambio de aspecto deshecho.');
+            }}
+            data-aspect-undo-btn="modal"
+            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold transition-colors"
+          >
+            <Undo2 className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>Deshacer aspecto</span>
+          </button>
+        </div>
 
         {onOpenBackup && (
           <button
@@ -422,6 +451,7 @@ export const ViewSettingsModal: React.FC<{
                 max={88}
                 step={2}
                 value={s.rowHeight}
+                onPointerDown={beginAspectChange}
                 onChange={(e) => updateSettings({ rowHeight: Number(e.target.value) })}
                 className="w-full accent-blue-600"
               />
@@ -438,6 +468,7 @@ export const ViewSettingsModal: React.FC<{
                 max={150}
                 step={2}
                 value={s.headerHeight}
+                onPointerDown={beginAspectChange}
                 onChange={(e) => updateSettings({ headerHeight: Number(e.target.value) })}
                 className="w-full accent-blue-600"
               />
@@ -455,6 +486,7 @@ export const ViewSettingsModal: React.FC<{
               max={360}
               step={4}
               value={s.studentColWidth}
+              onPointerDown={beginAspectChange}
               onChange={(e) => updateSettings({ studentColWidth: Number(e.target.value) })}
               className="w-full accent-blue-600"
             />
@@ -584,6 +616,7 @@ export const ViewSettingsModal: React.FC<{
                 max={64}
                 step={2}
                 value={groupSpacerH}
+                onPointerDown={beginAspectChange}
                 onChange={(e) => updateSettings({ groupSpacerHeight: Number(e.target.value) })}
                 className="w-full accent-indigo-600"
               />
@@ -600,6 +633,7 @@ export const ViewSettingsModal: React.FC<{
                 max={56}
                 step={2}
                 value={summaryRowH}
+                onPointerDown={beginAspectChange}
                 onChange={(e) => updateSettings({ summaryRowHeight: Number(e.target.value) })}
                 className="w-full accent-indigo-600"
               />
@@ -645,6 +679,7 @@ export const ViewSettingsModal: React.FC<{
                 max={24}
                 step={0.5}
                 value={gradeFs}
+                onPointerDown={beginAspectChange}
                 onChange={(e) => updateSettings({ gradeFontSize: Number(e.target.value) })}
                 className="w-full accent-blue-600"
               />
@@ -661,6 +696,7 @@ export const ViewSettingsModal: React.FC<{
                 max={20}
                 step={0.5}
                 value={textFs}
+                onPointerDown={beginAspectChange}
                 onChange={(e) => updateSettings({ textFontSize: Number(e.target.value) })}
                 className="w-full accent-blue-600"
               />
@@ -677,6 +713,7 @@ export const ViewSettingsModal: React.FC<{
                 max={24}
                 step={1}
                 value={iconSz}
+                onPointerDown={beginAspectChange}
                 onChange={(e) => updateSettings({ iconSize: Number(e.target.value) })}
                 className="w-full accent-blue-600"
               />

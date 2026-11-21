@@ -96,6 +96,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     return (
       <div
         key={cls.id}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onEditBook(cls);
+        }}
         style={{
           backgroundColor: cardBg,
           borderTopColor: cardBorder,
@@ -108,10 +113,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
         }`}
       >
         <div className="flex items-center justify-between gap-1 px-2 py-1.5">
-          <button
-            type="button"
+          <div
+            role="button"
+            tabIndex={0}
             onClick={() => selectClass(cls.id)}
-            className="flex-1 min-w-0 flex items-start gap-2 text-left"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                selectClass(cls.id);
+              }
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onEditBook(cls);
+            }}
+            title={`${cls.name} — Clic: seleccionar clase · Clic derecho: editar clase`}
+            className="flex-1 min-w-0 flex items-start gap-2 text-left cursor-pointer focus:outline-none"
           >
             <span
               className="w-2.5 h-2.5 rounded-full shrink-0 mt-1 border border-black/10"
@@ -123,7 +141,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 {cls.students.length} alumnos · {cls.tabs.length} pest.
               </div>
             </div>
-          </button>
+          </div>
 
           <div className="flex flex-col gap-0.5 shrink-0 opacity-75 group-hover:opacity-100">
             <button
@@ -321,6 +339,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 return (
                   <div
                     key={tpl.id}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onEditBook(tpl);
+                    }}
                     className={`rounded-xl border transition-all ${
                       isActive
                         ? 'bg-emerald-50/70 border-emerald-300 shadow-2xs'
@@ -328,10 +351,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     }`}
                   >
                     <div className="flex items-start justify-between gap-1 p-2">
-                      <button
-                        type="button"
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => selectTemplate(tpl.id)}
-                        className="flex-1 min-w-0 flex items-start gap-2 text-left"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            selectTemplate(tpl.id);
+                          }
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onEditBook(tpl);
+                        }}
+                        title={`${tpl.name} — Clic: seleccionar plantilla · Clic derecho: editar plantilla`}
+                        className="flex-1 min-w-0 flex items-start gap-2 text-left cursor-pointer focus:outline-none"
                       >
                         <span
                           className="w-2.5 h-2.5 rounded-full shrink-0 mt-1"
@@ -344,7 +380,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             {tpl.tabs.length} pest. · {colCount} cols.
                           </div>
                         </div>
-                      </button>
+                      </div>
 
                       <div className="flex flex-col gap-0.5 shrink-0">
                         <button

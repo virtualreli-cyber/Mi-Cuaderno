@@ -9,6 +9,7 @@ import {
   FileSpreadsheet,
   GraduationCap,
   HardDrive,
+  History,
   PanelLeftClose,
   PanelLeftOpen,
   RotateCcw,
@@ -48,6 +49,8 @@ export const TopBar: React.FC<TopBarProps> = ({
     selectTemplate,
     canUndo,
     undo,
+    canUndoAspect,
+    undoAspect,
     user,
     syncStatus,
     isFirebaseConfigured,
@@ -389,47 +392,64 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
       </div>
 
-      {/* Right zone: fixed-width action buttons (exact same position always) */}
-      <div className="shrink-0 flex items-center gap-1.5">
+      {/* Right zone: compact icon-only toolbar buttons with hover tooltips */}
+      <div
+        role="toolbar"
+        aria-label="Acciones del cuaderno"
+        className="shrink-0 flex items-center gap-1"
+      >
         <button
           type="button"
           onClick={undo}
           disabled={!canUndo}
-          title="Deshacer último cambio (Ctrl/Cmd + Z)"
-          className="w-8 lg:w-[88px] h-8 shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 text-xs font-medium text-slate-700 flex items-center justify-center gap-1 transition-colors"
+          title="Deshacer último cambio de datos y notas (Ctrl/Cmd + Z)"
+          aria-label="Deshacer último cambio de datos"
+          data-data-undo-btn="topbar"
+          className="w-8 h-8 shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-35 text-slate-700 flex items-center justify-center transition-colors"
         >
-          <Undo2 className="w-3.5 h-3.5 shrink-0" />
-          <span className="hidden lg:inline">Deshacer</span>
+          <Undo2 className="w-4 h-4 shrink-0" aria-hidden="true" />
+        </button>
+
+        <button
+          type="button"
+          onClick={undoAspect}
+          disabled={!canUndoAspect}
+          title="Deshacer último cambio de aspecto (tamaños, zoom, filas, columnas)"
+          aria-label="Deshacer último cambio de aspecto"
+          data-aspect-undo-btn="topbar"
+          className="w-8 h-8 shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 disabled:opacity-35 text-indigo-600 flex items-center justify-center transition-colors"
+        >
+          <History className="w-4 h-4 shrink-0" aria-hidden="true" />
         </button>
 
         <button
           type="button"
           onClick={onOpenLomloeManager}
           title="Currículo LOMLOE: competencias clave, específicas, criterios y resumen de la clase"
-          className="w-8 lg:w-[88px] h-8 shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-xs font-medium text-slate-700 flex items-center justify-center gap-1 transition-colors"
+          aria-label="Currículo LOMLOE"
+          className="w-8 h-8 shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-indigo-600 flex items-center justify-center transition-colors"
         >
-          <GraduationCap className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-          <span className="hidden lg:inline">LOMLOE</span>
+          <GraduationCap className="w-4 h-4 shrink-0" aria-hidden="true" />
         </button>
 
         <button
           type="button"
           onClick={onOpenViewSettings}
           title="Aspecto y vista del cuaderno: filas, columnas, textos e iconos"
-          className="w-8 lg:w-[84px] h-8 shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700 flex items-center justify-center gap-1 transition-colors"
+          aria-label="Aspecto y vista del cuaderno"
+          className="w-8 h-8 shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-blue-600 flex items-center justify-center transition-colors"
         >
-          <Sparkles className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-          <span className="hidden lg:inline">Aspecto</span>
+          <Sparkles className="w-4 h-4 shrink-0" aria-hidden="true" />
         </button>
 
         <button
           type="button"
           onClick={onOpenBackup}
-          title="Copia de seguridad y restauración del cuaderno"
-          className="w-8 lg:w-[82px] h-8 shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700 flex items-center justify-center gap-1 transition-colors"
+          title="Copia de seguridad y restauración del cuaderno (.json)"
+          aria-label="Copia de seguridad y restauración"
+          className="w-8 h-8 shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 flex items-center justify-center transition-colors"
         >
-          <HardDrive className="w-3.5 h-3.5 text-slate-600 shrink-0" />
-          <span className="hidden lg:inline">Backup</span>
+          <HardDrive className="w-4 h-4 shrink-0" aria-hidden="true" />
         </button>
 
         <button
@@ -439,45 +459,42 @@ export const TopBar: React.FC<TopBarProps> = ({
               loadDemoData();
             }
           }}
-          title="Restaurar datos demo"
+          title="Restaurar datos de demostración iniciales"
           aria-label="Restaurar datos demo"
           className="w-8 h-8 shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-900 flex items-center justify-center transition-colors"
         >
-          <RotateCcw className="w-3.5 h-3.5" />
+          <RotateCcw className="w-4 h-4 shrink-0" aria-hidden="true" />
         </button>
 
         <button
           type="button"
           onClick={onOpenAuth}
-          className={`w-8 lg:w-[112px] h-8 shrink-0 px-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+          aria-label={
             user && isFirebaseConfigured
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
+              ? `Cuenta conectada: ${user.displayName ?? user.email ?? 'Firebase'}`
+              : isFirebaseConfigured
+                ? 'Iniciar sesión o sincronizar con Firebase'
+                : 'Modo local (sin Firebase configurado)'
+          }
+          title={
+            user && isFirebaseConfigured
+              ? `Conectado (${syncStatus === 'syncing' ? 'Guardando...' : user.email ?? 'Firebase'})`
+              : isFirebaseConfigured
+                ? 'Entrar / Sincronizar con Firebase'
+                : 'Modo Local · Estado de sincronización'
+          }
+          className={`w-8 h-8 shrink-0 rounded-xl border flex items-center justify-center transition-colors ${
+            user && isFirebaseConfigured
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100'
               : 'bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200/70'
           }`}
-          title="Estado de Firebase Auth y Realtime Database"
         >
           {user && isFirebaseConfigured ? (
-            <>
-              <Cloud className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              <span className="hidden lg:inline truncate">
-                {syncStatus === 'syncing'
-                  ? 'Guardando...'
-                  : (user.displayName?.split(' ')[0] ??
-                      user.email?.split('@')[0] ??
-                      'Conectado')}
-              </span>
-            </>
+            <Cloud className="w-4 h-4 text-emerald-600 shrink-0" aria-hidden="true" />
+          ) : isFirebaseConfigured ? (
+            <UserCheck className="w-4 h-4 text-blue-600 shrink-0" aria-hidden="true" />
           ) : (
-            <>
-              {isFirebaseConfigured ? (
-                <UserCheck className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-              ) : (
-                <CloudOff className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-              )}
-              <span className="hidden lg:inline truncate">
-                {isFirebaseConfigured ? 'Entrar' : 'Modo Local'}
-              </span>
-            </>
+            <CloudOff className="w-4 h-4 text-slate-500 shrink-0" aria-hidden="true" />
           )}
         </button>
       </div>

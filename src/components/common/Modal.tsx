@@ -20,18 +20,102 @@ import {
   X,
 } from 'lucide-react';
 
+const DOCK_PREFS_KEY = 'cuaderno_modal_dock_prefs_v1';
+
+interface ModalDockPrefs {
+  dockedRight: boolean;
+  dockWidth: number;
+}
+
+function loadDockPrefs(): ModalDockPrefs {
+  try {
+    const raw = localStorage.getItem(DOCK_PREFS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        dockedRight: Boolean(parsed?.dockedRight),
+        dockWidth:
+          typeof parsed?.dockWidth === 'number' && Number.isFinite(parsed.dockWidth)
+            ? Math.max(300, Math.min(1100, Math.round(parsed.dockWidth)))
+            : 450,
+      };
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return { dockedRight: false, dockWidth: 450 };
+}
+
+function saveDockPrefs(prefs: ModalDockPrefs): void {
+  try {
+    localStorage.setItem(DOCK_PREFS_KEY, JSON.stringify(prefs));
+  } catch {
+    // ignore storage errors
+  }
+}
+
 interface ModalDockContextValue {
   dockedWidth: number;
+  globalDockedRight: boolean;
+  globalDockWidth: number;
+  setGlobalDockedRight: (docked: boolean) => void;
+  setGlobalDockWidth: (width: number) => void;
   setDockEntry: (id: string, width: number | null) => void;
+  claimActiveModal: (id: string, onClose: () => void) => void;
+  releaseActiveModal: (id: string) => void;
 }
 
 const ModalDockContext = createContext<ModalDockContextValue>({
   dockedWidth: 0,
+  globalDockedRight: false,
+  globalDockWidth: 450,
+  setGlobalDockedRight: () => {},
+  setGlobalDockWidth: () => {},
   setDockEntry: () => {},
+  claimActiveModal: () => {},
+  releaseActiveModal: () => {},
 });
 
 export const ModalDockProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const initialPrefs = useRef<ModalDockPrefs | null>(null);
+  if (initialPrefs.current === null) {
+    initialPrefs.current = loadDockPrefs();
+  }
   const [entries, setEntries] = useState<Record<string, number>>({});
+  const [globalDockedRight, setGlobalDockedRightState] = useState<boolean>(
+    initialPrefs.current.dockedRight
+  );
+  const [globalDockWidth, setGlobalDockWidthState] = useState<number>(
+    initialPrefs.current.dockWidth
+  );
+  const activeModalRef = useRef<{ id: string; onClose: () => void } | null>(null);
+
+  const setGlobalDockedRight = useCallback((docked: boolean) => {
+    setGlobalDockedRightState(docked);
+    saveDockPrefs({ dockedRight: docked, dockWidth: globalDockWidth });
+  }, [globalDockWidth]);
+
+  const setGlobalDockWidth = useCallback((width: number) => {
+    const rounded = Math.max(300, Math.round(width));
+    setGlobalDockWidthState(rounded);
+    saveDockPrefs({ dockedRight: globalDockedRight, dockWidth: rounded });
+  }, [globalDockedRight]);
+
+  const claimActiveModal = useCallback((id: string, onClose: () => void) => {
+    const prev = activeModalRef.current;
+    if (prev && prev.id !== id) {
+      activeModalRef.current = { id, onClose };
+      prev.onClose();
+      return;
+    }
+    activeModalRef.current = { id, onClose };
+  }, []);
+
+  const releaseActiveModal = useCallback((id: string) => {
+    if (activeModalRef.current?.id === id) {
+      activeModalRef.current = null;
+    }
+  }, []);
 
   const setDockEntry = useCallback((id: string, width: number | null) => {
     setEntries((prev) => {
@@ -51,7 +135,28 @@ export const ModalDockProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return vals.length > 0 ? Math.max(...vals) : 0;
   }, [entries]);
 
-  const value = useMemo(() => ({ dockedWidth, setDockEntry }), [dockedWidth, setDockEntry]);
+  const value = useMemo(
+    () => ({
+      dockedWidth,
+      globalDockedRight,
+      globalDockWidth,
+      setGlobalDockedRight,
+      setGlobalDockWidth,
+      setDockEntry,
+      claimActiveModal,
+      releaseActiveModal,
+    }),
+    [
+      dockedWidth,
+      globalDockedRight,
+      globalDockWidth,
+      setGlobalDockedRight,
+      setGlobalDockWidth,
+      setDockEntry,
+      claimActiveModal,
+      releaseActiveModal,
+    ]
+  );
 
   return <ModalDockContext.Provider value={value}>{children}</ModalDockContext.Provider>;
 };
@@ -75,6 +180,8 @@ interface ModalProps {
   maxWidthClass?: string;
   headerActions?: React.ReactNode;
   closedBy?: 'any' | 'closerequest';
+  /** Mark nested confirmation/sub-dialogs so they float without closing or replacing their parent modal */
+  isNested?: boolean;
   children: React.ReactNode;
 }
 
@@ -109,20 +216,32 @@ export const Modal: React.FC<ModalProps> = ({
   maxWidthClass = 'w-[min(640px,95vw)]',
   headerActions,
   closedBy = 'any',
+  isNested = false,
   children,
 }) => {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const dockId = useId();
-  const { setDockEntry } = useContext(ModalDockContext);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  const {
+    globalDockedRight,
+    globalDockWidth,
+    setGlobalDockedRight,
+    setGlobalDockWidth,
+    setDockEntry,
+    claimActiveModal,
+    releaseActiveModal,
+  } = useContext(ModalDockContext);
 
   const pressedOutsideRef = useRef(false);
   const skipCloseCountRef = useRef(0);
   const currentModeRef = useRef<'modal' | 'non-modal' | null>(null);
 
   const [floatingRect, setFloatingRect] = useState<FloatingRect | null>(null);
-  const [dockedRight, setDockedRight] = useState(false);
-  const [dockWidth, setDockWidth] = useState(450);
+  const dockedRight = !isNested && globalDockedRight;
+  const dockWidth = clampDockWidth(globalDockWidth);
   const [isDragging, setIsDragging] = useState(false);
   const [windowMenuOpen, setWindowMenuOpen] = useState(false);
   const [liveAnnouncement, setLiveAnnouncement] = useState('');
@@ -134,11 +253,23 @@ export const Modal: React.FC<ModalProps> = ({
     }, 1000);
   }, []);
 
-  // Reset transient menu, mode, & dock on close
+  // Replace any previously open top-level modal so docked/floating modals never stack behind each other
+  useLayoutEffect(() => {
+    if (isNested) return;
+    if (open) {
+      claimActiveModal(dockId, () => onCloseRef.current());
+    } else {
+      releaseActiveModal(dockId);
+    }
+    return () => {
+      if (!isNested) releaseActiveModal(dockId);
+    };
+  }, [open, isNested, dockId, claimActiveModal, releaseActiveModal]);
+
+  // Reset only transient menu & floating rect on close (keep persisted dock mode & width!)
   useEffect(() => {
     if (!open) {
       setWindowMenuOpen(false);
-      setDockedRight(false);
       setFloatingRect(null);
       setDockEntry(dockId, null);
       skipCloseCountRef.current = 0;
@@ -214,11 +345,10 @@ export const Modal: React.FC<ModalProps> = ({
     };
   }, [open, dockedRight, closedBy]);
 
-  // Re-clamp floating rect or dock width on viewport resize
+  // Re-clamp floating rect on viewport resize (dockWidth is clamped dynamically above)
   useEffect(() => {
     const onResize = () => {
       setFloatingRect((prev) => (prev ? clampFloatingRect(prev) : null));
-      setDockWidth((prev) => clampDockWidth(prev));
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
@@ -336,14 +466,14 @@ export const Modal: React.FC<ModalProps> = ({
     window.addEventListener('pointercancel', onUp);
   };
 
-  // Adjust docked panel width by dragging left edge
+  // Adjust docked panel width by dragging left edge (persisted globally!)
   const startDockResize = (e: React.PointerEvent) => {
     if (!dockedRight || e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
 
     const onMove = (ev: PointerEvent) => {
-      setDockWidth(clampDockWidth(window.innerWidth - ev.clientX));
+      setGlobalDockWidth(clampDockWidth(window.innerWidth - ev.clientX));
     };
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
@@ -356,7 +486,7 @@ export const Modal: React.FC<ModalProps> = ({
   };
 
   const scaleFloatingWindow = (factor: number) => {
-    setDockedRight(false);
+    if (!isNested) setGlobalDockedRight(false);
     const cur = ensureFloatingRect();
     const nextW = cur.width * factor;
     const nextH = cur.height * factor;
@@ -372,24 +502,21 @@ export const Modal: React.FC<ModalProps> = ({
   };
 
   const resetWindowPosition = () => {
-    setDockedRight(false);
+    if (!isNested) setGlobalDockedRight(false);
     setFloatingRect(null);
     announce('Posición y tamaño restaurados');
   };
 
   const toggleDockRight = () => {
+    if (isNested) return;
     setWindowMenuOpen(false);
-    setDockedRight((prev) => {
-      const next = !prev;
-      if (next) {
-        const curW = floatingRect?.width ?? ref.current?.getBoundingClientRect().width ?? 450;
-        setDockWidth(clampDockWidth(Math.min(540, Math.max(380, curW))));
-        announce('Ventana anclada a la derecha');
-      } else {
-        announce('Ventana flotante');
-      }
-      return next;
-    });
+    const next = !globalDockedRight;
+    setGlobalDockedRight(next);
+    if (next) {
+      announce('Ventana anclada a la derecha');
+    } else {
+      announce('Ventana flotante');
+    }
   };
 
   const handleHandleKeyDown = (e: React.KeyboardEvent) => {
@@ -574,28 +701,30 @@ export const Modal: React.FC<ModalProps> = ({
             {headerActions}
 
             {/* Direct Dock/Undock Right toggle */}
-            <button
-              type="button"
-              onClick={toggleDockRight}
-              title={
-                dockedRight
-                  ? 'Soltar como ventana flotante'
-                  : 'Anclar a la derecha para trabajar en la tabla a la vez'
-              }
-              aria-label={dockedRight ? 'Desanclar de la derecha' : 'Anclar a la derecha'}
-              aria-pressed={dockedRight}
-              className={`p-1.5 rounded-lg border transition-colors ${
-                dockedRight
-                  ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
-                  : 'border-transparent text-slate-500 hover:text-slate-900 hover:bg-slate-200/70'
-              }`}
-            >
-              {dockedRight ? (
-                <PictureInPicture2 className="w-4 h-4" />
-              ) : (
-                <PanelRight className="w-4 h-4" />
-              )}
-            </button>
+            {!isNested && (
+              <button
+                type="button"
+                onClick={toggleDockRight}
+                title={
+                  dockedRight
+                    ? 'Soltar como ventana flotante'
+                    : 'Anclar a la derecha para trabajar en la tabla a la vez'
+                }
+                aria-label={dockedRight ? 'Desanclar de la derecha' : 'Anclar a la derecha'}
+                aria-pressed={dockedRight}
+                className={`p-1.5 rounded-lg border transition-colors ${
+                  dockedRight
+                    ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
+                    : 'border-transparent text-slate-500 hover:text-slate-900 hover:bg-slate-200/70'
+                }`}
+              >
+                {dockedRight ? (
+                  <PictureInPicture2 className="w-4 h-4" />
+                ) : (
+                  <PanelRight className="w-4 h-4" />
+                )}
+              </button>
+            )}
 
             {/* Small Window Operations Menu */}
             <div className="relative" onPointerDown={(e) => e.stopPropagation()}>
@@ -612,23 +741,25 @@ export const Modal: React.FC<ModalProps> = ({
 
               {windowMenuOpen && (
                 <div className="absolute right-0 top-full mt-1 w-52 bg-white border border-slate-200 rounded-xl shadow-xl py-1.5 z-50 text-xs font-medium text-slate-700">
-                  <button
-                    type="button"
-                    onClick={toggleDockRight}
-                    className="w-full px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-left"
-                  >
-                    {dockedRight ? (
-                      <>
-                        <PictureInPicture2 className="w-3.5 h-3.5 text-blue-600" />
-                        <span>Soltar como popup flotante</span>
-                      </>
-                    ) : (
-                      <>
-                        <PanelRight className="w-3.5 h-3.5 text-blue-600" />
-                        <span>Anclar a la derecha</span>
-                      </>
-                    )}
-                  </button>
+                  {!isNested && (
+                    <button
+                      type="button"
+                      onClick={toggleDockRight}
+                      className="w-full px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-left"
+                    >
+                      {dockedRight ? (
+                        <>
+                          <PictureInPicture2 className="w-3.5 h-3.5 text-blue-600" />
+                          <span>Soltar como popup flotante</span>
+                        </>
+                      ) : (
+                        <>
+                          <PanelRight className="w-3.5 h-3.5 text-blue-600" />
+                          <span>Anclar a la derecha</span>
+                        </>
+                      )}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => {

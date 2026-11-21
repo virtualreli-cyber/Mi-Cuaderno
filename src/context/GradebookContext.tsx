@@ -42,6 +42,19 @@ import {
   recalculateBook,
 } from '../engine/gradeMath';
 import {
+  aspectSnapshotsEqual,
+  applyAspectSnapshot,
+  captureAspectSnapshot,
+  findFirstChangedCellTarget,
+  isAspectBookPatch,
+  isAspectSettingsPatch,
+  preserveCurrentAspectOnDataUndo,
+  resolveBookIdAndTabIdForColumn,
+  type AspectUndoSnapshot,
+  type CellFocusTarget,
+  type UndoneCellTarget,
+} from '../engine/undoHelpers';
+import {
   getCanonicalItemOrder,
   moveItemInTab,
   stepColumnHorizontally,
@@ -105,9 +118,13 @@ interface GradebookContextValue {
   selectTab: (tabId: string) => void;
   updateSettings: (patch: Partial<ViewSettings>) => void;
 
-  // Undo
+  // Data Undo (never affects aspect) & Aspect Undo (separate)
   canUndo: boolean;
   undo: () => void;
+  lastUndoneTarget: UndoneCellTarget | null;
+  canUndoAspect: boolean;
+  undoAspect: () => void;
+  beginAspectChange: () => void;
 
   // Classes & Templates CRUD
   createBook: (
@@ -296,7 +313,21 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [hydrated, setHydrated] = useState(() =>
     Boolean(initialLocalSync.current && initialLocalSync.current.classes.length > 0)
   );
-  const [undoStack, setUndoStack] = useState<GradebookWorkspace[]>([]);
+  const [undoStack, setUndoStack] = useState<
+    Array<{ workspace: GradebookWorkspace; focusCell: CellFocusTarget | null }>
+  >([]);
+  const undoStackRef = useRef<
+    Array<{ workspace: GradebookWorkspace; focusCell: CellFocusTarget | null }>
+  >([]);
+  undoStackRef.current = undoStack;
+
+  const [aspectUndoStack, setAspectUndoStack] = useState<AspectUndoSnapshot[]>([]);
+  const aspectUndoStackRef = useRef<AspectUndoSnapshot[]>([]);
+  aspectUndoStackRef.current = aspectUndoStack;
+  const aspectTxBeforeRef = useRef<AspectUndoSnapshot | null>(null);
+
+  const [lastUndoneTarget, setLastUndoneTarget] = useState<UndoneCellTarget | null>(null);
+  const undoneSeqRef = useRef(0);
 
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(isFirebaseConfigured);
@@ -502,51 +533,149 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return sorted.find((t) => t.id === savedId) ?? sorted[0] ?? null;
   }, [activeBook, workspace.activeTabByBook]);
 
+  const pushAspectUndo = useCallback((snapshot: AspectUndoSnapshot) => {
+    const next = [...aspectUndoStackRef.current.slice(-39), snapshot];
+    aspectUndoStackRef.current = next;
+    setAspectUndoStack(next);
+  }, []);
+
+  const beginAspectChange = useCallback(() => {
+    if (aspectTxBeforeRef.current) return;
+    aspectTxBeforeRef.current = captureAspectSnapshot(workspaceRef.current);
+    const finishTx = () => {
+      const before = aspectTxBeforeRef.current;
+      aspectTxBeforeRef.current = null;
+      if (!before) return;
+      const after = captureAspectSnapshot(workspaceRef.current);
+      if (!aspectSnapshotsEqual(before, after)) {
+        pushAspectUndo(before);
+      }
+    };
+    window.addEventListener('pointerup', finishTx, { once: true });
+    window.addEventListener('pointercancel', finishTx, { once: true });
+  }, [pushAspectUndo]);
+
   const commit = useCallback(
-    (updater: (prev: GradebookWorkspace) => GradebookWorkspace, recordUndo = true) => {
-      setWorkspace((prev) => {
-        if (recordUndo) {
-          setUndoStack((s) => [...s.slice(-39), prev]);
+    (
+      updater: (prev: GradebookWorkspace) => GradebookWorkspace,
+      recordUndo = true,
+      focusHint?: { studentId: string; columnId: string } | null
+    ) => {
+      const prev = workspaceRef.current;
+      const nextWs = {
+        ...updater(prev),
+        updatedAt: new Date().toISOString(),
+      };
+      if (recordUndo) {
+        let resolvedFocus: CellFocusTarget | null = null;
+        if (focusHint) {
+          const loc = resolveBookIdAndTabIdForColumn(prev, focusHint.columnId);
+          if (loc) {
+            resolvedFocus = {
+              bookId: loc.bookId,
+              tabId: loc.tabId,
+              studentId: focusHint.studentId,
+              columnId: focusHint.columnId,
+            };
+          }
         }
-        return {
-          ...updater(prev),
-          updatedAt: new Date().toISOString(),
-        };
-      });
+        const nextUndo = [
+          ...undoStackRef.current.slice(-39),
+          { workspace: prev, focusCell: resolvedFocus },
+        ];
+        undoStackRef.current = nextUndo;
+        setUndoStack(nextUndo);
+      }
+      workspaceRef.current = nextWs;
+      setWorkspace(nextWs);
     },
     []
   );
 
   const mutateActiveBook = useCallback(
-    (mutator: (book: ClassBook, ws: GradebookWorkspace) => ClassBook, recordUndo = true) => {
-      commit((prev) => {
-        if (prev.activeMode === 'TEMPLATE') {
-          const targetId = prev.activeTemplateId ?? prev.templates[0]?.id;
+    (
+      mutator: (book: ClassBook, ws: GradebookWorkspace) => ClassBook,
+      recordUndo = true,
+      focusHint?: { studentId: string; columnId: string } | null
+    ) => {
+      commit(
+        (prev) => {
+          if (prev.activeMode === 'TEMPLATE') {
+            const targetId = prev.activeTemplateId ?? prev.templates[0]?.id;
+            if (!targetId) return prev;
+            return {
+              ...prev,
+              templates: prev.templates.map((t) => (t.id === targetId ? mutator(t, prev) : t)),
+            };
+          }
+          const targetId = prev.activeClassId ?? prev.classes[0]?.id;
           if (!targetId) return prev;
           return {
             ...prev,
-            templates: prev.templates.map((t) => (t.id === targetId ? mutator(t, prev) : t)),
+            classes: prev.classes.map((c) => (c.id === targetId ? mutator(c, prev) : c)),
           };
-        }
-        const targetId = prev.activeClassId ?? prev.classes[0]?.id;
-        if (!targetId) return prev;
-        return {
-          ...prev,
-          classes: prev.classes.map((c) => (c.id === targetId ? mutator(c, prev) : c)),
-        };
-      }, recordUndo);
+        },
+        recordUndo,
+        focusHint
+      );
     },
     [commit]
   );
 
   const undo = useCallback(() => {
-    setUndoStack((stack) => {
-      if (stack.length === 0) return stack;
-      const previous = stack[stack.length - 1];
-      setWorkspace(previous);
-      return stack.slice(0, -1);
-    });
+    const stack = undoStackRef.current;
+    if (stack.length === 0) return;
+    const entry = stack[stack.length - 1];
+    const nextStack = stack.slice(0, -1);
+    undoStackRef.current = nextStack;
+    setUndoStack(nextStack);
+
+    const currentWs = workspaceRef.current;
+    // Always preserve current aspect settings/widths on Data Undo
+    const restored = preserveCurrentAspectOnDataUndo(entry.workspace, currentWs);
+    const resolvedTarget =
+      entry.focusCell ?? findFirstChangedCellTarget(currentWs, restored);
+
+    let finalWs: GradebookWorkspace = {
+      ...restored,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (resolvedTarget) {
+      const isTpl = finalWs.templates.some((t) => t.id === resolvedTarget.bookId);
+      const bookExists = isTpl || finalWs.classes.some((c) => c.id === resolvedTarget.bookId);
+      if (bookExists) {
+        finalWs = {
+          ...finalWs,
+          activeMode: isTpl ? 'TEMPLATE' : 'CLASS',
+          activeClassId: isTpl ? finalWs.activeClassId : resolvedTarget.bookId,
+          activeTemplateId: isTpl ? resolvedTarget.bookId : finalWs.activeTemplateId,
+          activeTabByBook: resolvedTarget.tabId
+            ? { ...finalWs.activeTabByBook, [resolvedTarget.bookId]: resolvedTarget.tabId }
+            : finalWs.activeTabByBook,
+        };
+      }
+    }
+
+    workspaceRef.current = finalWs;
+    setWorkspace(finalWs);
+
+    if (resolvedTarget) {
+      undoneSeqRef.current += 1;
+      setLastUndoneTarget({ ...resolvedTarget, seq: undoneSeqRef.current });
+    }
   }, []);
+
+  const undoAspect = useCallback(() => {
+    aspectTxBeforeRef.current = null;
+    const stack = aspectUndoStackRef.current;
+    if (stack.length === 0) return;
+    const snapshot = stack[stack.length - 1];
+    const nextStack = stack.slice(0, -1);
+    aspectUndoStackRef.current = nextStack;
+    setAspectUndoStack(nextStack);
+    commit((prev) => applyAspectSnapshot(prev, snapshot), false);
+  }, [commit]);
 
   const signInWithEmail = useCallback(async (email: string, password: string) => {
     if (!firebaseAuth) return;
@@ -630,9 +759,18 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const updateSettings = useCallback(
     (patch: Partial<ViewSettings>) => {
+      if (isAspectSettingsPatch(patch) && !aspectTxBeforeRef.current) {
+        const before = captureAspectSnapshot(workspaceRef.current);
+        commit((prev) => ({ ...prev, settings: { ...prev.settings, ...patch } }), false);
+        const after = captureAspectSnapshot(workspaceRef.current);
+        if (!aspectSnapshotsEqual(before, after)) {
+          pushAspectUndo(before);
+        }
+        return;
+      }
       commit((prev) => ({ ...prev, settings: { ...prev.settings, ...patch } }), false);
     },
-    [commit]
+    [commit, pushAspectUndo]
   );
 
   const createBook = useCallback<GradebookContextValue['createBook']>(
@@ -708,13 +846,29 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const updateBook = useCallback<GradebookContextValue['updateBook']>(
     (bookId, patch) => {
+      if (isAspectBookPatch(patch)) {
+        const before = !aspectTxBeforeRef.current ? captureAspectSnapshot(workspaceRef.current) : null;
+        commit(
+          (prev) => ({
+            ...prev,
+            classes: prev.classes.map((c) => (c.id === bookId ? { ...c, ...patch } : c)),
+            templates: prev.templates.map((t) => (t.id === bookId ? { ...t, ...patch } : t)),
+          }),
+          false
+        );
+        if (before) {
+          const after = captureAspectSnapshot(workspaceRef.current);
+          if (!aspectSnapshotsEqual(before, after)) pushAspectUndo(before);
+        }
+        return;
+      }
       commit((prev) => ({
         ...prev,
         classes: prev.classes.map((c) => (c.id === bookId ? { ...c, ...patch } : c)),
         templates: prev.templates.map((t) => (t.id === bookId ? { ...t, ...patch } : t)),
       }));
     },
-    [commit]
+    [commit, pushAspectUndo]
   );
 
   const deleteBook = useCallback<GradebookContextValue['deleteBook']>(
@@ -1413,6 +1567,7 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const resizeColumn = useCallback<GradebookContextValue['resizeColumn']>(
     (columnId, width) => {
       const clamped = Math.max(36, Math.min(360, Math.round(width)));
+      const before = !aspectTxBeforeRef.current ? captureAspectSnapshot(workspaceRef.current) : null;
       mutateActiveBook(
         (book) => ({
           ...book,
@@ -1423,13 +1578,18 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         }),
         false
       );
+      if (before) {
+        const after = captureAspectSnapshot(workspaceRef.current);
+        if (!aspectSnapshotsEqual(before, after)) pushAspectUndo(before);
+      }
     },
-    [mutateActiveBook]
+    [mutateActiveBook, pushAspectUndo]
   );
 
   const resizeFolder = useCallback<GradebookContextValue['resizeFolder']>(
     (tabId, folderId, width) => {
       const clamped = Math.max(38, Math.min(280, Math.round(width)));
+      const before = !aspectTxBeforeRef.current ? captureAspectSnapshot(workspaceRef.current) : null;
       mutateActiveBook(
         (book) => ({
           ...book,
@@ -1446,8 +1606,12 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         }),
         false
       );
+      if (before) {
+        const after = captureAspectSnapshot(workspaceRef.current);
+        if (!aspectSnapshotsEqual(before, after)) pushAspectUndo(before);
+      }
     },
-    [mutateActiveBook]
+    [mutateActiveBook, pushAspectUndo]
   );
 
   // =====================================================================
@@ -1591,40 +1755,72 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     (width, scope = 'TAB') => {
       const clamped = Math.max(36, Math.min(360, Math.round(width)));
       const tabId = activeTab?.id;
-      mutateActiveBook((book) => ({
-        ...book,
-        tabs: book.tabs.map((t) =>
-          scope === 'BOOK' || t.id === tabId
-            ? {
-                ...t,
-                columns: t.columns.map((c) => ({ ...c, width: clamped })),
-              }
-            : t
-        ),
-      }));
-      updateSettings({ defaultColumnWidth: clamped });
+      const before = !aspectTxBeforeRef.current ? captureAspectSnapshot(workspaceRef.current) : null;
+      commit((prev) => {
+        const targetBookId =
+          prev.activeMode === 'TEMPLATE'
+            ? (prev.activeTemplateId ?? prev.templates[0]?.id)
+            : (prev.activeClassId ?? prev.classes[0]?.id);
+        const updateBookCols = (book: ClassBook): ClassBook =>
+          book.id !== targetBookId
+            ? book
+            : {
+                ...book,
+                tabs: book.tabs.map((t) =>
+                  scope === 'BOOK' || t.id === tabId
+                    ? { ...t, columns: t.columns.map((c) => ({ ...c, width: clamped })) }
+                    : t
+                ),
+              };
+        return {
+          ...prev,
+          settings: { ...prev.settings, defaultColumnWidth: clamped },
+          classes: prev.classes.map(updateBookCols),
+          templates: prev.templates.map(updateBookCols),
+        };
+      }, false);
+      if (before) {
+        const after = captureAspectSnapshot(workspaceRef.current);
+        if (!aspectSnapshotsEqual(before, after)) pushAspectUndo(before);
+      }
     },
-    [activeTab?.id, mutateActiveBook, updateSettings]
+    [activeTab?.id, commit, pushAspectUndo]
   );
 
   const applyUniformFolderWidth = useCallback<GradebookContextValue['applyUniformFolderWidth']>(
     (width, scope = 'TAB') => {
       const clamped = Math.max(38, Math.min(280, Math.round(width)));
       const tabId = activeTab?.id;
-      mutateActiveBook((book) => ({
-        ...book,
-        tabs: book.tabs.map((t) =>
-          scope === 'BOOK' || t.id === tabId
-            ? {
-                ...t,
-                folders: t.folders.map((f) => ({ ...f, width: clamped })),
-              }
-            : t
-        ),
-      }));
-      updateSettings({ defaultFolderWidth: clamped });
+      const before = !aspectTxBeforeRef.current ? captureAspectSnapshot(workspaceRef.current) : null;
+      commit((prev) => {
+        const targetBookId =
+          prev.activeMode === 'TEMPLATE'
+            ? (prev.activeTemplateId ?? prev.templates[0]?.id)
+            : (prev.activeClassId ?? prev.classes[0]?.id);
+        const updateBookFolders = (book: ClassBook): ClassBook =>
+          book.id !== targetBookId
+            ? book
+            : {
+                ...book,
+                tabs: book.tabs.map((t) =>
+                  scope === 'BOOK' || t.id === tabId
+                    ? { ...t, folders: t.folders.map((f) => ({ ...f, width: clamped })) }
+                    : t
+                ),
+              };
+        return {
+          ...prev,
+          settings: { ...prev.settings, defaultFolderWidth: clamped },
+          classes: prev.classes.map(updateBookFolders),
+          templates: prev.templates.map(updateBookFolders),
+        };
+      }, false);
+      if (before) {
+        const after = captureAspectSnapshot(workspaceRef.current);
+        if (!aspectSnapshotsEqual(before, after)) pushAspectUndo(before);
+      }
     },
-    [activeTab?.id, mutateActiveBook, updateSettings]
+    [activeTab?.id, commit, pushAspectUndo]
   );
 
   // =====================================================================
@@ -2415,44 +2611,56 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const setCellData = useCallback<GradebookContextValue['setCellData']>(
     (studentId, columnId, grade, comment, options) => {
-      mutateActiveBook((book, ws) => {
-        const col = book.tabs.flatMap((t) => t.columns).find((c) => c.id === columnId);
-        const nextCells = { ...book.cells };
-        applySingleCellInput(nextCells, col, studentId, grade, comment, options);
-        return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
-      });
+      mutateActiveBook(
+        (book, ws) => {
+          const col = book.tabs.flatMap((t) => t.columns).find((c) => c.id === columnId);
+          const nextCells = { ...book.cells };
+          applySingleCellInput(nextCells, col, studentId, grade, comment, options);
+          return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
+        },
+        true,
+        { studentId, columnId }
+      );
     },
     [mutateActiveBook]
   );
 
   const setCellRubricEval = useCallback<GradebookContextValue['setCellRubricEval']>(
     (studentId, columnId, rubricEval, comment, preserveManualOverride = false) => {
-      mutateActiveBook((book, ws) => {
-        const k = cellKey(studentId, columnId);
-        const prev = book.cells[k];
-        const nextCells = {
-          ...book.cells,
-          [k]: {
-            grade: prev?.grade ?? null,
-            comment: comment !== undefined ? comment.trim() : (prev?.comment ?? ''),
-            rubricEval,
-            manualOverride: preserveManualOverride ? prev?.manualOverride : undefined,
-          },
-        };
-        return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
-      });
+      mutateActiveBook(
+        (book, ws) => {
+          const k = cellKey(studentId, columnId);
+          const prev = book.cells[k];
+          const nextCells = {
+            ...book.cells,
+            [k]: {
+              grade: prev?.grade ?? null,
+              comment: comment !== undefined ? comment.trim() : (prev?.comment ?? ''),
+              rubricEval,
+              manualOverride: preserveManualOverride ? prev?.manualOverride : undefined,
+            },
+          };
+          return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
+        },
+        true,
+        { studentId, columnId }
+      );
     },
     [mutateActiveBook]
   );
 
   const clearCell = useCallback<GradebookContextValue['clearCell']>(
     (studentId, columnId) => {
-      mutateActiveBook((book, ws) => {
-        const k = cellKey(studentId, columnId);
-        const nextCells = { ...book.cells };
-        delete nextCells[k];
-        return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
-      });
+      mutateActiveBook(
+        (book, ws) => {
+          const k = cellKey(studentId, columnId);
+          const nextCells = { ...book.cells };
+          delete nextCells[k];
+          return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
+        },
+        true,
+        { studentId, columnId }
+      );
     },
     [mutateActiveBook]
   );
@@ -2460,19 +2668,30 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const setMultipleCellsData = useCallback<GradebookContextValue['setMultipleCellsData']>(
     (targets, grade, comment, options) => {
       if (targets.length === 0) return;
-      mutateActiveBook((book, ws) => {
-        const colMap = new Map<string, ColumnEntity>();
-        for (const tab of book.tabs) {
-          for (const col of tab.columns) colMap.set(col.id, col);
-        }
-        const nextCells = { ...book.cells };
+      mutateActiveBook(
+        (book, ws) => {
+          const colMap = new Map<string, ColumnEntity>();
+          for (const tab of book.tabs) {
+            for (const col of tab.columns) colMap.set(col.id, col);
+          }
+          const nextCells = { ...book.cells };
 
-        for (const { studentId, columnId } of targets) {
-          applySingleCellInput(nextCells, colMap.get(columnId), studentId, grade, comment, options);
-        }
+          for (const { studentId, columnId } of targets) {
+            applySingleCellInput(
+              nextCells,
+              colMap.get(columnId),
+              studentId,
+              grade,
+              comment,
+              options
+            );
+          }
 
-        return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
-      });
+          return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
+        },
+        true,
+        targets[0]
+      );
     },
     [mutateActiveBook]
   );
@@ -2480,25 +2699,29 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const applyCellsBatch = useCallback<GradebookContextValue['applyCellsBatch']>(
     (entries) => {
       if (entries.length === 0) return;
-      mutateActiveBook((book, ws) => {
-        const colMap = new Map<string, ColumnEntity>();
-        for (const tab of book.tabs) {
-          for (const col of tab.columns) colMap.set(col.id, col);
-        }
-        const nextCells = { ...book.cells };
+      mutateActiveBook(
+        (book, ws) => {
+          const colMap = new Map<string, ColumnEntity>();
+          for (const tab of book.tabs) {
+            for (const col of tab.columns) colMap.set(col.id, col);
+          }
+          const nextCells = { ...book.cells };
 
-        for (const entry of entries) {
-          applySingleCellInput(
-            nextCells,
-            colMap.get(entry.columnId),
-            entry.studentId,
-            entry.grade,
-            entry.comment
-          );
-        }
+          for (const entry of entries) {
+            applySingleCellInput(
+              nextCells,
+              colMap.get(entry.columnId),
+              entry.studentId,
+              entry.grade,
+              entry.comment
+            );
+          }
 
-        return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
-      });
+          return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
+        },
+        true,
+        { studentId: entries[0].studentId, columnId: entries[0].columnId }
+      );
     },
     [mutateActiveBook]
   );
@@ -2506,19 +2729,23 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const clearMultipleCells = useCallback<GradebookContextValue['clearMultipleCells']>(
     (targets) => {
       if (targets.length === 0) return;
-      mutateActiveBook((book, ws) => {
-        const colMap = new Map<string, ColumnEntity>();
-        for (const tab of book.tabs) {
-          for (const col of tab.columns) colMap.set(col.id, col);
-        }
-        const nextCells = { ...book.cells };
-        for (const { studentId, columnId } of targets) {
-          const col = colMap.get(columnId);
-          if (!col || col.isLocked || col.type === 'AVERAGE') continue;
-          delete nextCells[cellKey(studentId, columnId)];
-        }
-        return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
-      });
+      mutateActiveBook(
+        (book, ws) => {
+          const colMap = new Map<string, ColumnEntity>();
+          for (const tab of book.tabs) {
+            for (const col of tab.columns) colMap.set(col.id, col);
+          }
+          const nextCells = { ...book.cells };
+          for (const { studentId, columnId } of targets) {
+            const col = colMap.get(columnId);
+            if (!col || col.isLocked || col.type === 'AVERAGE') continue;
+            delete nextCells[cellKey(studentId, columnId)];
+          }
+          return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
+        },
+        true,
+        targets[0]
+      );
     },
     [mutateActiveBook]
   );
@@ -2781,6 +3008,10 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     updateSettings,
     canUndo: undoStack.length > 0,
     undo,
+    lastUndoneTarget,
+    canUndoAspect: aspectUndoStack.length > 0,
+    undoAspect,
+    beginAspectChange,
     createBook,
     updateBook,
     deleteBook,

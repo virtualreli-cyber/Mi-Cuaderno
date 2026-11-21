@@ -7,12 +7,10 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
-  GraduationCap,
   Layers,
   Plus,
   RotateCcw,
   Trash2,
-  X,
 } from 'lucide-react';
 import {
   DEFAULT_LOMLOE_KEY_COMPETENCES,
@@ -33,6 +31,7 @@ import type {
   LomloeKeyCompetenceDef,
   LomloeSpecificCompetence,
 } from '../../types/gradebook';
+import { Modal } from '../common/Modal';
 import { LOMLOE_ICON_OPTIONS, LomloeCompetenceBadge } from './LomloeCompetenceBadge';
 
 interface LomloeModalProps {
@@ -265,42 +264,14 @@ export const LomloeModal: React.FC<LomloeModalProps> = ({ isOpen, onClose }) => 
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-slate-900/45 backdrop-blur-[2px] flex items-center justify-center p-4"
-      onClick={onClose}
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      title="Currículo LOMLOE · Religión Católica (1º ESO – 1º BAC)"
+      subtitle="Configura Competencias Clave, Competencias Específicas y Criterios de Evaluación (BOE-A-2022-10452)"
+      maxWidthClass="w-[min(1024px,95vw)]"
     >
-      <div
-        role="dialog"
-        aria-label="Configuración LOMLOE y Criterios de Evaluación"
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-5xl max-h-[90vh] bg-white rounded-3xl border border-slate-200 shadow-2xl flex flex-col overflow-hidden"
-      >
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-indigo-50/80 via-white to-sky-50/70 flex items-center justify-between gap-4 shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-sm shrink-0">
-              <GraduationCap className="w-5 h-5" />
-            </div>
-            <div className="min-w-0">
-              <h2 className="text-base font-extrabold text-slate-900 truncate">
-                Currículo LOMLOE · Religión Católica (1º ESO – 1º BAC)
-              </h2>
-              <p className="text-xs text-slate-500 truncate">
-                Configura Competencias Clave, Competencias Específicas y Criterios de Evaluación (BOE-A-2022-10452)
-              </p>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Cerrar configuración LOMLOE"
-            className="p-2 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-100"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
+      <div className="flex flex-col">
         {/* Active Class Curriculum Binding Bar */}
         {activeBook && (
           <div className="px-6 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 shrink-0 text-xs">
@@ -1002,7 +973,7 @@ export const LomloeModal: React.FC<LomloeModalProps> = ({ isOpen, onClose }) => 
           />
         )}
       </div>
-    </div>
+    </Modal>
   );
 };
 
@@ -1038,27 +1009,14 @@ const CriterionEditorSubModal: React.FC<CriterionEditorSubModalProps> = ({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-60 bg-slate-900/40 flex items-center justify-center p-4"
-      onClick={onCancel}
+    <Modal
+      open
+      isNested
+      onClose={onCancel}
+      title={initial ? `Editar criterio ${initial.code}` : `Nuevo criterio en CE ${ce.number}`}
+      maxWidthClass="w-[min(520px,95vw)]"
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg bg-white rounded-2xl border border-slate-200 shadow-2xl p-5 space-y-4"
-      >
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-extrabold text-slate-900">
-            {initial ? `Editar criterio ${initial.code}` : `Nuevo criterio en CE ${ce.number}`}
-          </h3>
-          <button
-            type="button"
-            onClick={onCancel}
-            className="p-1 rounded-lg text-slate-400 hover:text-slate-700"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
+      <div className="p-5 space-y-4">
         <div className="space-y-3 text-xs">
           <div>
             <label className="block text-[11px] font-bold text-slate-600 mb-1">
@@ -1146,6 +1104,6 @@ const CriterionEditorSubModal: React.FC<CriterionEditorSubModalProps> = ({
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 };

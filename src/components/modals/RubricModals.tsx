@@ -66,7 +66,7 @@ const AutoGrowTextarea: React.FC<AutoGrowTextareaProps> = ({
       rows={1}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className={`w-full overflow-hidden resize-none whitespace-pre-wrap break-words leading-snug ${className}`}
+      className={`w-full overflow-hidden resize-none whitespace-pre-wrap break-normal leading-snug ${className}`}
       {...rest}
     />
   );
@@ -882,6 +882,7 @@ const RubricTextImportModal: React.FC<RubricTextImportModalProps> = ({
   return (
     <Modal
       open={open}
+      isNested
       onClose={onClose}
       title="Importar rúbrica desde texto"
       subtitle="Edita el modelo de ejemplo o pega tu rúbrica (separada por |, tabulaciones de Excel/Word o lista)"
@@ -1001,7 +1002,7 @@ const RubricTextImportModal: React.FC<RubricTextImportModalProps> = ({
                       {parsed.rubric!.levels.map((lvl) => (
                         <td
                           key={lvl.id}
-                          className="p-2 border-r border-slate-200 last:border-r-0 align-top text-slate-700 whitespace-pre-wrap break-words"
+                          className="p-2 border-r border-slate-200 last:border-r-0 align-top text-slate-700 whitespace-pre-wrap break-normal"
                         >
                           {parsed.rubric!.descriptors[`${crit.id}::${lvl.id}`] || (
                             <span className="text-slate-300 italic">—</span>
