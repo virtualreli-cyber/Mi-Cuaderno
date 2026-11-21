@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Lock, Pencil, Plus, Send } from 'lucide-react';
 import { PASTEL_SWATCHES } from '../../constants/colors';
 import { useGradebook } from '../../context/GradebookContext';
+import { useDeviceProfile } from '../../hooks/useDeviceProfile';
+import { useTouchLongPress } from '../../hooks/useLongPress';
 import type { ClassBook, TabEntity } from '../../types/gradebook';
 
 interface TabStripProps {
@@ -10,6 +12,8 @@ interface TabStripProps {
 }
 
 export const TabStrip: React.FC<TabStripProps> = ({ onEditTab, onOpenTemplateCopy }) => {
+  const device = useDeviceProfile();
+  const longPress = useTouchLongPress();
   const { activeBook, activeTab, isTemplateMode, selectTab, addTab, reorderTabs } = useGradebook();
   const [dragTabId, setDragTabId] = useState<string | null>(null);
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null);
@@ -29,14 +33,26 @@ export const TabStrip: React.FC<TabStripProps> = ({ onEditTab, onOpenTemplateCop
   };
 
   return (
-    <div className="shrink-0 bg-slate-100/80 border-b border-slate-200 px-3 pt-2 flex items-end gap-1.5 overflow-x-auto select-none">
+    <div
+      style={{
+        paddingLeft: 'max(0.75rem, var(--safe-left))',
+        paddingRight: 'max(0.75rem, var(--safe-right))',
+      }}
+      className="shrink-0 bg-slate-100/80 border-b border-slate-200 pt-2 flex items-end gap-1.5 overflow-x-auto no-scrollbar select-none"
+    >
       {sortedTabs.map((tab) => {
         const isActive = activeTab?.id === tab.id;
         const isOver = dragOverTabId === tab.id && dragTabId !== tab.id;
         return (
           <div
             key={tab.id}
-            draggable
+            draggable={!device.isTouch}
+            onPointerDown={(e) => {
+              longPress.start(e, () => onEditTab(tab));
+            }}
+            onPointerMove={longPress.move}
+            onPointerUp={longPress.cancel}
+            onPointerCancel={longPress.cancel}
             onDragStart={(e) => {
               setDragTabId(tab.id);
               e.dataTransfer.effectAllowed = 'move';
@@ -66,7 +82,9 @@ export const TabStrip: React.FC<TabStripProps> = ({ onEditTab, onOpenTemplateCop
             style={{
               backgroundColor: isActive ? tab.color : `${tab.color}88`,
             }}
-            className={`group flex items-center gap-1.5 rounded-t-xl border border-b-0 px-3 py-1.5 transition-all cursor-grab active:cursor-grabbing ${
+            className={`group flex items-center gap-1.5 rounded-t-xl border border-b-0 ${
+              device.isTouch ? 'px-3.5 py-2.5 min-h-[42px]' : 'px-3 py-1.5'
+            } transition-all ${device.isTouch ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} shrink-0 ${
               isActive
                 ? 'border-slate-300 text-slate-900 font-bold shadow-2xs translate-y-[1px] pb-[7px]'
                 : 'border-slate-200/80 text-slate-700 font-medium hover:brightness-98'
@@ -74,10 +92,13 @@ export const TabStrip: React.FC<TabStripProps> = ({ onEditTab, onOpenTemplateCop
           >
             <button
               type="button"
-              onClick={() => selectTab(tab.id)}
+              onClick={() => {
+                if (longPress.wasJustTriggered()) return;
+                selectTab(tab.id);
+              }}
               className="flex items-center gap-1.5 text-xs whitespace-nowrap"
             >
-              {tab.isLocked && <Lock className="w-3 h-3 text-slate-600" />}
+              {tab.isLocked && <Lock className="w-3 h-3 text-slate-600" aria-hidden="true" />}
               <span>{tab.title}</span>
             </button>
 
@@ -89,9 +110,11 @@ export const TabStrip: React.FC<TabStripProps> = ({ onEditTab, onOpenTemplateCop
               }}
               title={`Configurar pestaña ${tab.title}`}
               aria-label={`Configurar pestaña ${tab.title}`}
-              className="p-0.5 rounded-md text-slate-500 hover:text-slate-900 hover:bg-black/10 opacity-70 group-hover:opacity-100 transition-opacity"
+              className={`${
+                device.isTouch ? 'p-1.5 opacity-100' : 'p-0.5 opacity-70 group-hover:opacity-100'
+              } rounded-md text-slate-500 hover:text-slate-900 hover:bg-black/10 transition-opacity`}
             >
-              <Pencil className="w-3 h-3" />
+              <Pencil className="w-3 h-3" aria-hidden="true" />
             </button>
           </div>
         );

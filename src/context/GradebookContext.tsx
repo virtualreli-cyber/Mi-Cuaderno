@@ -8,10 +8,12 @@ import React, {
   useState,
 } from 'react';
 import {
+  getRedirectResult,
   onAuthStateChanged,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   type User,
 } from 'firebase/auth';
@@ -63,15 +65,21 @@ import {
   type DragItemPayload,
   type DropTargetPayload,
 } from '../engine/tabLayout';
+import { mergeWorkspaces3Way, type SyncCellConflict } from '../engine/syncEngine';
 import {
   clearLocalWorkspace,
   loadFirebaseWorkspace,
   loadLocalWorkspace,
   loadLocalWorkspaceSync,
+  loadSyncBaseWorkspace,
+  loadSyncMeta,
   loadUiMenuPrefs,
   mergeNewerLocalUiPrefs,
   saveFirebaseWorkspace,
   saveLocalWorkspace,
+  savePreMergeBackup,
+  saveSyncBaseWorkspace,
+  saveSyncMeta,
   saveUiMenuPrefs,
   subscribeFirebaseWorkspace,
 } from '../services/storage';
@@ -91,7 +99,7 @@ import {
   type ViewSettings,
 } from '../types/gradebook';
 
-export type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
+export type SyncStatus = 'local' | 'offline' | 'syncing' | 'synced' | 'error';
 
 interface GradebookContextValue {
   workspace: GradebookWorkspace;
@@ -99,17 +107,24 @@ interface GradebookContextValue {
   activeTab: TabEntity | null;
   isTemplateMode: boolean;
 
-  // Auth & Firebase Sync
+  // Auth & Firebase Sync (Offline-first 3-way merge)
   user: User | null;
   authLoading: boolean;
   syncStatus: SyncStatus;
   syncError: string | null;
+  isOnline: boolean;
+  hasPendingSync: boolean;
+  syncConflicts: SyncCellConflict[];
+  syncNotice: string | null;
   isFirebaseConfigured: boolean;
   signInWithEmail: (email: string, password: string) => Promise<void>;
   sendPasswordReset: (email: string) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   signOutGoogle: () => Promise<void>;
   pushLocalToCloud: () => Promise<void>;
+  reconcileCloudNow: () => Promise<void>;
+  resolveSyncConflict: (conflictId: string, choice: 'LOCAL' | 'REMOTE') => void;
+  dismissSyncConflicts: () => void;
 
   // Navigation & Settings
   setActiveMode: (mode: 'CLASS' | 'TEMPLATE') => void;
@@ -331,7 +346,17 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(isFirebaseConfigured);
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>('local');
+  const [isOnline, setIsOnline] = useState<boolean>(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+  const [hasPendingSync, setHasPendingSync] = useState<boolean>(
+    () => loadSyncMeta().hasPendingLocalChanges
+  );
+  const [syncConflicts, setSyncConflicts] = useState<SyncCellConflict[]>([]);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(() =>
+    typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'local'
+  );
   const [syncError, setSyncError] = useState<string | null>(null);
 
   const cloudWriteTimer = useRef<number | null>(null);
@@ -339,8 +364,161 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const lastRemoteUpdatedAtRef = useRef<string | null>(null);
   const lastWrittenUpdatedAtRef = useRef<string | null>(null);
   const cloudReadyRef = useRef(false);
+  const reconcilingRef = useRef(false);
+  const userRef = useRef<User | null>(null);
+  userRef.current = user;
   const workspaceRef = useRef<GradebookWorkspace>(workspace);
   workspaceRef.current = workspace;
+
+  const markLocalDirty = useCallback(() => {
+    const prevMeta = loadSyncMeta();
+    if (!prevMeta.hasPendingLocalChanges) {
+      saveSyncMeta({
+        ...prevMeta,
+        hasPendingLocalChanges: true,
+        pendingSince: new Date().toISOString(),
+      });
+    }
+    setHasPendingSync(true);
+  }, []);
+
+  const markCloudSynced = useCallback((uid: string, syncedWs: GradebookWorkspace) => {
+    saveSyncMeta({
+      lastSyncedAt: syncedWs.updatedAt,
+      lastSyncedUid: uid,
+      hasPendingLocalChanges: false,
+      pendingSince: null,
+    });
+    setHasPendingSync(false);
+    void saveSyncBaseWorkspace(syncedWs);
+  }, []);
+
+  /**
+   * Safe 3-way reconciliation between local workspace (possibly edited offline) and cloud workspace.
+   * Never silently wipes out offline grades: merges per-book, per-column, per-student & per-cell.
+   */
+  const reconcileWithCloud = useCallback(
+    async (uid: string, incomingRemote?: GradebookWorkspace | null) => {
+      if (!isFirebaseConfigured || reconcilingRef.current) return;
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setSyncStatus('offline');
+        return;
+      }
+      reconcilingRef.current = true;
+      setSyncStatus('syncing');
+      try {
+        const remote =
+          incomingRemote !== undefined ? incomingRemote : await loadFirebaseWorkspace(uid);
+        const localLatest = workspaceRef.current;
+        const meta = loadSyncMeta();
+        const sameAccount = !meta.lastSyncedUid || meta.lastSyncedUid === uid;
+        const localHasPending = meta.hasPendingLocalChanges && sameAccount;
+
+        if (remote && remote.classes.length > 0) {
+          if (localHasPending) {
+            // Fast path: remote did not change since our last sync -> upload local directly
+            if (meta.lastSyncedAt && remote.updatedAt === meta.lastSyncedAt) {
+              lastWrittenUpdatedAtRef.current = localLatest.updatedAt;
+              lastRemoteUpdatedAtRef.current = localLatest.updatedAt;
+              await saveFirebaseWorkspace(uid, localLatest);
+              await saveLocalWorkspace(localLatest);
+              markCloudSynced(uid, localLatest);
+              setSyncNotice('Cambios realizados sin conexión sincronizados en la nube.');
+            } else {
+              // Both devices edited -> 3-way semantic merge preserving both sides!
+              const baseWs = await loadSyncBaseWorkspace();
+              await savePreMergeBackup(localLatest);
+              const merged = mergeWorkspaces3Way(baseWs, localLatest, remote);
+              lastWrittenUpdatedAtRef.current = merged.workspace.updatedAt;
+              lastRemoteUpdatedAtRef.current = merged.workspace.updatedAt;
+              workspaceRef.current = merged.workspace;
+              setWorkspace(merged.workspace);
+              await saveLocalWorkspace(merged.workspace);
+              await saveFirebaseWorkspace(uid, merged.workspace);
+              markCloudSynced(uid, merged.workspace);
+
+              if (merged.cellConflicts.length > 0) {
+                setSyncConflicts(merged.cellConflicts);
+                setSyncNotice(
+                  `Fusión completada con ${merged.cellConflicts.length} celda(s) editadas en dos dispositivos. Puedes revisarlas en Cuenta y Sincronización.`
+                );
+              } else if (merged.hadDivergence) {
+                setSyncNotice(
+                  'Cambios sin conexión combinados automáticamente con los de tus otros dispositivos sin perder ningún dato.'
+                );
+              }
+            }
+          } else {
+            // No pending local edits -> accept remote while keeping device-local UI/zoom prefs
+            const withLocalUi = mergeNewerLocalUiPrefs(remote, loadUiMenuPrefs()).workspace;
+            const deviceSafeWs: GradebookWorkspace = {
+              ...withLocalUi,
+              settings: {
+                ...withLocalUi.settings,
+                sidebarVisible: localLatest.settings.sidebarVisible,
+                collapsedSchools: localLatest.settings.collapsedSchools ?? {},
+                gridZoom: localLatest.settings.gridZoom ?? 1,
+                rubricZoom: localLatest.settings.rubricZoom ?? 1,
+              },
+            };
+            lastRemoteUpdatedAtRef.current = remote.updatedAt;
+            lastWrittenUpdatedAtRef.current = remote.updatedAt;
+            workspaceRef.current = deviceSafeWs;
+            setWorkspace(deviceSafeWs);
+            await saveLocalWorkspace(deviceSafeWs);
+            markCloudSynced(uid, remote);
+          }
+        } else {
+          // Remote branch is empty (first sign-in): upload local workspace
+          const toUpload = (await loadLocalWorkspace()) ?? localLatest;
+          lastWrittenUpdatedAtRef.current = toUpload.updatedAt;
+          lastRemoteUpdatedAtRef.current = toUpload.updatedAt;
+          workspaceRef.current = toUpload;
+          setWorkspace(toUpload);
+          await saveFirebaseWorkspace(uid, toUpload);
+          markCloudSynced(uid, toUpload);
+        }
+
+        cloudReadyRef.current = true;
+        setSyncStatus('synced');
+        setSyncError(null);
+      } catch (err) {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setSyncStatus('offline');
+          setSyncError(null);
+        } else {
+          setSyncStatus('error');
+          setSyncError(err instanceof Error ? err.message : 'Error de sincronización');
+        }
+      } finally {
+        reconcilingRef.current = false;
+      }
+    },
+    [markCloudSynced]
+  );
+
+  // Track online / offline connectivity & auto-reconcile pending offline changes when reconnected
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      if (userRef.current && isFirebaseConfigured) {
+        void reconcileWithCloud(userRef.current.uid);
+      } else {
+        setSyncStatus('local');
+      }
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      setSyncStatus('offline');
+      setSyncError(null);
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [reconcileWithCloud]);
 
   // Hydrate offline IDB workspace fallback when synchronous localStorage had no workspace
   useEffect(() => {
@@ -360,13 +538,18 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     };
   }, [hydrated]);
 
-  // Optional Firebase Auth + Realtime Sync
+  // Optional Firebase Auth + Realtime Sync (with iOS Standalone redirect completion + offline 3-way merge)
   useEffect(() => {
     if (!isFirebaseConfigured || !firebaseAuth) {
       setAuthLoading(false);
-      setSyncStatus('local');
+      setSyncStatus(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'local');
       return;
     }
+
+    // Complete any pending OAuth redirect (used automatically on iPadOS/iOS standalone PWAs)
+    void getRedirectResult(firebaseAuth).catch(() => {
+      // ignore if no pending redirect
+    });
 
     let unsubDb: (() => void) | null = null;
     const unsubAuth = onAuthStateChanged(firebaseAuth, async (nextUser) => {
@@ -382,81 +565,59 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
 
       if (!nextUser) {
-        setSyncStatus('local');
+        setSyncStatus(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'local');
         setSyncError(null);
         return;
       }
 
-      setSyncStatus('syncing');
-      try {
-        const remote = await loadFirebaseWorkspace(nextUser.uid);
-        if (remote && remote.classes.length > 0) {
-          const { workspace: mergedWs, merged } = mergeNewerLocalUiPrefs(
-            remote,
-            loadUiMenuPrefs()
-          );
-          lastRemoteUpdatedAtRef.current = remote.updatedAt;
-          lastWrittenUpdatedAtRef.current = merged ? null : remote.updatedAt;
-          setWorkspace(mergedWs);
-          workspaceRef.current = mergedWs;
-          await saveLocalWorkspace(mergedWs);
-          if (merged) {
-            lastWrittenUpdatedAtRef.current = mergedWs.updatedAt;
-            await saveFirebaseWorkspace(nextUser.uid, mergedWs);
-          }
-        } else {
-          // Upload latest local data on first sign-in when remote branch is empty
-          const localLatest = (await loadLocalWorkspace()) ?? workspaceRef.current;
-          lastWrittenUpdatedAtRef.current = localLatest.updatedAt;
-          setWorkspace(localLatest);
-          workspaceRef.current = localLatest;
-          await saveFirebaseWorkspace(nextUser.uid, localLatest);
-        }
-        cloudReadyRef.current = true;
-        setSyncStatus('synced');
-        setSyncError(null);
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setSyncStatus('offline');
+        return;
+      }
 
-        unsubDb = subscribeFirebaseWorkspace(
-          nextUser.uid,
-          (remoteWs) => {
-            // Ignore echoes of our own writes or identical snapshots
-            if (
-              remoteWs.updatedAt === lastWrittenUpdatedAtRef.current ||
-              remoteWs.updatedAt === lastRemoteUpdatedAtRef.current
-            ) {
-              return;
-            }
-            const nextRemote = mergeNewerLocalUiPrefs(remoteWs, loadUiMenuPrefs()).workspace;
-            lastRemoteUpdatedAtRef.current = remoteWs.updatedAt;
-            setWorkspace(nextRemote);
-            workspaceRef.current = nextRemote;
-            saveLocalWorkspace(nextRemote);
-            setSyncStatus('synced');
-          },
-          (err) => {
+      await reconcileWithCloud(nextUser.uid);
+
+      unsubDb = subscribeFirebaseWorkspace(
+        nextUser.uid,
+        (remoteWs) => {
+          // Ignore echoes of our own writes or identical snapshots
+          if (
+            remoteWs.updatedAt === lastWrittenUpdatedAtRef.current ||
+            remoteWs.updatedAt === lastRemoteUpdatedAtRef.current
+          ) {
+            return;
+          }
+          void reconcileWithCloud(nextUser.uid, remoteWs);
+        },
+        (err) => {
+          if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            setSyncStatus('offline');
+          } else {
             setSyncStatus('error');
             setSyncError(err.message);
           }
-        );
-      } catch (err) {
-        setSyncStatus('error');
-        setSyncError(err instanceof Error ? err.message : 'Error de sincronización');
-      }
+        }
+      );
     });
 
     return () => {
       unsubAuth();
       if (unsubDb) unsubDb();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [reconcileWithCloud]);
 
   // Save locally & debounce cloud sync (plus flush on pagehide / visibilitychange)
   useEffect(() => {
     if (!hydrated) return;
     saveLocalWorkspace(workspace);
 
-    if (user && isFirebaseConfigured && cloudReadyRef.current) {
+    if (user && isFirebaseConfigured) {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setSyncStatus('offline');
+        return;
+      }
+      if (!cloudReadyRef.current) return;
+
       // Skip redundant write-back when state was just applied from RTDB
       if (
         workspace.updatedAt === lastRemoteUpdatedAtRef.current ||
@@ -472,18 +633,29 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       cloudWriteTimer.current = window.setTimeout(async () => {
         cloudWriteTimer.current = null;
         pendingCloudUserRef.current = null;
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setSyncStatus('offline');
+          return;
+        }
         try {
           lastWrittenUpdatedAtRef.current = snapshot.updatedAt;
+          lastRemoteUpdatedAtRef.current = snapshot.updatedAt;
           await saveFirebaseWorkspace(user.uid, snapshot);
+          markCloudSynced(user.uid, snapshot);
           setSyncStatus('synced');
           setSyncError(null);
         } catch (err) {
-          setSyncStatus('error');
-          setSyncError(err instanceof Error ? err.message : 'Error al guardar en la nube');
+          if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            setSyncStatus('offline');
+            setSyncError(null);
+          } else {
+            setSyncStatus('error');
+            setSyncError(err instanceof Error ? err.message : 'Error al guardar en la nube');
+          }
         }
-      }, 350);
+      }, 400);
     }
-  }, [workspace, hydrated, user]);
+  }, [workspace, hydrated, user, markCloudSynced]);
 
   useEffect(() => {
     const flushNow = () => {
@@ -585,11 +757,12 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         ];
         undoStackRef.current = nextUndo;
         setUndoStack(nextUndo);
+        markLocalDirty();
       }
       workspaceRef.current = nextWs;
       setWorkspace(nextWs);
     },
-    []
+    [markLocalDirty]
   );
 
   const mutateActiveBook = useCallback(
@@ -659,12 +832,13 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     workspaceRef.current = finalWs;
     setWorkspace(finalWs);
+    markLocalDirty();
 
     if (resolvedTarget) {
       undoneSeqRef.current += 1;
       setLastUndoneTarget({ ...resolvedTarget, seq: undoneSeqRef.current });
     }
-  }, []);
+  }, [markLocalDirty]);
 
   const undoAspect = useCallback(() => {
     aspectTxBeforeRef.current = null;
@@ -689,7 +863,32 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const signInWithGoogle = useCallback(async () => {
     if (!firebaseAuth || !googleAuthProvider) return;
-    await signInWithPopup(firebaseAuth, googleAuthProvider);
+    const isStandalonePwa =
+      typeof window !== 'undefined' &&
+      (window.matchMedia('(display-mode: standalone)').matches ||
+        Boolean((window.navigator as { standalone?: boolean }).standalone));
+    const isIosUa =
+      typeof navigator !== 'undefined' &&
+      (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+
+    if (isStandalonePwa && isIosUa) {
+      await signInWithRedirect(firebaseAuth, googleAuthProvider);
+      return;
+    }
+    try {
+      await signInWithPopup(firebaseAuth, googleAuthProvider);
+    } catch (err) {
+      const code = (err as { code?: string })?.code ?? '';
+      if (
+        code === 'auth/popup-blocked' ||
+        code === 'auth/operation-not-supported-in-this-environment'
+      ) {
+        await signInWithRedirect(firebaseAuth, googleAuthProvider);
+      } else {
+        throw err;
+      }
+    }
   }, []);
 
   const signOutGoogle = useCallback(async () => {
@@ -699,17 +898,62 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const pushLocalToCloud = useCallback(async () => {
     if (!user || !isFirebaseConfigured) return;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setSyncStatus('offline');
+      return;
+    }
     setSyncStatus('syncing');
     try {
-      lastWrittenUpdatedAtRef.current = workspace.updatedAt;
-      await saveFirebaseWorkspace(user.uid, workspace);
+      const latest = workspaceRef.current;
+      lastWrittenUpdatedAtRef.current = latest.updatedAt;
+      lastRemoteUpdatedAtRef.current = latest.updatedAt;
+      await saveFirebaseWorkspace(user.uid, latest);
+      markCloudSynced(user.uid, latest);
       setSyncStatus('synced');
       setSyncError(null);
     } catch (err) {
       setSyncStatus('error');
       setSyncError(err instanceof Error ? err.message : 'Error al sincronizar');
     }
-  }, [user, workspace]);
+  }, [user, markCloudSynced]);
+
+  const reconcileCloudNow = useCallback(async () => {
+    if (!userRef.current || !isFirebaseConfigured) return;
+    await reconcileWithCloud(userRef.current.uid);
+  }, [reconcileWithCloud]);
+
+  const resolveSyncConflict = useCallback(
+    (conflictId: string, choice: 'LOCAL' | 'REMOTE') => {
+      const target = syncConflicts.find((c) => c.id === conflictId);
+      if (!target) return;
+      commit((prev) => {
+        const applyToBook = (b: ClassBook): ClassBook => {
+          if (b.id !== target.bookId) return b;
+          const k = cellKey(target.studentId, target.columnId);
+          const nextCells = { ...b.cells };
+          const chosenCell = choice === 'LOCAL' ? target.localCell : target.remoteCell;
+          if (chosenCell) {
+            nextCells[k] = chosenCell;
+          } else {
+            delete nextCells[k];
+          }
+          return recalculateBook({ ...b, cells: nextCells }, prev.rubrics);
+        };
+        return {
+          ...prev,
+          classes: prev.classes.map(applyToBook),
+          templates: prev.templates.map(applyToBook),
+        };
+      }, true);
+      setSyncConflicts((prev) => prev.filter((c) => c.id !== conflictId));
+    },
+    [syncConflicts, commit]
+  );
+
+  const dismissSyncConflicts = useCallback(() => {
+    setSyncConflicts([]);
+    setSyncNotice(null);
+  }, []);
 
   const setActiveMode = useCallback(
     (mode: 'CLASS' | 'TEMPLATE') => {
@@ -2995,12 +3239,19 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     authLoading,
     syncStatus,
     syncError,
+    isOnline,
+    hasPendingSync,
+    syncConflicts,
+    syncNotice,
     isFirebaseConfigured,
     signInWithEmail,
     sendPasswordReset,
     signInWithGoogle,
     signOutGoogle,
     pushLocalToCloud,
+    reconcileCloudNow,
+    resolveSyncConflict,
+    dismissSyncConflicts,
     setActiveMode,
     selectClass,
     selectTemplate,

@@ -45,13 +45,15 @@ export const LomloeCriteriaPickerPopover: React.FC<LomloeCriteriaPickerPopoverPr
     [keyCompetences]
   );
 
-  const popWidth = 430;
-  const popMaxHeight = 460;
+  const popWidth =
+    typeof window !== 'undefined' ? Math.min(430, Math.max(280, window.innerWidth - 20)) : 430;
+  const popMaxHeight =
+    typeof window !== 'undefined' ? Math.min(460, Math.max(260, window.innerHeight - 36)) : 460;
   const left =
     typeof window !== 'undefined'
       ? Math.max(
-          12,
-          Math.min(window.innerWidth - popWidth - 12, anchorRect.left)
+          10,
+          Math.min(window.innerWidth - popWidth - 10, anchorRect.left)
         )
       : anchorRect.left;
   const top =

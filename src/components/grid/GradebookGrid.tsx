@@ -1,7 +1,11 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  ArrowDown,
   ArrowDownUp,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
   BarChart3,
   Calculator,
   Check,
@@ -17,6 +21,7 @@ import {
   Layers,
   LayoutGrid,
   Lock,
+  MessageSquare,
   Minus,
   MoreVertical,
   Pencil,
@@ -32,6 +37,8 @@ import {
 } from '../../constants/colors';
 import { DEFAULT_LOMLOE_KEY_COMPETENCES } from '../../data/lomloeReligion';
 import { useGradebook } from '../../context/GradebookContext';
+import { useDeviceProfile } from '../../hooks/useDeviceProfile';
+import { useTouchLongPress } from '../../hooks/useLongPress';
 import {
   applyCounterDelta,
   buildAlphabeticalColumnCopyText,
@@ -144,6 +151,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   onOpenRubricGrader,
   onOpenLomloeManager,
 }) => {
+  const device = useDeviceProfile();
+  const longPress = useTouchLongPress();
   const {
     workspace,
     activeBook,
@@ -152,6 +161,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     updateSettings,
     resizeColumn,
     resizeFolder,
+    stepColumn,
+    stepFolder,
     moveItemInActiveTab,
     addFolder,
     toggleFolderCollapse,
@@ -1788,7 +1799,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   const baseCanopyH = 30;
   const baseLomloeRowH = 60;
 
-  const studentColW = workspace.settings.studentColWidth * gridZoom;
+  // On mobile (< 640px), clamp the sticky student column visually so grades remain readable without altering desktop settings
+  const effectiveStudentBaseW = device.isMobile
+    ? Math.min(workspace.settings.studentColWidth, Math.max(124, Math.round(device.viewportWidth * 0.4)))
+    : workspace.settings.studentColWidth;
+  const studentColW = effectiveStudentBaseW * gridZoom;
   const rowH = Math.round(workspace.settings.rowHeight * gridZoom);
   const headerH = baseHeaderH * gridZoom;
   const canopyH = baseCanopyH * gridZoom;
@@ -1852,7 +1867,16 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         key={col.id}
         data-col-header={col.id}
         rowSpan={isStandalone ? 2 : undefined}
-        draggable={!activeTab.isLocked}
+        draggable={!activeTab.isLocked && !device.isTouch}
+        onPointerDown={(e) => {
+          longPress.start(e, () => {
+            selectEntireColumn(col);
+            onEditColumn(col);
+          });
+        }}
+        onPointerMove={longPress.move}
+        onPointerUp={longPress.cancel}
+        onPointerCancel={longPress.cancel}
         onDragStart={(e) => {
           const payload: DragItemPayload = { kind: 'COL', id: col.id };
           setDragItem({ kind: 'COL', id: col.id, folderId: col.folderId });
@@ -1892,7 +1916,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           clearDrag();
         }}
         onClick={(e) => {
-          if (justResizedRef.current) return;
+          if (justResizedRef.current || longPress.wasJustTriggered()) return;
           e.stopPropagation();
           selectEntireColumn(col);
         }}
@@ -1994,10 +2018,13 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           aria-orientation="vertical"
           aria-label={`Cambiar anchura de ${col.title}`}
           title="Arrastra para ajustar ancho · Doble clic: ajustar al texto más largo"
+          style={device.isTouch ? { touchAction: 'none' } : undefined}
           onClick={(e) => e.stopPropagation()}
           onDoubleClick={(e) => toggleAutoFitColumn(e, col)}
           onPointerDown={(e) => startColumnResize(e, col)}
-          className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-blue-500/60 transition-colors z-20"
+          className={`absolute top-0 right-0 ${
+            device.isTouch ? 'w-3.5' : 'w-1.5'
+          } h-full cursor-col-resize hover:bg-blue-500/60 transition-colors z-20`}
         />
         {/* Bottom-Edge Header Height Resize Handle */}
         <div
@@ -2005,10 +2032,13 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           aria-orientation="horizontal"
           aria-label="Cambiar altura de cabecera"
           title="Arrastra para ajustar altura de cabecera · Doble clic: autoajustar"
+          style={device.isTouch ? { touchAction: 'none' } : undefined}
           onClick={(e) => e.stopPropagation()}
           onDoubleClick={toggleAutoFitHeaderHeight}
           onPointerDown={startHeaderHeightResize}
-          className="absolute left-0 bottom-0 w-full h-1.5 cursor-row-resize hover:bg-blue-500/60 transition-colors z-20"
+          className={`absolute left-0 bottom-0 w-full ${
+            device.isTouch ? 'h-3' : 'h-1.5'
+          } cursor-row-resize hover:bg-blue-500/60 transition-colors z-20`}
         />
       </th>
     );
@@ -2044,7 +2074,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             }
           }
         }}
-        className="flex-1 min-h-0 overflow-auto bg-slate-50 focus:outline-none relative"
+        className="flex-1 min-h-0 overflow-auto bg-slate-50 focus:outline-none relative gradebook-touch-surface"
       >
       <table
         style={{
@@ -2435,7 +2465,16 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 <th
                   key={fldKey}
                   colSpan={isClosed ? 1 : 1 + childCols.length}
-                  draggable={!activeTab.isLocked}
+                  draggable={!activeTab.isLocked && !device.isTouch}
+                  onPointerDown={(e) => {
+                    longPress.start(e, () => {
+                      selectFolderSummaryColumn(folder, childCols);
+                      onEditFolder(activeTab.id, folder);
+                    });
+                  }}
+                  onPointerMove={longPress.move}
+                  onPointerUp={longPress.cancel}
+                  onPointerCancel={longPress.cancel}
                   onDragStart={(e) => {
                     const payload: DragItemPayload = { kind: 'FOLDER', id: folder.id };
                     setDragItem({ kind: 'FOLDER', id: folder.id });
@@ -2747,8 +2786,17 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   <th
                     key={key}
                     rowSpan={showLomloeBar ? 2 : undefined}
+                    onPointerDown={(e) => {
+                      longPress.start(e, () => {
+                        selectFolderSummaryColumn(folder, childCols);
+                        onEditFolder(activeTab.id, folder);
+                      });
+                    }}
+                    onPointerMove={longPress.move}
+                    onPointerUp={longPress.cancel}
+                    onPointerCancel={longPress.cancel}
                     onClick={(e) => {
-                      if (justResizedRef.current) return;
+                      if (justResizedRef.current || longPress.wasJustTriggered()) return;
                       e.stopPropagation();
                       selectFolderSummaryColumn(folder, childCols);
                     }}
@@ -3268,7 +3316,17 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       setDragStudentId(null);
                     }}
                     style={{ backgroundColor: rowBg, height: rowH }}
+                    onPointerDown={(e) => {
+                      longPress.start(e, () => {
+                        selectEntireStudentRow(student.id);
+                        onEditStudent(student);
+                      });
+                    }}
+                    onPointerMove={longPress.move}
+                    onPointerUp={longPress.cancel}
+                    onPointerCancel={longPress.cancel}
                     onClick={(e) => {
+                      if (longPress.wasJustTriggered()) return;
                       e.stopPropagation();
                       selectEntireStudentRow(student.id);
                     }}
@@ -3350,7 +3408,17 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                               e.preventDefault();
                             }
                           }}
+                          onPointerDown={(e) => {
+                            longPress.start(e, () => {
+                              selectSingleCell(student.id, slot.key);
+                              onEditFolder(activeTab.id, slot.folder);
+                            });
+                          }}
+                          onPointerMove={longPress.move}
+                          onPointerUp={longPress.cancel}
+                          onPointerCancel={longPress.cancel}
                           onClick={(e) => {
+                            if (longPress.wasJustTriggered()) return;
                             const clicked = { studentId: student.id, columnId: slot.key };
                             const isMod = e.metaKey || e.ctrlKey;
                             if (e.shiftKey) {
@@ -3475,8 +3543,26 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             e.preventDefault();
                           }
                         }}
-                        onClick={(e) => {
+                        onPointerDown={(e) => {
                           if (isInline) return;
+                          longPress.start(e, () => {
+                            clearCellTooltip();
+                            selectSingleCell(student.id, col.id);
+                            ensureCellVisible(student.id, col.id, 'auto');
+                            if (col.type === 'RUBRIC') {
+                              onOpenRubricGrader(student, col);
+                            } else if (col.type === 'AVERAGE') {
+                              onEditColumn(col);
+                            } else {
+                              onOpenCellModal(student, col);
+                            }
+                          });
+                        }}
+                        onPointerMove={longPress.move}
+                        onPointerUp={longPress.cancel}
+                        onPointerCancel={longPress.cancel}
+                        onClick={(e) => {
+                          if (isInline || longPress.wasJustTriggered()) return;
                           clearCellTooltip();
                           const clicked = { studentId: student.id, columnId: col.id };
                           const isMod = e.metaKey || e.ctrlKey;
@@ -4321,8 +4407,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               workspace.settings.nameFormat === 'FIRST_LAST'
                 ? `${student.firstName} ${student.lastName}`
                 : `${student.lastName}, ${student.firstName}`;
-            const pillH = Math.max(24, Math.min(34, Math.round(height - 6)));
+            const pillH = device.isTouch
+              ? Math.max(36, Math.min(44, Math.round(height - 2)))
+              : Math.max(24, Math.min(34, Math.round(height - 6)));
             const pillTop = Math.round(top + (height - pillH) / 2);
+            const btnSize = device.isTouch ? Math.max(32, pillH - 4) : Math.max(22, pillH - 4);
+            const btnH = device.isTouch ? Math.max(30, pillH - 6) : Math.max(20, pillH - 6);
 
             return (
               <div
@@ -4348,7 +4438,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   }}
                   title={`Restar ${stepVal} a ${dName}`}
                   aria-label={`Restar ${stepVal} a ${dName}`}
-                  style={{ width: Math.max(22, pillH - 4), height: Math.max(20, pillH - 6) }}
+                  style={{ width: btnSize, height: btnH }}
                   className="rounded-lg bg-rose-50 hover:bg-rose-100 active:scale-95 border border-rose-200 text-rose-700 flex items-center justify-center shadow-2xs transition-all"
                 >
                   <Minus className="w-3.5 h-3.5" aria-hidden="true" />
@@ -4363,7 +4453,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   }}
                   title={`Sumar ${stepVal} a ${dName}`}
                   aria-label={`Sumar ${stepVal} a ${dName}`}
-                  style={{ width: Math.max(22, pillH - 4), height: Math.max(20, pillH - 6) }}
+                  style={{ width: btnSize, height: btnH }}
                   className="rounded-lg bg-emerald-50 hover:bg-emerald-100 active:scale-95 border border-emerald-200 text-emerald-700 flex items-center justify-center shadow-2xs transition-all"
                 >
                   <Plus className="w-3.5 h-3.5" aria-hidden="true" />
@@ -4743,8 +4833,309 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         );
       })()}
 
+      {/* Touch-only Contextual Action Bar (Tablet/iPad & Mobile — zero footprint on Desktop!) */}
+      {device.isTouch && !inlineEdit && (() => {
+        // 1. Selected Column or Folder Header
+        if (selectedColumnTarget) {
+          if (selectedColumnTarget.kind === 'COL') {
+            const col = selectedColumnTarget.col;
+            return (
+              <div
+                data-touch-action-bar="column"
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{
+                  bottom: 'calc(0.75rem + var(--safe-bottom))',
+                  left: 'max(0.75rem, var(--safe-left))',
+                  maxWidth: 'calc(100dvw - 170px)',
+                }}
+                className="absolute z-30 flex items-center gap-1 px-1.5 py-1 rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-xs shadow-lg overflow-x-auto no-scrollbar text-xs font-semibold text-slate-700"
+              >
+                <button
+                  type="button"
+                  onClick={() => onEditColumn(col)}
+                  className="min-h-[38px] px-2.5 rounded-xl bg-blue-600 text-white flex items-center gap-1 shrink-0"
+                >
+                  <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Editar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => copyColumnAlphabetical({ kind: 'COL', col })}
+                  className="min-h-[38px] px-2.5 rounded-xl border border-slate-200 bg-slate-50 flex items-center gap-1 shrink-0"
+                >
+                  <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Copiar</span>
+                </button>
+                {!activeTab.isLocked && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => stepColumn(col.id, 'LEFT')}
+                      aria-label="Mover columna a la izquierda"
+                      className="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center shrink-0"
+                    >
+                      <ArrowLeft className="w-4 h-4" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => stepColumn(col.id, 'RIGHT')}
+                      aria-label="Mover columna a la derecha"
+                      className="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center shrink-0"
+                    >
+                      <ArrowRight className="w-4 h-4" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => resizeColumn(col.id, Math.max(36, col.width - 14))}
+                      aria-label="Estrechar columna"
+                      className="min-h-[38px] px-2 rounded-xl border border-slate-200 bg-slate-50 shrink-0"
+                    >
+                      −Ancho
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => resizeColumn(col.id, Math.min(360, col.width + 14))}
+                      aria-label="Ensanchar columna"
+                      className="min-h-[38px] px-2 rounded-xl border border-slate-200 bg-slate-50 shrink-0"
+                    >
+                      +Ancho
+                    </button>
+                  </>
+                )}
+              </div>
+            );
+          }
+
+          const { folder, childCols } = selectedColumnTarget;
+          return (
+            <div
+              data-touch-action-bar="folder"
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                bottom: 'calc(0.75rem + var(--safe-bottom))',
+                left: 'max(0.75rem, var(--safe-left))',
+                maxWidth: 'calc(100dvw - 170px)',
+              }}
+              className="absolute z-30 flex items-center gap-1 px-1.5 py-1 rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-xs shadow-lg overflow-x-auto no-scrollbar text-xs font-semibold text-slate-700"
+            >
+              <button
+                type="button"
+                onClick={() => onEditFolder(activeTab.id, folder)}
+                className="min-h-[38px] px-2.5 rounded-xl bg-blue-600 text-white flex items-center gap-1 shrink-0"
+              >
+                <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Carpeta</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleFolderCollapse(activeTab.id, folder.id)}
+                className="min-h-[38px] px-2.5 rounded-xl border border-slate-200 bg-slate-50 shrink-0"
+              >
+                {folder.isCollapsed ? 'Desplegar' : 'Plegar'}
+              </button>
+              <button
+                type="button"
+                onClick={() => copyColumnAlphabetical({ kind: 'FOLDER', folder, childCols })}
+                className="min-h-[38px] px-2.5 rounded-xl border border-slate-200 bg-slate-50 flex items-center gap-1 shrink-0"
+              >
+                <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Copiar</span>
+              </button>
+              {!activeTab.isLocked && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => stepFolder(activeTab.id, folder.id, 'LEFT')}
+                    aria-label="Mover carpeta a la izquierda"
+                    className="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center shrink-0"
+                  >
+                    <ArrowLeft className="w-4 h-4" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepFolder(activeTab.id, folder.id, 'RIGHT')}
+                    aria-label="Mover carpeta a la derecha"
+                    className="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center shrink-0"
+                  >
+                    <ArrowRight className="w-4 h-4" aria-hidden="true" />
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        }
+
+        // 2. Selected Student Row
+        if (selectedStudentRowId) {
+          const st = visibleStudents.find((s) => s.id === selectedStudentRowId);
+          if (!st) return null;
+          const idx = visibleStudents.findIndex((s) => s.id === st.id);
+          const moveStudentBy = (delta: -1 | 1) => {
+            const nextIdx = idx + delta;
+            if (nextIdx < 0 || nextIdx >= visibleStudents.length) return;
+            const ids = visibleStudents.map((s) => s.id);
+            const [moved] = ids.splice(idx, 1);
+            ids.splice(nextIdx, 0, moved);
+            reorderStudents(
+              ids,
+              activeBook.groupByGroups
+                ? { studentId: st.id, group: getStudentActiveGroup(st, activeBook) }
+                : undefined
+            );
+          };
+          return (
+            <div
+              data-touch-action-bar="student"
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                bottom: 'calc(0.75rem + var(--safe-bottom))',
+                left: 'max(0.75rem, var(--safe-left))',
+                maxWidth: 'calc(100dvw - 170px)',
+              }}
+              className="absolute z-30 flex items-center gap-1 px-1.5 py-1 rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-xs shadow-lg overflow-x-auto no-scrollbar text-xs font-semibold text-slate-700"
+            >
+              <button
+                type="button"
+                onClick={() => onEditStudent(st)}
+                className="min-h-[38px] px-3 rounded-xl bg-blue-600 text-white flex items-center gap-1.5 shrink-0"
+              >
+                <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Ficha de {st.firstName}</span>
+              </button>
+              {activeBook.sortMode === 'MANUAL' && (
+                <>
+                  <button
+                    type="button"
+                    disabled={idx <= 0}
+                    onClick={() => moveStudentBy(-1)}
+                    aria-label="Subir alumno"
+                    className="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 disabled:opacity-35 flex items-center justify-center shrink-0"
+                  >
+                    <ArrowUp className="w-4 h-4" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={idx >= visibleStudents.length - 1}
+                    onClick={() => moveStudentBy(1)}
+                    aria-label="Bajar alumno"
+                    className="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 disabled:opacity-35 flex items-center justify-center shrink-0"
+                  >
+                    <ArrowDown className="w-4 h-4" aria-hidden="true" />
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        }
+
+        // 3. Selected Cell
+        if (selectedCoord) {
+          const st = visibleStudents.find((s) => s.id === selectedCoord.studentId);
+          const col = activeTab.columns.find((c) => c.id === selectedCoord.columnId);
+          if (!st || !col) return null;
+          const cell = activeBook.cells[cellKey(st.id, col.id)];
+          const commentTxt = cell?.comment?.trim() ?? '';
+          const edMode = col.editorMode ?? 'STANDARD';
+          const stepVal =
+            typeof col.counterStep === 'number' && col.counterStep > 0 ? col.counterStep : 1;
+
+          return (
+            <div
+              data-touch-action-bar="cell"
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                bottom: 'calc(0.75rem + var(--safe-bottom))',
+                left: 'max(0.75rem, var(--safe-left))',
+                maxWidth: 'calc(100dvw - 170px)',
+              }}
+              className="absolute z-30 flex items-center gap-1 px-1.5 py-1 rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-xs shadow-lg overflow-x-auto no-scrollbar text-xs font-semibold text-slate-700"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  if (col.type === 'RUBRIC') onOpenRubricGrader(st, col);
+                  else if (col.type === 'AVERAGE') onEditColumn(col);
+                  else onOpenCellModal(st, col);
+                }}
+                className="min-h-[38px] px-3 rounded-xl bg-blue-600 text-white flex items-center gap-1.5 shrink-0"
+              >
+                <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>{col.type === 'RUBRIC' ? 'Rúbrica' : 'Editar'}</span>
+              </button>
+
+              {col.type === 'NUMERIC' && edMode === 'COUNTER_POS' && !col.isLocked && !activeTab.isLocked && (
+                <button
+                  type="button"
+                  onClick={() => stepCellByDelta(st.id, col, -stepVal)}
+                  className="min-h-[38px] px-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 flex items-center gap-1 shrink-0"
+                >
+                  <Minus className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{stepVal}</span>
+                </button>
+              )}
+
+              {col.type === 'NUMERIC' && edMode === 'COUNTER_NEG' && !col.isLocked && !activeTab.isLocked && (
+                <button
+                  type="button"
+                  onClick={() => stepCellByDelta(st.id, col, stepVal)}
+                  className="min-h-[38px] px-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center gap-1 shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{stepVal}</span>
+                </button>
+              )}
+
+              {commentTxt && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cellEl = wrapperRef.current?.querySelector(
+                      `[data-cell="${cellKey(st.id, col.id)}"]`
+                    ) as HTMLElement | null;
+                    const r = cellEl?.getBoundingClientRect();
+                    if (r) {
+                      setCellTooltip((prev) =>
+                        prev?.text === commentTxt
+                          ? null
+                          : {
+                              text: commentTxt,
+                              rect: { top: r.top, bottom: r.bottom, left: r.left, width: r.width },
+                            }
+                      );
+                    }
+                  }}
+                  className="min-h-[38px] px-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-700 flex items-center gap-1 shrink-0"
+                >
+                  <MessageSquare className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
+                  <span>Ver texto</span>
+                </button>
+              )}
+
+              {col.type !== 'AVERAGE' && !col.isLocked && !activeTab.isLocked && (cell?.grade !== null || commentTxt) && (
+                <button
+                  type="button"
+                  onClick={() => clearCell(st.id, col.id)}
+                  aria-label="Vaciar celda"
+                  className="w-9 h-9 rounded-xl border border-rose-200 bg-rose-50 text-rose-600 flex items-center justify-center shrink-0"
+                >
+                  <Eraser className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          );
+        }
+
+        return null;
+      })()}
+
       {/* Floating iDoceo-style Zoom Controls (affects ONLY the gradebook grid) */}
-      <div className="absolute bottom-3 right-4 z-30">
+      <div
+        style={{
+          bottom: 'calc(0.75rem + var(--safe-bottom))',
+          right: 'max(1rem, var(--safe-right))',
+        }}
+        className="absolute z-30"
+      >
         <ZoomControls
           zoom={gridZoom}
           min={0.5}

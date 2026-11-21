@@ -5,9 +5,18 @@ export function clampZoom(value: number, min = 0.5, max = 1.8): number {
   return Math.round(Math.max(min, Math.min(max, value)) * 100) / 100;
 }
 
+function getTouchDistance(t1: Touch, t2: Touch): number {
+  const dx = t1.clientX - t2.clientX;
+  const dy = t1.clientY - t2.clientY;
+  return Math.hypot(dx, dy);
+}
+
 /**
- * Attaches non-passive trackpad pinch-to-zoom (`wheel` with `ctrlKey`, plus Safari `gesture*` events)
- * to a scrollable container without triggering browser full-page zoom.
+ * Attaches non-passive pinch-to-zoom to a scrollable container without triggering browser full-page zoom:
+ * - Desktop trackpad / Ctrl+wheel (`wheel` with `ctrlKey`)
+ * - Safari macOS/iPadOS `gesturestart` / `gesturechange`
+ * - Multi-touch 2-finger pinch (`touchstart` / `touchmove` on iPadOS & Android tablets/phones)
+ * Single-finger panning stays 100% native and uninterrupted.
  */
 export function usePinchZoom(
   containerRef: React.RefObject<HTMLElement | null>,
@@ -24,6 +33,8 @@ export function usePinchZoom(
   useEffect(() => {
     const el = containerRef.current;
     if (!el || !enabled) return;
+
+    el.setAttribute('data-pinch-zoom-surface', 'true');
 
     const handleWheel = (e: WheelEvent) => {
       if (!e.ctrlKey) return;
@@ -53,21 +64,61 @@ export function usePinchZoom(
       }
     };
 
+    // 2-finger touch pinch for Android tablets/phones & iPadOS Chrome/Safari
+    let pinchStartDist: number | null = null;
+    let pinchStartZoom = zoomRef.current;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        pinchStartDist = getTouchDistance(e.touches[0], e.touches[1]);
+        pinchStartZoom = zoomRef.current;
+      } else {
+        pinchStartDist = null;
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 2 || pinchStartDist === null || pinchStartDist < 10) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const dist = getTouchDistance(e.touches[0], e.touches[1]);
+      const ratio = dist / pinchStartDist;
+      const next = clampZoom(pinchStartZoom * ratio, min, max);
+      if (Math.abs(next - zoomRef.current) >= 0.01) {
+        onChangeRef.current(next);
+      }
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) {
+        pinchStartDist = null;
+      }
+    };
+
     el.addEventListener('wheel', handleWheel, { passive: false });
     el.addEventListener('gesturestart', handleGestureStart, { passive: false });
     el.addEventListener('gesturechange', handleGestureChange, { passive: false });
+    el.addEventListener('touchstart', handleTouchStart, { passive: true });
+    el.addEventListener('touchmove', handleTouchMove, { passive: false });
+    el.addEventListener('touchend', handleTouchEnd, { passive: true });
+    el.addEventListener('touchcancel', handleTouchEnd, { passive: true });
 
     return () => {
+      el.removeAttribute('data-pinch-zoom-surface');
       el.removeEventListener('wheel', handleWheel);
       el.removeEventListener('gesturestart', handleGestureStart);
       el.removeEventListener('gesturechange', handleGestureChange);
+      el.removeEventListener('touchstart', handleTouchStart);
+      el.removeEventListener('touchmove', handleTouchMove);
+      el.removeEventListener('touchend', handleTouchEnd);
+      el.removeEventListener('touchcancel', handleTouchEnd);
     };
   }, [containerRef, enabled, min, max]);
 }
 
 /**
  * Prevents the browser from zooming the whole web page or open modals when the user
- * pinches on a Mac trackpad or presses Cmd/Ctrl + +/-/0 outside the gradebook canvas.
+ * pinches on a trackpad/touchscreen or presses Cmd/Ctrl + +/-/0 outside the gradebook canvas.
  */
 export function usePreventGlobalBrowserZoom() {
   useEffect(() => {
@@ -79,6 +130,14 @@ export function usePreventGlobalBrowserZoom() {
     const onGesture = (e: Event) => {
       e.preventDefault();
     };
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length >= 2) {
+        const target = e.target as HTMLElement | null;
+        if (!target?.closest('[data-pinch-zoom-surface="true"]')) {
+          e.preventDefault();
+        }
+      }
+    };
     const onKeyDown = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;
       if (e.key === '+' || e.key === '=' || e.key === '-' || e.key === '0') {
@@ -89,12 +148,14 @@ export function usePreventGlobalBrowserZoom() {
     window.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('gesturestart', onGesture, { passive: false });
     window.addEventListener('gesturechange', onGesture, { passive: false });
+    window.addEventListener('touchmove', onTouchMove, { passive: false });
     window.addEventListener('keydown', onKeyDown);
 
     return () => {
       window.removeEventListener('wheel', onWheel);
       window.removeEventListener('gesturestart', onGesture);
       window.removeEventListener('gesturechange', onGesture);
+      window.removeEventListener('touchmove', onTouchMove);
       window.removeEventListener('keydown', onKeyDown);
     };
   }, []);
@@ -126,7 +187,9 @@ export const ZoomControls: React.FC<ZoomControlsProps> = ({
       role="group"
       aria-label="Controles de zoom"
       className={`inline-flex items-center rounded-xl border border-slate-200/90 bg-white/95 backdrop-blur-xs shadow-sm select-none ${
-        compact ? 'h-7 px-1 gap-0.5 text-[11px]' : 'h-8 px-1.5 gap-1 text-xs'
+        compact
+          ? 'h-7 px-1 gap-0.5 text-[11px]'
+          : 'h-8 px-1.5 gap-1 text-xs touch-zoom-pill'
       } ${className}`}
     >
       <button
@@ -135,17 +198,17 @@ export const ZoomControls: React.FC<ZoomControlsProps> = ({
         onClick={() => onChangeZoom(clampZoom(zoom - step, min, max))}
         title="Alejar zoom (-)"
         aria-label="Alejar zoom"
-        className="w-6 h-6 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:opacity-35 flex items-center justify-center transition-colors"
+        className="w-6 h-6 touch-zoom-btn rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:opacity-35 flex items-center justify-center transition-colors"
       >
-        <ZoomOut className="w-3.5 h-3.5" />
+        <ZoomOut className="w-3.5 h-3.5" aria-hidden="true" />
       </button>
 
       <button
         type="button"
         onClick={() => onChangeZoom(1)}
-        title="Restablecer zoom al 100% (pellizca con 2 dedos en el trackpad)"
+        title="Restablecer zoom al 100% (pellizca con 2 dedos)"
         aria-label={`Zoom actual ${pct}%, clic para restablecer a 100%`}
-        className="min-w-[42px] px-1.5 py-0.5 rounded-lg font-bold tabular-nums text-slate-700 hover:bg-slate-100 hover:text-blue-700 transition-colors"
+        className="min-w-[42px] px-1.5 py-0.5 touch-zoom-pct rounded-lg font-bold tabular-nums text-slate-700 hover:bg-slate-100 hover:text-blue-700 transition-colors"
       >
         {pct}%
       </button>
@@ -156,9 +219,9 @@ export const ZoomControls: React.FC<ZoomControlsProps> = ({
         onClick={() => onChangeZoom(clampZoom(zoom + step, min, max))}
         title="Acercar zoom (+)"
         aria-label="Acercar zoom"
-        className="w-6 h-6 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:opacity-35 flex items-center justify-center transition-colors"
+        className="w-6 h-6 touch-zoom-btn rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:opacity-35 flex items-center justify-center transition-colors"
       >
-        <ZoomIn className="w-3.5 h-3.5" />
+        <ZoomIn className="w-3.5 h-3.5" aria-hidden="true" />
       </button>
     </div>
   );

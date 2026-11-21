@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, Delete, Eraser, Minus, Plus } from 'lucide-react';
+import { Check, Delete, Eraser, Keyboard, Minus, Plus } from 'lucide-react';
 import { useGradebook } from '../../context/GradebookContext';
 import { applyCounterDelta, clampGradeForColumn } from '../../engine/gradeMath';
+import { useDeviceProfile } from '../../hooks/useDeviceProfile';
 import { cellKey, type ColumnEntity, type StudentEntity } from '../../types/gradebook';
 import { Modal } from '../common/Modal';
 
@@ -18,10 +19,12 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
   student,
   column,
 }) => {
+  const device = useDeviceProfile();
   const { activeBook, setCellData, clearCell } = useGradebook();
   const [gradeStr, setGradeStr] = useState('');
   const [comment, setComment] = useState('');
   const [replaceOnFirstKey, setReplaceOnFirstKey] = useState(false);
+  const [showTouchKeyboard, setShowTouchKeyboard] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -31,7 +34,14 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
     setGradeStr(hasGrade ? String(cell.grade).replace('.', ',') : '');
     setComment(cell?.comment ?? '');
     setReplaceOnFirstKey(hasGrade);
+    setShowTouchKeyboard(false);
   }, [open, student, column, activeBook]);
+
+  const focusDesktopInput = () => {
+    if (!device.isTouch || showTouchKeyboard) {
+      inputRef.current?.focus();
+    }
+  };
 
   if (!student || !column) return null;
 
@@ -76,7 +86,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
       if (base === '0' && digit !== ',') return digit;
       return base + digit;
     });
-    inputRef.current?.focus();
+    focusDesktopInput();
   };
 
   const handleKeypadDecimal = () => {
@@ -86,25 +96,25 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
       if (base.includes(',') || base.includes('.')) return base;
       return base === '' || base === '-' ? `${base}0,` : `${base},`;
     });
-    inputRef.current?.focus();
+    focusDesktopInput();
   };
 
   const handleKeypadBackspace = () => {
     setReplaceOnFirstKey(false);
     setGradeStr((prev) => (prev === 'NP' ? '' : prev.slice(0, -1)));
-    inputRef.current?.focus();
+    focusDesktopInput();
   };
 
   const handleKeypadClear = () => {
     setReplaceOnFirstKey(false);
     setGradeStr('');
-    inputRef.current?.focus();
+    focusDesktopInput();
   };
 
   const handleKeypadNP = () => {
     setReplaceOnFirstKey(true);
     setGradeStr('NP');
-    inputRef.current?.focus();
+    focusDesktopInput();
   };
 
   const handleKeypadToggleSign = () => {
@@ -114,13 +124,13 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
       if (prev.startsWith('-')) return prev.slice(1);
       return `-${prev}`;
     });
-    inputRef.current?.focus();
+    focusDesktopInput();
   };
 
   const handleKeypadMax = () => {
     setReplaceOnFirstKey(true);
     setGradeStr(maxStr);
-    inputRef.current?.focus();
+    focusDesktopInput();
   };
 
   return (
@@ -221,24 +231,49 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
 
         {/* Grade display input + Calculator Keypad */}
         <div className="space-y-2">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <label
               htmlFor="cell-edit-grade-input"
               className="font-semibold text-slate-700"
             >
               Nota numérica ({column.minValue} a {column.maxValue})
             </label>
-            <span className="text-[11px] text-slate-400">
-              {column.decimals} decimales · teclado o keypad
-            </span>
+            {device.isTouch ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !showTouchKeyboard;
+                  setShowTouchKeyboard(next);
+                  if (next) {
+                    window.setTimeout(() => inputRef.current?.focus(), 20);
+                  } else {
+                    inputRef.current?.blur();
+                  }
+                }}
+                aria-pressed={showTouchKeyboard}
+                className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-semibold transition-colors ${
+                  showTouchKeyboard
+                    ? 'bg-blue-50 border-blue-300 text-blue-700'
+                    : 'bg-slate-50 border-slate-200 text-slate-600'
+                }`}
+              >
+                <Keyboard className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>{showTouchKeyboard ? 'Ocultar teclado' : 'Teclado'}</span>
+              </button>
+            ) : (
+              <span className="text-[11px] text-slate-400">
+                {column.decimals} decimales · teclado o keypad
+              </span>
+            )}
           </div>
 
           <input
             ref={inputRef}
             id="cell-edit-grade-input"
             type="text"
-            inputMode="decimal"
-            autoFocus
+            inputMode={device.isTouch && !showTouchKeyboard ? 'none' : 'decimal'}
+            readOnly={device.isTouch && !showTouchKeyboard}
+            autoFocus={!device.isTouch}
             value={gradeStr}
             onChange={(e) => {
               setReplaceOnFirstKey(false);
@@ -251,7 +286,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
           <div
             role="group"
             aria-label="Teclado numérico de calculadora"
-            className="grid grid-cols-4 gap-1.5 select-none"
+            className={`grid grid-cols-4 ${device.isTouch ? 'gap-2' : 'gap-1.5'} select-none`}
             data-cell-keypad="true"
           >
             {['7', '8', '9'].map((d) => (
@@ -260,7 +295,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
                 type="button"
                 data-keypad-key={d}
                 onClick={() => handleKeypadDigit(d)}
-                className="h-10 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 active:scale-[0.98] text-sm font-bold text-slate-800 tabular-nums transition-all shadow-2xs"
+                className={`${device.isTouch ? 'h-12 text-base' : 'h-10 text-sm'} rounded-xl border border-slate-200 bg-white hover:bg-slate-100 active:scale-[0.98] font-bold text-slate-800 tabular-nums transition-all shadow-2xs`}
               >
                 {d}
               </button>
@@ -271,7 +306,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
               onClick={handleKeypadBackspace}
               aria-label="Borrar último dígito"
               title="Borrar último dígito"
-              className="h-10 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 active:scale-[0.98] text-amber-800 font-bold flex items-center justify-center transition-all"
+              className={`${device.isTouch ? 'h-12' : 'h-10'} rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 active:scale-[0.98] text-amber-800 font-bold flex items-center justify-center transition-all`}
             >
               <Delete className="w-4 h-4" aria-hidden="true" />
             </button>
@@ -282,7 +317,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
                 type="button"
                 data-keypad-key={d}
                 onClick={() => handleKeypadDigit(d)}
-                className="h-10 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 active:scale-[0.98] text-sm font-bold text-slate-800 tabular-nums transition-all shadow-2xs"
+                className={`${device.isTouch ? 'h-12 text-base' : 'h-10 text-sm'} rounded-xl border border-slate-200 bg-white hover:bg-slate-100 active:scale-[0.98] font-bold text-slate-800 tabular-nums transition-all shadow-2xs`}
               >
                 {d}
               </button>
@@ -292,7 +327,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
               data-keypad-key="clear"
               onClick={handleKeypadClear}
               title="Limpiar valor"
-              className="h-10 rounded-xl border border-slate-200 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] text-xs font-bold text-slate-700 transition-all"
+              className={`${device.isTouch ? 'h-12 text-sm' : 'h-10 text-xs'} rounded-xl border border-slate-200 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] font-bold text-slate-700 transition-all`}
             >
               C
             </button>
@@ -303,7 +338,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
                 type="button"
                 data-keypad-key={d}
                 onClick={() => handleKeypadDigit(d)}
-                className="h-10 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 active:scale-[0.98] text-sm font-bold text-slate-800 tabular-nums transition-all shadow-2xs"
+                className={`${device.isTouch ? 'h-12 text-base' : 'h-10 text-sm'} rounded-xl border border-slate-200 bg-white hover:bg-slate-100 active:scale-[0.98] font-bold text-slate-800 tabular-nums transition-all shadow-2xs`}
               >
                 {d}
               </button>
@@ -313,7 +348,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
               data-keypad-key="np"
               onClick={handleKeypadNP}
               title="No presentado / sin calificar"
-              className="h-10 rounded-xl border border-slate-200 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] text-xs font-bold text-slate-600 transition-all"
+              className={`${device.isTouch ? 'h-12 text-sm' : 'h-10 text-xs'} rounded-xl border border-slate-200 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] font-bold text-slate-600 transition-all`}
             >
               NP
             </button>
@@ -322,7 +357,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
               type="button"
               data-keypad-key="0"
               onClick={() => handleKeypadDigit('0')}
-              className="h-10 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 active:scale-[0.98] text-sm font-bold text-slate-800 tabular-nums transition-all shadow-2xs"
+              className={`${device.isTouch ? 'h-12 text-base' : 'h-10 text-sm'} rounded-xl border border-slate-200 bg-white hover:bg-slate-100 active:scale-[0.98] font-bold text-slate-800 tabular-nums transition-all shadow-2xs`}
             >
               0
             </button>
@@ -331,7 +366,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
               data-keypad-key=","
               onClick={handleKeypadDecimal}
               aria-label="Coma decimal"
-              className="h-10 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 active:scale-[0.98] text-base font-bold text-slate-800 transition-all shadow-2xs"
+              className={`${device.isTouch ? 'h-12 text-lg' : 'h-10 text-base'} rounded-xl border border-slate-200 bg-white hover:bg-slate-100 active:scale-[0.98] font-bold text-slate-800 transition-all shadow-2xs`}
             >
               ,
             </button>
@@ -341,7 +376,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
                 data-keypad-key="sign"
                 onClick={handleKeypadToggleSign}
                 title="Cambiar signo (+/-)"
-                className="h-10 rounded-xl border border-slate-200 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] text-sm font-bold text-slate-700 transition-all"
+                className={`${device.isTouch ? 'h-12 text-base' : 'h-10 text-sm'} rounded-xl border border-slate-200 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] font-bold text-slate-700 transition-all`}
               >
                 ±
               </button>
@@ -351,7 +386,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
                 data-keypad-key="max"
                 onClick={handleKeypadMax}
                 title={`Poner nota máxima (${maxStr})`}
-                className="h-10 rounded-xl border border-blue-200 bg-blue-50 hover:bg-blue-100 active:scale-[0.98] text-xs font-bold text-blue-700 tabular-nums transition-all"
+                className={`${device.isTouch ? 'h-12 text-sm' : 'h-10 text-xs'} rounded-xl border border-blue-200 bg-blue-50 hover:bg-blue-100 active:scale-[0.98] font-bold text-blue-700 tabular-nums transition-all`}
               >
                 {maxStr}
               </button>
@@ -359,7 +394,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
             <button
               type="submit"
               data-keypad-key="ok"
-              className="h-10 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white font-bold text-xs flex items-center justify-center gap-1 transition-all shadow-2xs"
+              className={`${device.isTouch ? 'h-12 text-sm' : 'h-10 text-xs'} rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white font-bold flex items-center justify-center gap-1 transition-all shadow-2xs`}
             >
               <Check className="w-3.5 h-3.5" aria-hidden="true" />
               <span>OK</span>

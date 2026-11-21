@@ -19,6 +19,7 @@ import {
   RotateCcw,
   X,
 } from 'lucide-react';
+import { useDeviceProfile } from '../../hooks/useDeviceProfile';
 
 const DOCK_PREFS_KEY = 'cuaderno_modal_dock_prefs_v1';
 
@@ -239,9 +240,16 @@ export const Modal: React.FC<ModalProps> = ({
   const skipCloseCountRef = useRef(0);
   const currentModeRef = useRef<'modal' | 'non-modal' | null>(null);
 
+  const device = useDeviceProfile();
   const [floatingRect, setFloatingRect] = useState<FloatingRect | null>(null);
-  const dockedRight = !isNested && globalDockedRight;
-  const dockWidth = clampDockWidth(globalDockWidth);
+  const canDockRight = !isNested && (device.isDesktop || device.isTabletLandscape);
+  const dockedRight = canDockRight && globalDockedRight;
+  const dockWidth = device.isTabletLandscape
+    ? Math.min(clampDockWidth(globalDockWidth), Math.max(300, Math.floor(device.viewportWidth * 0.48)))
+    : clampDockWidth(globalDockWidth);
+  const isMobileSheet = device.isMobile;
+  const isTabletPortraitSheet = device.isTabletPortrait;
+  const allowDesktopWindowChrome = device.isDesktop || device.isTabletLandscape;
   const [isDragging, setIsDragging] = useState(false);
   const [windowMenuOpen, setWindowMenuOpen] = useState(false);
   const [liveAnnouncement, setLiveAnnouncement] = useState('');
@@ -555,24 +563,40 @@ export const Modal: React.FC<ModalProps> = ({
         bottom: 0,
         left: 'auto',
         width: dockWidth,
-        height: `calc(100vh - ${TOPBAR_HEIGHT}px)`,
+        height: `calc(100dvh - ${TOPBAR_HEIGHT}px)`,
         maxWidth: 'none',
         maxHeight: 'none',
         margin: 0,
         zIndex: 35,
       }
-    : floatingRect
+    : isMobileSheet
       ? {
           position: 'fixed',
-          left: floatingRect.x,
-          top: floatingRect.y,
-          width: floatingRect.width,
-          height: floatingRect.height,
-          maxWidth: 'none',
-          maxHeight: 'none',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          top: 'auto',
+          width: '100dvw',
+          maxWidth: '100dvw',
+          maxHeight: `${Math.max(320, Math.min(Math.round(device.viewportHeight * 0.92), device.visualViewportHeight - 12))}px`,
           margin: 0,
         }
-      : {};
+      : isTabletPortraitSheet
+        ? {
+            maxHeight: `${Math.max(360, Math.min(Math.round(device.viewportHeight * 0.88), device.visualViewportHeight - 24))}px`,
+          }
+        : floatingRect
+          ? {
+              position: 'fixed',
+              left: floatingRect.x,
+              top: floatingRect.y,
+              width: floatingRect.width,
+              height: floatingRect.height,
+              maxWidth: 'none',
+              maxHeight: 'none',
+              margin: 0,
+            }
+          : {};
 
   return (
     <dialog
@@ -583,6 +607,15 @@ export const Modal: React.FC<ModalProps> = ({
           ? ({ closedby: 'closerequest' } as Record<string, string>)
           : {})}
       aria-labelledby={titleId}
+      data-modal-layout={
+        dockedRight
+          ? 'docked-right'
+          : isMobileSheet
+            ? 'mobile-sheet'
+            : isTabletPortraitSheet
+              ? 'tablet-sheet'
+              : 'floating'
+      }
       onCancel={(e) => {
         if (dockedRight) {
           e.preventDefault();
@@ -603,7 +636,11 @@ export const Modal: React.FC<ModalProps> = ({
       className={
         dockedRight
           ? 'bg-white text-slate-900 border-0 border-l border-slate-300 shadow-2xl p-0 rounded-none overflow-visible'
-          : `${floatingRect ? '' : `${maxWidthClass} m-auto max-h-[90vh]`} rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 overflow-visible`
+          : isMobileSheet
+            ? 'bg-white text-slate-900 border-t border-slate-200 shadow-2xl p-0 rounded-t-2xl rounded-b-none overflow-hidden'
+            : isTabletPortraitSheet
+              ? 'w-[min(92dvw,640px)] m-auto rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 overflow-hidden'
+              : `${floatingRect ? '' : `${maxWidthClass} m-auto max-h-[90vh]`} rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 overflow-visible`
       }
     >
       {/* Accessibility live status region */}
@@ -611,7 +648,7 @@ export const Modal: React.FC<ModalProps> = ({
         {liveAnnouncement}
       </div>
 
-      {/* Left-edge lateral resizer when docked right */}
+      {/* Left-edge lateral resizer when docked right (wider touch grabber on iPad landscape) */}
       {dockedRight && (
         <div
           role="separator"
@@ -619,14 +656,21 @@ export const Modal: React.FC<ModalProps> = ({
           aria-label="Ajustar anchura del panel anclado"
           onPointerDown={startDockResize}
           title="Arrastra para ajustar la anchura del panel lateral"
-          className="absolute top-0 left-0 -translate-x-1/2 w-2.5 h-full cursor-col-resize z-30 group flex items-center justify-center"
+          style={{ touchAction: 'none' }}
+          className={`absolute top-0 left-0 -translate-x-1/2 ${
+            device.isTouch ? 'w-5' : 'w-2.5'
+          } h-full cursor-col-resize z-30 group flex items-center justify-center`}
         >
-          <span className="w-1 h-12 rounded-full bg-slate-300 group-hover:bg-blue-500 transition-colors" />
+          <span
+            className={`${
+              device.isTouch ? 'w-1.5 h-16 bg-slate-400/90' : 'w-1 h-12 bg-slate-300'
+            } rounded-full group-hover:bg-blue-500 transition-colors`}
+          />
         </div>
       )}
 
-      {/* Edge & corner resizers when floating */}
-      {!dockedRight && (
+      {/* Edge & corner resizers when floating on desktop */}
+      {!dockedRight && device.isDesktop && (
         <>
           <div
             aria-hidden="true"
@@ -658,14 +702,27 @@ export const Modal: React.FC<ModalProps> = ({
       )}
 
       <div
+        style={
+          isMobileSheet || dockedRight
+            ? { paddingBottom: 'var(--safe-bottom)' }
+            : undefined
+        }
         className={`flex flex-col ${
-          dockedRight || floatingRect ? 'h-full' : 'max-h-[90vh]'
-        } ${dockedRight ? 'rounded-none' : 'rounded-2xl'} overflow-hidden bg-white`}
+          dockedRight || floatingRect
+            ? 'h-full'
+            : isMobileSheet
+              ? 'max-h-[92dvh]'
+              : isTabletPortraitSheet
+                ? 'max-h-[86dvh]'
+                : 'max-h-[90vh]'
+        } ${dockedRight ? 'rounded-none' : isMobileSheet ? 'rounded-t-2xl' : 'rounded-2xl'} overflow-hidden bg-white`}
       >
         <header
-          onPointerDown={(e) => startWindowDrag(e, false)}
+          onPointerDown={
+            device.isDesktop && !dockedRight ? (e) => startWindowDrag(e, false) : undefined
+          }
           className={`px-4 py-3 border-b border-slate-200 bg-slate-50/90 flex items-center justify-between gap-2 shrink-0 ${
-            dockedRight
+            !device.isDesktop || dockedRight
               ? ''
               : isDragging
                 ? 'modal-drag-handle dragging'
@@ -673,7 +730,7 @@ export const Modal: React.FC<ModalProps> = ({
           }`}
         >
           <div className="flex items-center gap-2 min-w-0">
-            {!dockedRight && (
+            {device.isDesktop && !dockedRight && (
               <button
                 type="button"
                 onPointerDown={(e) => {
@@ -700,8 +757,8 @@ export const Modal: React.FC<ModalProps> = ({
           <div className="flex items-center gap-1 shrink-0 relative">
             {headerActions}
 
-            {/* Direct Dock/Undock Right toggle */}
-            {!isNested && (
+            {/* Direct Dock/Undock Right toggle (Desktop & iPad Landscape) */}
+            {canDockRight && (
               <button
                 type="button"
                 onClick={toggleDockRight}
@@ -712,99 +769,111 @@ export const Modal: React.FC<ModalProps> = ({
                 }
                 aria-label={dockedRight ? 'Desanclar de la derecha' : 'Anclar a la derecha'}
                 aria-pressed={dockedRight}
-                className={`p-1.5 rounded-lg border transition-colors ${
+                className={`${
+                  device.isTouch ? 'w-10 h-10 flex items-center justify-center' : 'p-1.5'
+                } rounded-lg border transition-colors ${
                   dockedRight
                     ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
                     : 'border-transparent text-slate-500 hover:text-slate-900 hover:bg-slate-200/70'
                 }`}
               >
                 {dockedRight ? (
-                  <PictureInPicture2 className="w-4 h-4" />
+                  <PictureInPicture2 className="w-4 h-4" aria-hidden="true" />
                 ) : (
-                  <PanelRight className="w-4 h-4" />
+                  <PanelRight className="w-4 h-4" aria-hidden="true" />
                 )}
               </button>
             )}
 
-            {/* Small Window Operations Menu */}
-            <div className="relative" onPointerDown={(e) => e.stopPropagation()}>
-              <button
-                type="button"
-                onClick={() => setWindowMenuOpen((v) => !v)}
-                title="Opciones de ventana (mover, tamaño, anclar)"
-                aria-label="Opciones de ventana"
-                aria-expanded={windowMenuOpen}
-                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-200/70 transition-colors"
-              >
-                <MoreVertical className="w-4 h-4" />
-              </button>
+            {/* Small Window Operations Menu (Desktop & iPad Landscape) */}
+            {allowDesktopWindowChrome && (
+              <div className="relative" onPointerDown={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  onClick={() => setWindowMenuOpen((v) => !v)}
+                  title="Opciones de ventana (mover, tamaño, anclar)"
+                  aria-label="Opciones de ventana"
+                  aria-expanded={windowMenuOpen}
+                  className={`${
+                    device.isTouch ? 'w-10 h-10 flex items-center justify-center' : 'p-1.5'
+                  } rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-200/70 transition-colors`}
+                >
+                  <MoreVertical className="w-4 h-4" aria-hidden="true" />
+                </button>
 
-              {windowMenuOpen && (
-                <div className="absolute right-0 top-full mt-1 w-52 bg-white border border-slate-200 rounded-xl shadow-xl py-1.5 z-50 text-xs font-medium text-slate-700">
-                  {!isNested && (
-                    <button
-                      type="button"
-                      onClick={toggleDockRight}
-                      className="w-full px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-left"
-                    >
-                      {dockedRight ? (
-                        <>
-                          <PictureInPicture2 className="w-3.5 h-3.5 text-blue-600" />
-                          <span>Soltar como popup flotante</span>
-                        </>
-                      ) : (
-                        <>
-                          <PanelRight className="w-3.5 h-3.5 text-blue-600" />
-                          <span>Anclar a la derecha</span>
-                        </>
-                      )}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setWindowMenuOpen(false);
-                      scaleFloatingWindow(1.18);
-                    }}
-                    className="w-full px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-left"
-                  >
-                    <Maximize2 className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Agrandar ventana</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setWindowMenuOpen(false);
-                      scaleFloatingWindow(0.85);
-                    }}
-                    className="w-full px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-left"
-                  >
-                    <Minimize2 className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Hacer más pequeña</span>
-                  </button>
-                  <hr className="my-1 border-slate-100" />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setWindowMenuOpen(false);
-                      resetWindowPosition();
-                    }}
-                    className="w-full px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-left"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Centrar y restaurar</span>
-                  </button>
-                </div>
-              )}
-            </div>
+                {windowMenuOpen && (
+                  <div className="absolute right-0 top-full mt-1 w-52 bg-white border border-slate-200 rounded-xl shadow-xl py-1.5 z-50 text-xs font-medium text-slate-700">
+                    {canDockRight && (
+                      <button
+                        type="button"
+                        onClick={toggleDockRight}
+                        className="w-full px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-left"
+                      >
+                        {dockedRight ? (
+                          <>
+                            <PictureInPicture2 className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
+                            <span>Soltar como popup flotante</span>
+                          </>
+                        ) : (
+                          <>
+                            <PanelRight className="w-3.5 h-3.5 text-blue-600" aria-hidden="true" />
+                            <span>Anclar a la derecha</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+                    {device.isDesktop && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWindowMenuOpen(false);
+                            scaleFloatingWindow(1.18);
+                          }}
+                          className="w-full px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-left"
+                        >
+                          <Maximize2 className="w-3.5 h-3.5 text-slate-500" aria-hidden="true" />
+                          <span>Agrandar ventana</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWindowMenuOpen(false);
+                            scaleFloatingWindow(0.85);
+                          }}
+                          className="w-full px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-left"
+                        >
+                          <Minimize2 className="w-3.5 h-3.5 text-slate-500" aria-hidden="true" />
+                          <span>Hacer más pequeña</span>
+                        </button>
+                        <hr className="my-1 border-slate-100" />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWindowMenuOpen(false);
+                            resetWindowPosition();
+                          }}
+                          className="w-full px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-left"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 text-slate-500" aria-hidden="true" />
+                          <span>Centrar y restaurar</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             <button
               type="button"
               onClick={onClose}
               aria-label="Cerrar diálogo"
-              className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-200/70 transition-colors"
+              className={`${
+                device.isTouch ? 'w-10 h-10 flex items-center justify-center' : 'p-1.5'
+              } rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-200/70 transition-colors`}
             >
-              <X className="w-4 h-4" />
+              <X className="w-4 h-4" aria-hidden="true" />
             </button>
           </div>
         </header>

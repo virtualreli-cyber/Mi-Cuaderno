@@ -22,9 +22,50 @@ import type {
 
 const LOCAL_KEY = 'cuaderno_profesor_v3_workspace';
 const UI_PREFS_KEY = 'cuaderno_profesor_ui_prefs_v1';
+const SYNC_META_KEY = 'cuaderno_profesor_sync_meta_v1';
 const IDB_NAME = 'cuaderno_profesor_v3_db';
 const IDB_STORE = 'workspaces';
 const IDB_KEY = 'primary';
+const IDB_BASE_KEY = 'sync_base';
+const IDB_PRE_MERGE_KEY = 'pre_merge_backup';
+
+export interface SyncMeta {
+  lastSyncedAt: string | null;
+  lastSyncedUid: string | null;
+  hasPendingLocalChanges: boolean;
+  pendingSince: string | null;
+}
+
+export function loadSyncMeta(): SyncMeta {
+  try {
+    const raw = localStorage.getItem(SYNC_META_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<SyncMeta>;
+      return {
+        lastSyncedAt: typeof parsed.lastSyncedAt === 'string' ? parsed.lastSyncedAt : null,
+        lastSyncedUid: typeof parsed.lastSyncedUid === 'string' ? parsed.lastSyncedUid : null,
+        hasPendingLocalChanges: Boolean(parsed.hasPendingLocalChanges),
+        pendingSince: typeof parsed.pendingSince === 'string' ? parsed.pendingSince : null,
+      };
+    }
+  } catch {
+    // ignore corrupted sync meta
+  }
+  return {
+    lastSyncedAt: null,
+    lastSyncedUid: null,
+    hasPendingLocalChanges: false,
+    pendingSince: null,
+  };
+}
+
+export function saveSyncMeta(meta: SyncMeta): void {
+  try {
+    localStorage.setItem(SYNC_META_KEY, JSON.stringify(meta));
+  } catch {
+    // ignore quota errors
+  }
+}
 
 const rtdbWorkspacePath = (uid: string) => `cuaderno_profesor/${uid}/workspace`;
 
@@ -444,10 +485,73 @@ export async function saveLocalWorkspace(ws: GradebookWorkspace): Promise<void> 
   });
 }
 
+export async function loadSyncBaseWorkspace(): Promise<GradebookWorkspace | null> {
+  const db = await openIdb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const req = tx.objectStore(IDB_STORE).get(IDB_BASE_KEY);
+      req.onsuccess = () => resolve(req.result ? hydrateWorkspace(req.result) : null);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export async function saveSyncBaseWorkspace(ws: GradebookWorkspace): Promise<void> {
+  const clean = sanitizeForRtdb(ws);
+  const db = await openIdb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(clean, IDB_BASE_KEY);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+export async function savePreMergeBackup(ws: GradebookWorkspace): Promise<void> {
+  const clean = sanitizeForRtdb(ws);
+  const db = await openIdb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(clean, IDB_PRE_MERGE_KEY);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+export async function loadPreMergeBackup(): Promise<GradebookWorkspace | null> {
+  const db = await openIdb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const req = tx.objectStore(IDB_STORE).get(IDB_PRE_MERGE_KEY);
+      req.onsuccess = () => resolve(req.result ? hydrateWorkspace(req.result) : null);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 export async function clearLocalWorkspace(): Promise<void> {
   try {
     localStorage.removeItem(LOCAL_KEY);
     localStorage.removeItem(UI_PREFS_KEY);
+    localStorage.removeItem(SYNC_META_KEY);
   } catch {
     // ignore
   }
@@ -457,6 +561,7 @@ export async function clearLocalWorkspace(): Promise<void> {
     try {
       const tx = db.transaction(IDB_STORE, 'readwrite');
       tx.objectStore(IDB_STORE).delete(IDB_KEY);
+      tx.objectStore(IDB_STORE).delete(IDB_BASE_KEY);
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     } catch {

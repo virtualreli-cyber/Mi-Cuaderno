@@ -1,10 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ModalDockProvider, useModalDockWidth } from './components/common/Modal';
 import { usePreventGlobalBrowserZoom } from './components/common/ZoomControls';
 import { GradebookGrid } from './components/grid/GradebookGrid';
 import { Sidebar } from './components/layout/Sidebar';
 import { TabStrip } from './components/layout/TabStrip';
 import { TopBar } from './components/layout/TopBar';
+import { useDeviceProfile } from './hooks/useDeviceProfile';
 import { LomloeModal } from './components/lomloe/LomloeModal';
 import { AuthModal, ViewSettingsModal } from './components/modals/AuthAndViewModals';
 import { BackupModal } from './components/modals/BackupModal';
@@ -31,9 +32,17 @@ import type {
 
 const CuadernoShell: React.FC = () => {
   usePreventGlobalBrowserZoom();
+  const device = useDeviceProfile();
   const { activeBook, activeTab } = useGradebook();
   const dockedWidth = useModalDockWidth();
   const [searchQuery, setSearchQuery] = useState('');
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  useEffect(() => {
+    if (!device.isOverlaySidebar && drawerOpen) {
+      setDrawerOpen(false);
+    }
+  }, [device.isOverlaySidebar, drawerOpen]);
 
   // Modal states
   const [bookModal, setBookModal] = useState<{
@@ -108,10 +117,12 @@ const CuadernoShell: React.FC = () => {
       : null;
 
   return (
-    <div className="h-screen w-screen overflow-hidden flex flex-col bg-slate-50 text-slate-900">
+    <div className="h-dvh w-dvw overflow-hidden flex flex-col bg-slate-50 text-slate-900">
       <TopBar
         searchQuery={searchQuery}
         onChangeSearch={setSearchQuery}
+        drawerOpen={drawerOpen}
+        onToggleDrawer={() => setDrawerOpen((v) => !v)}
         onOpenAuth={() => setShowAuthModal(true)}
         onOpenViewSettings={() => setShowViewModal(true)}
         onOpenLomloeManager={() => setShowLomloeModal(true)}
@@ -123,6 +134,8 @@ const CuadernoShell: React.FC = () => {
         style={dockedWidth > 0 ? { paddingRight: dockedWidth } : undefined}
       >
         <Sidebar
+          drawerOpen={drawerOpen}
+          onCloseDrawer={() => setDrawerOpen(false)}
           onOpenNewBook={(kind) => setBookModal({ open: true, kind, editing: null })}
           onEditBook={(book) =>
             setBookModal({

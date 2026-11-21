@@ -2,6 +2,17 @@
 
 :root {
   color-scheme: light;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overscroll-behavior: none;
 }
 
 body {
@@ -9,6 +20,7 @@ body {
   background-color: #f8fafc;
   color: #1e293b;
   margin: 0;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Prevent scroll chaining behind native modal dialogs */
@@ -33,6 +45,12 @@ dialog::backdrop {
 
 .modal-drag-handle.dragging {
   cursor: grabbing;
+}
+
+/* Smooth 2D panning & touch ergonomics ONLY inside the gradebook canvas */
+.gradebook-touch-surface {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Selected cell crisp highlight */
@@ -60,21 +78,72 @@ dialog::backdrop {
     inset 0 0 0 9999px rgba(147, 197, 253, 0.16);
 }
 
-/* Custom thin scrollbars */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+/* Hide scrollbars on horizontal touch tab strips while keeping swipeable */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
-::-webkit-scrollbar-track {
-  background: #f1f5f9;
+/* Touch-only ergonomic upgrades (strictly gated on pointer: coarse / hover: none — desktop untouched!) */
+@media (pointer: coarse), (hover: none) {
+  .gradebook-touch-surface {
+    touch-action: pan-x pan-y;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .gradebook-touch-surface td,
+  .gradebook-touch-surface th {
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
+  }
+
+  .touch-zoom-pill {
+    height: 44px;
+    padding-inline: 6px;
+    gap: 4px;
+    font-size: 13px;
+  }
+
+  .touch-zoom-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  .touch-zoom-pct {
+    min-width: 48px;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Reveal hover-only action buttons gently on touchscreens where :hover does not exist */
+  .touch-reveal {
+    opacity: 1 !important;
+  }
 }
 
-::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 9999px;
-}
+/* Custom thin scrollbars (desktop) */
+@media (pointer: fine) {
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  ::-webkit-scrollbar-track {
+    background: #f1f5f9;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 9999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+  }
 }

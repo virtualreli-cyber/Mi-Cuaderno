@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import {
   Building2,
   ChevronDown,
@@ -12,12 +12,17 @@ import {
   Plus,
   Send,
   Trash2,
+  X,
 } from 'lucide-react';
 import { blendWithWhite, SCHOOL_DEFAULT_COLORS } from '../../constants/colors';
 import { useGradebook } from '../../context/GradebookContext';
+import { useDeviceProfile } from '../../hooks/useDeviceProfile';
+import { useTouchLongPress } from '../../hooks/useLongPress';
 import type { ClassBook } from '../../types/gradebook';
 
 interface SidebarProps {
+  drawerOpen?: boolean;
+  onCloseDrawer?: () => void;
   onOpenNewBook: (kind: 'CLASS' | 'TEMPLATE') => void;
   onEditBook: (book: ClassBook) => void;
   onOpenTemplateApply: (template: ClassBook) => void;
@@ -26,12 +31,17 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
+  drawerOpen = false,
+  onCloseDrawer,
   onOpenNewBook,
   onEditBook,
   onOpenTemplateApply,
   onOpenRubricBuilder,
   onOpenLomloeManager,
 }) => {
+  const device = useDeviceProfile();
+  const longPress = useTouchLongPress();
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const {
     workspace,
     activeBook,
@@ -45,6 +55,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
   } = useGradebook();
 
   const collapsedSchools = workspace.settings.collapsedSchools ?? {};
+
+  // Close overlay drawer with Escape key
+  useEffect(() => {
+    if (!device.isOverlaySidebar || !drawerOpen || !onCloseDrawer) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onCloseDrawer();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [device.isOverlaySidebar, drawerOpen, onCloseDrawer]);
 
   const groupedClasses = useMemo(() => {
     const groups = new Map<string, ClassBook[]>();
@@ -75,7 +98,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const hasSchoolGroups = groupedClasses.some((g) => g.key !== '__OTHER__');
 
-  if (!workspace.settings.sidebarVisible) return null;
+  const isOverlay = device.isOverlaySidebar;
+  if (!isOverlay && !workspace.settings.sidebarVisible) return null;
+  if (isOverlay && !drawerOpen) return null;
+
+  const closeIfOverlay = () => {
+    if (isOverlay) onCloseDrawer?.();
+  };
 
   const renderClassCard = (cls: ClassBook) => {
     const isActive = !isTemplateMode && activeBook?.id === cls.id;
@@ -116,20 +145,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div
             role="button"
             tabIndex={0}
-            onClick={() => selectClass(cls.id)}
+            onClick={() => {
+              if (longPress.wasJustTriggered()) return;
+              selectClass(cls.id);
+              closeIfOverlay();
+            }}
+            onPointerDown={(e) => {
+              longPress.start(e, () => {
+                onEditBook(cls);
+                closeIfOverlay();
+              });
+            }}
+            onPointerMove={longPress.move}
+            onPointerUp={longPress.cancel}
+            onPointerCancel={longPress.cancel}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
                 selectClass(cls.id);
+                closeIfOverlay();
               }
             }}
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
               onEditBook(cls);
+              closeIfOverlay();
             }}
-            title={`${cls.name} — Clic: seleccionar clase · Clic derecho: editar clase`}
-            className="flex-1 min-w-0 flex items-start gap-2 text-left cursor-pointer focus:outline-none"
+            title={`${cls.name} — Clic: seleccionar clase · Clic derecho / mantener pulsado: editar clase`}
+            className={`flex-1 min-w-0 flex items-start gap-2 text-left cursor-pointer focus:outline-none ${
+              device.isTouch ? 'py-1' : ''
+            }`}
           >
             <span
               className="w-2.5 h-2.5 rounded-full shrink-0 mt-1 border border-black/10"
@@ -174,11 +220,63 @@ export const Sidebar: React.FC<SidebarProps> = ({
     );
   };
 
-  return (
+  const sidebarContent = (
     <aside
       aria-label="Menú lateral de clases y plantillas"
-      className="w-[248px] shrink-0 bg-white border-r border-slate-200 flex flex-col justify-between select-none z-20"
+      style={
+        isOverlay
+          ? {
+              paddingTop: 'var(--safe-top)',
+              paddingBottom: 'var(--safe-bottom)',
+              paddingLeft: 'var(--safe-left)',
+            }
+          : undefined
+      }
+      onTouchStart={
+        isOverlay
+          ? (e) => {
+              if (e.touches.length === 1) {
+                swipeStartRef.current = {
+                  x: e.touches[0].clientX,
+                  y: e.touches[0].clientY,
+                };
+              }
+            }
+          : undefined
+      }
+      onTouchEnd={
+        isOverlay
+          ? (e) => {
+              const s = swipeStartRef.current;
+              swipeStartRef.current = null;
+              if (!s || e.changedTouches.length === 0) return;
+              const dx = e.changedTouches[0].clientX - s.x;
+              const dy = Math.abs(e.changedTouches[0].clientY - s.y);
+              if (dx < -64 && dy < 48) {
+                onCloseDrawer?.();
+              }
+            }
+          : undefined
+      }
+      className={
+        isOverlay
+          ? 'w-[min(300px,84dvw)] h-full bg-white border-r border-slate-200 shadow-2xl flex flex-col justify-between select-none'
+          : 'w-[248px] shrink-0 bg-white border-r border-slate-200 flex flex-col justify-between select-none z-20'
+      }
     >
+      {isOverlay && (
+        <div className="px-3 pt-2.5 pb-1.5 flex items-center justify-between border-b border-slate-100">
+          <span className="text-xs font-bold text-slate-800">Mis Clases y Plantillas</span>
+          <button
+            type="button"
+            onClick={() => onCloseDrawer?.()}
+            aria-label="Cerrar menú lateral"
+            className="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 text-slate-600 flex items-center justify-center"
+          >
+            <X className="w-4 h-4" aria-hidden="true" />
+          </button>
+        </div>
+      )}
       {/* Tabs: Clases | Plantillas */}
       <div className="px-3 pt-3 pb-2 border-b border-slate-100">
         <div
@@ -430,21 +528,48 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-3 border-t border-slate-200 bg-slate-50/70 space-y-2">
         <button
           type="button"
-          onClick={onOpenLomloeManager}
-          className="w-full py-2 px-3 rounded-xl bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/50 text-slate-800 text-xs font-semibold flex items-center justify-center gap-2 transition-colors shadow-2xs"
+          onClick={() => {
+            onOpenLomloeManager();
+            closeIfOverlay();
+          }}
+          className={`w-full ${device.isTouch ? 'min-h-[44px]' : 'py-2'} px-3 rounded-xl bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/50 text-slate-800 text-xs font-semibold flex items-center justify-center gap-2 transition-colors shadow-2xs`}
         >
-          <GraduationCap className="w-4 h-4 text-indigo-600" />
+          <GraduationCap className="w-4 h-4 text-indigo-600" aria-hidden="true" />
           <span>Currículo LOMLOE</span>
         </button>
         <button
           type="button"
-          onClick={onOpenRubricBuilder}
-          className="w-full py-2 px-3 rounded-xl bg-white border border-slate-200 hover:border-purple-300 hover:bg-purple-50/50 text-slate-800 text-xs font-semibold flex items-center justify-center gap-2 transition-colors shadow-2xs"
+          onClick={() => {
+            onOpenRubricBuilder();
+            closeIfOverlay();
+          }}
+          className={`w-full ${device.isTouch ? 'min-h-[44px]' : 'py-2'} px-3 rounded-xl bg-white border border-slate-200 hover:border-purple-300 hover:bg-purple-50/50 text-slate-800 text-xs font-semibold flex items-center justify-center gap-2 transition-colors shadow-2xs`}
         >
-          <LayoutGrid className="w-4 h-4 text-purple-600" />
+          <LayoutGrid className="w-4 h-4 text-purple-600" aria-hidden="true" />
           <span>Gestionar Rúbricas ({workspace.rubrics.length})</span>
         </button>
       </div>
     </aside>
   );
+
+  if (isOverlay) {
+    return (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Menú lateral de clases y plantillas"
+        data-sidebar-drawer="true"
+        className="fixed inset-0 z-50 flex"
+      >
+        {sidebarContent}
+        <div
+          aria-hidden="true"
+          onClick={() => onCloseDrawer?.()}
+          className="flex-1 bg-slate-900/35 backdrop-blur-[1.5px]"
+        />
+      </div>
+    );
+  }
+
+  return sidebarContent;
 };
