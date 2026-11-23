@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createSeedWorkspace } from '../../data/seedData';
 import { cellKey } from '../../types/gradebook';
-import { mergeWorkspaces3Way } from '../syncEngine';
+import { mergeWorkspaces3Way, preserveDeviceLocalLayoutAndNav } from '../syncEngine';
 
 describe('syncEngine — 3-way offline multi-device merge', () => {
   it('merges grades entered offline on iPad in one class with grades entered online on desktop in another class without losing either', () => {
@@ -165,5 +165,64 @@ describe('syncEngine — 3-way offline multi-device merge', () => {
     const mergedCol = result.workspace.classes[0].tabs[0].columns.find((c) => c.id === targetColId)!;
     expect(mergedCol.width).toBe(80);
     expect(mergedCol.lomloeCriteriaIds).toEqual(['1.1', '5.1']);
+  });
+
+  it('syncs data ONLY while keeping active screen, widths, rowHeight, zoom and collapsed state independent per device', () => {
+    const base = createSeedWorkspace();
+    const local = structuredClone(base);
+    const remote = structuredClone(base);
+
+    // Local iPad state: viewing class 0, tab 0, zoom 1.3, rowHeight 36, col width 80
+    local.activeClassId = local.classes[0].id;
+    local.activeTabByBook[local.classes[0].id] = local.classes[0].tabs[0].id;
+    local.settings.gridZoom = 1.3;
+    local.settings.rowHeight = 36;
+    local.settings.sidebarVisible = false;
+    local.classes[0].tabs[0].columns[0].width = 80;
+    local.classes[0].groupSpacerRows = 2;
+    if (local.classes[0].tabs[0].folders[0]) {
+      local.classes[0].tabs[0].folders[0].isCollapsed = true;
+      local.classes[0].tabs[0].folders[0].width = 72;
+    }
+
+    // Remote Mac state: viewing class 1, different tab, zoom 0.9, rowHeight 60, col width 150, newer timestamp + data edit
+    remote.activeClassId = remote.classes[1].id;
+    remote.activeTabByBook[remote.classes[0].id] = remote.classes[0].tabs[1]?.id ?? remote.classes[0].tabs[0].id;
+    remote.settings.gridZoom = 0.9;
+    remote.settings.rowHeight = 60;
+    remote.settings.sidebarVisible = true;
+    remote.classes[0].tabs[0].columns[0].width = 150;
+    remote.classes[0].tabs[0].columns[0].title = 'Nuevo Título';
+    remote.classes[0].groupSpacerRows = 0;
+    if (remote.classes[0].tabs[0].folders[0]) {
+      remote.classes[0].tabs[0].folders[0].isCollapsed = false;
+      remote.classes[0].tabs[0].folders[0].width = 110;
+    }
+    const st = remote.classes[0].students[0];
+    const col = remote.classes[0].tabs[0].columns[0];
+    remote.classes[0].cells[cellKey(st.id, col.id)] = { grade: 9.5, comment: 'Sincronizado' };
+    remote.updatedAt = '2026-11-23T14:00:00.000Z';
+
+    // Test both 3-way merge and fast remote-accept path
+    const merged = mergeWorkspaces3Way(base, local, remote).workspace;
+    const fastAccepted = preserveDeviceLocalLayoutAndNav(remote, local);
+
+    for (const out of [merged, fastAccepted]) {
+      // Data synced
+      expect(out.classes[0].tabs[0].columns[0].title).toBe('Nuevo Título');
+      expect(out.classes[0].cells[cellKey(st.id, col.id)]?.grade).toBe(9.5);
+      // Device-local layout & active screens untouched
+      expect(out.activeClassId).toBe(local.classes[0].id);
+      expect(out.activeTabByBook[local.classes[0].id]).toBe(local.classes[0].tabs[0].id);
+      expect(out.settings.gridZoom).toBe(1.3);
+      expect(out.settings.rowHeight).toBe(36);
+      expect(out.settings.sidebarVisible).toBe(false);
+      expect(out.classes[0].tabs[0].columns[0].width).toBe(80);
+      expect(out.classes[0].groupSpacerRows).toBe(2);
+      if (local.classes[0].tabs[0].folders[0]) {
+        expect(out.classes[0].tabs[0].folders[0].isCollapsed).toBe(true);
+        expect(out.classes[0].tabs[0].folders[0].width).toBe(72);
+      }
+    }
   });
 });

@@ -36,6 +36,10 @@ import {
   createClassBookFromTemplate,
 } from '../engine/cloneHelpers';
 import {
+  createEducamosDoneTracking,
+  markEducamosCellSynced,
+} from '../engine/educamos';
+import {
   clampGradeForColumn,
   ensureGroupCategories,
   getEffectiveBookGroups,
@@ -65,7 +69,11 @@ import {
   type DragItemPayload,
   type DropTargetPayload,
 } from '../engine/tabLayout';
-import { mergeWorkspaces3Way, type SyncCellConflict } from '../engine/syncEngine';
+import {
+  mergeWorkspaces3Way,
+  preserveDeviceLocalLayoutAndNav,
+  type SyncCellConflict,
+} from '../engine/syncEngine';
 import {
   clearLocalWorkspace,
   hydrateWorkspace,
@@ -211,7 +219,7 @@ interface GradebookContextValue {
   stepColumn: (columnId: string, dir: 'LEFT' | 'RIGHT') => void;
   moveColumnToFolder: (columnId: string, folderId: string | null) => void;
   moveColumnToTab: (columnId: string, targetTabId: string) => void;
-  applyUniformColumnWidth: (width: number, scope?: 'TAB' | 'BOOK') => void;
+  applyUniformColumnWidth: (width: number, scope?: 'TAB' | 'BOOK' | 'ALL') => void;
   applyUniformFolderWidth: (width: number, scope?: 'TAB' | 'BOOK') => void;
 
   // Bottom Summary Rows (up to 5 per column, extensible globally)
@@ -306,6 +314,10 @@ interface GradebookContextValue {
     competences: import('../types/gradebook').LomloeKeyCompetenceDef[]
   ) => void;
 
+  // Educamos tracking
+  setColumnEducamosStatus: (columnId: string, status: 'PENDING' | 'DONE') => void;
+  markCellEducamosUpdated: (studentId: string, columnId: string) => void;
+
   // Demo, Backup & Reset
   loadDemoData: () => void;
   restoreBackup: (backup: GradebookWorkspace) => void;
@@ -366,6 +378,8 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const lastWrittenUpdatedAtRef = useRef<string | null>(null);
   const cloudReadyRef = useRef(false);
   const reconcilingRef = useRef(false);
+  const dataMutationSeqRef = useRef(0);
+  const lastCloudHandledDataSeqRef = useRef(0);
   const userRef = useRef<User | null>(null);
   userRef.current = user;
   const workspaceRef = useRef<GradebookWorkspace>(workspace);
@@ -432,6 +446,7 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               const merged = mergeWorkspaces3Way(baseWs, localLatest, remote);
               lastWrittenUpdatedAtRef.current = merged.workspace.updatedAt;
               lastRemoteUpdatedAtRef.current = merged.workspace.updatedAt;
+              lastCloudHandledDataSeqRef.current = dataMutationSeqRef.current;
               workspaceRef.current = merged.workspace;
               setWorkspace(merged.workspace);
               await saveLocalWorkspace(merged.workspace);
@@ -450,20 +465,11 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               }
             }
           } else {
-            // No pending local edits -> accept remote while keeping device-local UI/zoom prefs
-            const withLocalUi = mergeNewerLocalUiPrefs(remote, loadUiMenuPrefs()).workspace;
-            const deviceSafeWs: GradebookWorkspace = {
-              ...withLocalUi,
-              settings: {
-                ...withLocalUi.settings,
-                sidebarVisible: localLatest.settings.sidebarVisible,
-                collapsedSchools: localLatest.settings.collapsedSchools ?? {},
-                gridZoom: localLatest.settings.gridZoom ?? 1,
-                rubricZoom: localLatest.settings.rubricZoom ?? 1,
-              },
-            };
+            // No pending local edits -> accept remote DATA only while keeping 100% of device-local aspect, widths & active screens
+            const deviceSafeWs = preserveDeviceLocalLayoutAndNav(remote, localLatest);
             lastRemoteUpdatedAtRef.current = remote.updatedAt;
             lastWrittenUpdatedAtRef.current = remote.updatedAt;
+            lastCloudHandledDataSeqRef.current = dataMutationSeqRef.current;
             workspaceRef.current = deviceSafeWs;
             setWorkspace(deviceSafeWs);
             await saveLocalWorkspace(deviceSafeWs);
@@ -619,8 +625,9 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
       if (!cloudReadyRef.current) return;
 
-      // Skip redundant write-back when state was just applied from RTDB
+      // Skip cloud write-back when state was just applied from RTDB or when only local UI/aspect changed
       if (
+        dataMutationSeqRef.current === lastCloudHandledDataSeqRef.current ||
         workspace.updatedAt === lastRemoteUpdatedAtRef.current ||
         workspace.updatedAt === lastWrittenUpdatedAtRef.current
       ) {
@@ -630,6 +637,7 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (cloudWriteTimer.current) window.clearTimeout(cloudWriteTimer.current);
       setSyncStatus('syncing');
       const snapshot = workspace;
+      const snapshotDataSeq = dataMutationSeqRef.current;
       pendingCloudUserRef.current = user.uid;
       cloudWriteTimer.current = window.setTimeout(async () => {
         cloudWriteTimer.current = null;
@@ -641,6 +649,7 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         try {
           lastWrittenUpdatedAtRef.current = snapshot.updatedAt;
           lastRemoteUpdatedAtRef.current = snapshot.updatedAt;
+          lastCloudHandledDataSeqRef.current = snapshotDataSeq;
           await saveFirebaseWorkspace(user.uid, snapshot);
           markCloudSynced(user.uid, snapshot);
           setSyncStatus('synced');
@@ -735,10 +744,16 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       focusHint?: { studentId: string; columnId: string } | null
     ) => {
       const prev = workspaceRef.current;
-      const nextWs = {
-        ...updater(prev),
-        updatedAt: new Date().toISOString(),
-      };
+      const nextRaw = updater(prev);
+      const nextWs = recordUndo
+        ? {
+            ...nextRaw,
+            updatedAt: new Date().toISOString(),
+          }
+        : {
+            ...nextRaw,
+            updatedAt: prev.updatedAt,
+          };
       if (recordUndo) {
         let resolvedFocus: CellFocusTarget | null = null;
         if (focusHint) {
@@ -758,6 +773,7 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         ];
         undoStackRef.current = nextUndo;
         setUndoStack(nextUndo);
+        dataMutationSeqRef.current += 1;
         markLocalDirty();
       }
       workspaceRef.current = nextWs;
@@ -831,6 +847,7 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
     }
 
+    dataMutationSeqRef.current += 1;
     workspaceRef.current = finalWs;
     setWorkspace(finalWs);
     markLocalDirty();
@@ -2006,17 +2023,17 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           prev.activeMode === 'TEMPLATE'
             ? (prev.activeTemplateId ?? prev.templates[0]?.id)
             : (prev.activeClassId ?? prev.classes[0]?.id);
-        const updateBookCols = (book: ClassBook): ClassBook =>
-          book.id !== targetBookId
-            ? book
-            : {
-                ...book,
-                tabs: book.tabs.map((t) =>
-                  scope === 'BOOK' || t.id === tabId
-                    ? { ...t, columns: t.columns.map((c) => ({ ...c, width: clamped })) }
-                    : t
-                ),
-              };
+        const updateBookCols = (book: ClassBook): ClassBook => {
+          if (scope !== 'ALL' && book.id !== targetBookId) return book;
+          return {
+            ...book,
+            tabs: book.tabs.map((t) =>
+              scope === 'ALL' || scope === 'BOOK' || t.id === tabId
+                ? { ...t, columns: t.columns.map((c) => ({ ...c, width: clamped })) }
+                : t
+            ),
+          };
+        };
         return {
           ...prev,
           settings: { ...prev.settings, defaultColumnWidth: clamped },
@@ -2779,7 +2796,7 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           ...book,
           collapsedGroups: next,
         };
-      });
+      }, false);
     },
     [mutateActiveBook]
   );
@@ -2810,14 +2827,18 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
 
     if (col.type === 'RUBRIC') {
-      if (targetGrade === null && cleanComment) {
-        // Pure comment typed on a RUBRIC cell: keep existing grade, rubricEval & manualOverride untouched!
-        nextCells[k] = {
-          grade: prev?.grade ?? null,
-          comment: cleanComment,
-          rubricEval: prev?.rubricEval,
-          manualOverride: prev?.manualOverride,
-        };
+      if (options?.preserveExistingGrade || (targetGrade === null && cleanComment)) {
+        // Pure comment edit/clear on a RUBRIC cell: keep existing grade, rubricEval & manualOverride untouched!
+        if (prev?.grade === null && !prev?.rubricEval && !cleanComment) {
+          delete nextCells[k];
+        } else {
+          nextCells[k] = {
+            grade: prev?.grade ?? null,
+            comment: cleanComment,
+            rubricEval: prev?.rubricEval,
+            manualOverride: prev?.manualOverride,
+          };
+        }
       } else if (targetGrade !== null) {
         // Explicit numeric grade typed/pasted on a RUBRIC cell:
         const finalGrade = clampGradeForColumn(targetGrade, col);
@@ -2876,15 +2897,21 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         (book, ws) => {
           const k = cellKey(studentId, columnId);
           const prev = book.cells[k];
-          const nextCells = {
-            ...book.cells,
-            [k]: {
-              grade: prev?.grade ?? null,
-              comment: comment !== undefined ? comment.trim() : (prev?.comment ?? ''),
+          const cleanComment = comment !== undefined ? comment.trim() : (prev?.comment ?? '');
+          const hasSelections = Object.keys(rubricEval.selections ?? {}).length > 0;
+          const keepManual = preserveManualOverride && Boolean(prev?.manualOverride);
+          const nextCells = { ...book.cells };
+
+          if (!hasSelections && !cleanComment && !keepManual) {
+            delete nextCells[k];
+          } else {
+            nextCells[k] = {
+              grade: keepManual ? (prev?.grade ?? null) : null,
+              comment: cleanComment,
               rubricEval,
-              manualOverride: preserveManualOverride ? prev?.manualOverride : undefined,
-            },
-          };
+              manualOverride: keepManual ? prev?.manualOverride : undefined,
+            };
+          }
           return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
         },
         true,
@@ -3136,12 +3163,69 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [commit]
   );
 
+  const setColumnEducamosStatus = useCallback<
+    GradebookContextValue['setColumnEducamosStatus']
+  >(
+    (columnId, status) => {
+      mutateActiveBook((book) => ({
+        ...book,
+        tabs: book.tabs.map((t) => ({
+          ...t,
+          columns: t.columns.map((c) => {
+            if (c.id !== columnId) return c;
+            if (status === 'PENDING') {
+              const next = { ...c };
+              delete next.educamos;
+              return next;
+            }
+            return {
+              ...c,
+              educamos: createEducamosDoneTracking(c, book.students, book.cells),
+            };
+          }),
+        })),
+      }));
+    },
+    [mutateActiveBook]
+  );
+
+  const markCellEducamosUpdated = useCallback<
+    GradebookContextValue['markCellEducamosUpdated']
+  >(
+    (studentId, columnId) => {
+      mutateActiveBook(
+        (book) => ({
+          ...book,
+          tabs: book.tabs.map((t) => ({
+            ...t,
+            columns: t.columns.map((c) => {
+              if (c.id !== columnId || c.educamos?.status !== 'DONE') return c;
+              return {
+                ...c,
+                educamos: markEducamosCellSynced(
+                  c,
+                  studentId,
+                  book.cells[cellKey(studentId, columnId)]
+                ),
+              };
+            }),
+          })),
+        }),
+        true,
+        { studentId, columnId }
+      );
+    },
+    [mutateActiveBook]
+  );
+
   const loadDemoData = useCallback(() => {
     const seeded = createSeedWorkspace();
     setUndoStack([]);
+    dataMutationSeqRef.current += 1;
+    markLocalDirty();
     setWorkspace(seeded);
     saveLocalWorkspace(seeded);
-  }, []);
+  }, [markLocalDirty]);
 
   const restoreBackup = useCallback<GradebookContextValue['restoreBackup']>((backup) => {
     const hydrated = hydrateWorkspace(backup);
@@ -3157,9 +3241,11 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       updatedAt: new Date().toISOString(),
     };
     setUndoStack([]);
+    dataMutationSeqRef.current += 1;
+    markLocalDirty();
     setWorkspace(validated);
     saveLocalWorkspace(validated);
-  }, []);
+  }, [markLocalDirty]);
 
   const resetAll = useCallback(() => {
     const seeded = createSeedWorkspace();
@@ -3318,6 +3404,8 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     deleteLomloeCurriculum,
     resetDefaultLomloeCurricula,
     updateLomloeKeyCompetences,
+    setColumnEducamosStatus,
+    markCellEducamosUpdated,
     loadDemoData,
     restoreBackup,
     resetAll,

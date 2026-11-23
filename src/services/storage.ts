@@ -199,6 +199,22 @@ function hydrateBook(
           }
           return undefined;
         })(),
+        educamos:
+          c.educamos?.status === 'DONE'
+            ? {
+                status: 'DONE',
+                snapshot:
+                  c.educamos.snapshot && typeof c.educamos.snapshot === 'object'
+                    ? Object.fromEntries(
+                        Object.entries(c.educamos.snapshot).filter(
+                          ([, v]) => typeof v === 'number' && Number.isFinite(v)
+                        )
+                      )
+                    : {},
+                updatedAt:
+                  typeof c.educamos.updatedAt === 'string' ? c.educamos.updatedAt : undefined,
+              }
+            : undefined,
         averageConfig:
           c.type === 'AVERAGE'
             ? {

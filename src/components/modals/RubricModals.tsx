@@ -2,7 +2,9 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { Check, ChevronLeft, ChevronRight, Edit3, FileText, Plus, RotateCcw, Scale, Trash2 } from 'lucide-react';
 import { getRubricLevelPastelColor } from '../../constants/colors';
 import { useGradebook } from '../../context/GradebookContext';
+import { getEducamosSnappedGrade, isCellOutdatedForEducamos } from '../../engine/educamos';
 import {
+  clampGradeForColumn,
   computeRubricPercentage,
   computeRubricScore,
   formatGrade,
@@ -106,12 +108,22 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
   students,
   initialStudentId,
 }) => {
-  const { workspace, activeBook, setCellRubricEval, clearCell, updateColumn, updateSettings } =
-    useGradebook();
+  const {
+    workspace,
+    activeBook,
+    setCellData,
+    setCellRubricEval,
+    clearCell,
+    updateColumn,
+    updateSettings,
+    markCellEducamosUpdated,
+  } = useGradebook();
   const [studentId, setStudentId] = useState<string | null>(initialStudentId);
   const [selections, setSelections] = useState<RubricCellEval['selections']>({});
   const [comment, setComment] = useState('');
   const [selectionModified, setSelectionModified] = useState(false);
+  const [showManualInput, setShowManualInput] = useState(false);
+  const [manualDraft, setManualDraft] = useState('');
 
   const rubricGridRef = useRef<HTMLDivElement>(null);
   const rubricZoom = workspace.settings.rubricZoom ?? 1;
@@ -149,6 +161,8 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
     setSelections(cell?.rubricEval?.selections ? structuredClone(cell.rubricEval.selections) : {});
     setComment(cell?.comment ?? '');
     setSelectionModified(false);
+    setShowManualInput(false);
+    setManualDraft('');
   }, [open, studentId, column, activeBook]);
 
   if (!column || !rubric || !activeBook || !studentId) return null;
@@ -174,6 +188,22 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
   const commitCurrent = (forceRubricCalc = false) => {
     const preserveManual = hasActiveManualOverride && !forceRubricCalc;
     setCellRubricEval(studentId, column.id, { rubricId: rubric.id, selections }, comment, preserveManual);
+  };
+
+  const applyManualGrade = () => {
+    const cleaned = manualDraft.trim().replace(',', '.');
+    const parsed = Number(cleaned);
+    if (cleaned && Number.isFinite(parsed)) {
+      const clamped = clampGradeForColumn(parsed, column);
+      if (clamped !== null) {
+        if (selectionModified) {
+          setCellRubricEval(studentId, column.id, { rubricId: rubric.id, selections }, comment, false);
+        }
+        setCellData(studentId, column.id, clamped, comment);
+        setSelectionModified(false);
+      }
+    }
+    setShowManualInput(false);
   };
 
   const navigate = (delta: number) => {
@@ -236,22 +266,69 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
           </button>
         </div>
 
-        {/* Display mode & Zoom controls toolbar (keeps modal title uncluttered) */}
+        {/* Display mode, discreet manual grade toggle & Zoom controls toolbar */}
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={showAsPercent}
-            onClick={() => updateColumn(column.id, { rubricShowPercentage: !showAsPercent })}
-            title="Por defecto las rúbricas muestran la nota traducida de 0 a 10. Activa para mostrar % en la tabla (al copiar siempre se copia 0–10)."
-            className={`px-2.5 py-1 rounded-xl border text-xs font-semibold transition-colors ${
-              showAsPercent
-                ? 'bg-purple-600 border-purple-600 text-white'
-                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-            }`}
-          >
-            {showAsPercent ? 'No convertir (%)' : 'Convertida (0–10)'}
-          </button>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={showAsPercent}
+              onClick={() => updateColumn(column.id, { rubricShowPercentage: !showAsPercent })}
+              title="Por defecto las rúbricas muestran la nota traducida de 0 a 10. Activa para mostrar % en la tabla (al copiar siempre se copia 0–10)."
+              className={`px-2.5 py-1 rounded-xl border text-xs font-semibold transition-colors ${
+                showAsPercent
+                  ? 'bg-purple-600 border-purple-600 text-white'
+                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              {showAsPercent ? 'No convertir (%)' : 'Convertida (0–10)'}
+            </button>
+
+            {!column.isLocked && (
+              <button
+                type="button"
+                onClick={() => {
+                  setManualDraft(
+                    displayScore !== null && displayScore !== undefined
+                      ? String(displayScore).replace('.', ',')
+                      : ''
+                  );
+                  setShowManualInput((v) => !v);
+                }}
+                aria-expanded={showManualInput}
+                title="Cambiar manualmente la nota de esta rúbrica"
+                className={`px-2 py-1 rounded-xl border text-[11px] font-semibold flex items-center gap-1 transition-colors ${
+                  showManualInput
+                    ? 'bg-amber-100 border-amber-300 text-amber-900'
+                    : hasActiveManualOverride
+                      ? 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
+                      : 'bg-white border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+                }`}
+              >
+                <Edit3 className="w-3 h-3" aria-hidden="true" />
+                <span>Nota manual</span>
+              </button>
+            )}
+
+            {isCellOutdatedForEducamos(liveCol, studentId, currentCell) && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectionModified) commitCurrent();
+                  markCellEducamosUpdated(studentId, column.id);
+                }}
+                title={`En Educamos: ${
+                  getEducamosSnappedGrade(liveCol, studentId) !== null
+                    ? formatGrade(getEducamosSnappedGrade(liveCol, studentId), liveCol.decimals)
+                    : '—'
+                }. Pulsa para marcar esta celda como actualizada.`}
+                className="px-2 py-1 rounded-xl border border-orange-300 bg-orange-50 hover:bg-orange-100 text-orange-900 text-[11px] font-semibold flex items-center gap-1 transition-colors"
+              >
+                <Check className="w-3 h-3 text-orange-600" aria-hidden="true" />
+                <span>Actualizar Educamos</span>
+              </button>
+            )}
+          </div>
 
           <ZoomControls
             compact
@@ -261,6 +338,49 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
             onChangeZoom={(z) => updateSettings({ rubricZoom: z })}
           />
         </div>
+
+        {showManualInput && !column.isLocked && (
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl border border-amber-200 bg-amber-50/75">
+            <label htmlFor="rubric-manual-grade-input" className="font-semibold text-amber-950">
+              Nota manual ({column.minValue}–{column.maxValue}):
+            </label>
+            <div className="flex items-center gap-1.5">
+              <input
+                id="rubric-manual-grade-input"
+                type="text"
+                inputMode="decimal"
+                autoFocus
+                value={manualDraft}
+                onChange={(e) => setManualDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    applyManualGrade();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setShowManualInput(false);
+                  }
+                }}
+                placeholder="Ej: 7,5"
+                className="w-24 px-2.5 py-1 rounded-lg border border-amber-300 bg-white text-sm font-bold tabular-nums text-right text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-400/40"
+              />
+              <button
+                type="button"
+                onClick={applyManualGrade}
+                className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold"
+              >
+                Aplicar
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowManualInput(false)}
+                className="px-2 py-1 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 font-medium"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Manual override notice banner if applicable */}
         {hasActiveManualOverride && (
@@ -335,10 +455,17 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
                           key={lvl.id}
                           onClick={() => {
                             setSelectionModified(true);
-                            setSelections((prev) => ({
-                              ...prev,
-                              [crit.id]: { levelId: lvl.id },
-                            }));
+                            setSelections((prev) => {
+                              if (prev[crit.id]?.levelId === lvl.id) {
+                                const next = { ...prev };
+                                delete next[crit.id];
+                                return next;
+                              }
+                              return {
+                                ...prev,
+                                [crit.id]: { levelId: lvl.id },
+                              };
+                            });
                           }}
                           style={{
                             backgroundColor: isPicked ? lvl.color : '#FFFFFF',

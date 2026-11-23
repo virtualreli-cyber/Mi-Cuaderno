@@ -542,17 +542,9 @@ export const ViewSettingsModal: React.FC<{
       title="Aspecto y Vista del Cuaderno"
       subtitle="Tamaños de filas, columnas, separadores de grupo, tipografía e iconos"
       maxWidthClass="w-[min(620px,95vw)]"
+      notice={appliedHint}
     >
       <div className="p-5 space-y-4 text-xs">
-        {appliedHint && (
-          <div
-            role="status"
-            className="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 font-semibold"
-          >
-            {appliedHint}
-          </div>
-        )}
-
         <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-2xl border border-indigo-200/80 bg-indigo-50/70">
           <div className="text-[11px] text-indigo-950">
             <span className="font-bold">Historial de aspecto independiente</span>
@@ -603,8 +595,33 @@ export const ViewSettingsModal: React.FC<{
 
         {/* Section 1: Row & Column Sizes */}
         <div className="space-y-3 p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70">
-          <div className="font-bold text-slate-900 text-[12px]">
-            Tamaños de filas y columnas
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-bold text-slate-900 text-[12px]">
+              Tamaños de filas y columnas
+            </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  applyUniformColumnWidth(80, 'ALL');
+                  setUniformColWidth(80);
+                  flashHint('Todas las columnas de toda la web ajustadas a 80 px.');
+                }}
+                className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-[11px] shadow-2xs transition-colors"
+              >
+                Columnas web a 80 px
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  updateSettings({ rowHeight: 36 });
+                  flashHint('Todas las filas de toda la web ajustadas a 36 px.');
+                }}
+                className="px-2.5 py-1 rounded-lg border border-blue-200 bg-white hover:bg-blue-50 text-blue-700 font-semibold text-[11px] shadow-2xs transition-colors"
+              >
+                Filas web a 36 px
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

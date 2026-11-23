@@ -183,6 +183,8 @@ interface ModalProps {
   closedBy?: 'any' | 'closerequest';
   /** Mark nested confirmation/sub-dialogs so they float without closing or replacing their parent modal */
   isNested?: boolean;
+  /** Non-layout-shifting floating popup notice shown inside the modal when an action modifies state */
+  notice?: string | null;
   children: React.ReactNode;
 }
 
@@ -218,6 +220,7 @@ export const Modal: React.FC<ModalProps> = ({
   headerActions,
   closedBy = 'any',
   isNested = false,
+  notice = null,
   children,
 }) => {
   const ref = useRef<HTMLDialogElement>(null);
@@ -879,6 +882,17 @@ export const Modal: React.FC<ModalProps> = ({
         </header>
 
         <div className="overflow-y-auto flex-1 bg-white">{children}</div>
+
+        {notice && (
+          <div
+            role="status"
+            aria-live="polite"
+            data-modal-notice-popup="true"
+            className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 z-50 max-w-[90%] px-3.5 py-2 rounded-xl bg-slate-900/95 text-white text-xs font-semibold shadow-xl border border-slate-700/80 text-center"
+          >
+            {notice}
+          </div>
+        )}
       </div>
     </dialog>
   );

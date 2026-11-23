@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Check, Delete, Eraser, Keyboard, Minus, Plus } from 'lucide-react';
 import { useGradebook } from '../../context/GradebookContext';
-import { applyCounterDelta, clampGradeForColumn } from '../../engine/gradeMath';
+import { getEducamosSnappedGrade, isCellOutdatedForEducamos } from '../../engine/educamos';
+import { applyCounterDelta, clampGradeForColumn, formatGrade } from '../../engine/gradeMath';
 import { useDeviceProfile } from '../../hooks/useDeviceProfile';
 import { cellKey, type ColumnEntity, type StudentEntity } from '../../types/gradebook';
 import { Modal } from '../common/Modal';
@@ -20,12 +21,14 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
   column,
 }) => {
   const device = useDeviceProfile();
-  const { activeBook, setCellData, clearCell } = useGradebook();
+  const { activeBook, setCellData, clearCell, markCellEducamosUpdated } = useGradebook();
   const [gradeStr, setGradeStr] = useState('');
   const [comment, setComment] = useState('');
   const [replaceOnFirstKey, setReplaceOnFirstKey] = useState(false);
   const [showTouchKeyboard, setShowTouchKeyboard] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const commentRef = useRef<HTMLTextAreaElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     if (!open || !student || !column || !activeBook) return;
@@ -71,6 +74,105 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
     setCellData(student.id, column.id, validGrade, comment);
     onClose();
   };
+
+  // Keyboard-always-commands inside CellEditModal: route digits to Nota and text to Comentario
+  // even when neither field is explicitly focused (or when switching from Nota to Comentario mid-typing)
+  const latestKeyboardHandlersRef = useRef({
+    digit: (_d: string) => {},
+    decimal: () => {},
+    backspace: () => {},
+    toggleSign: () => {},
+    save: () => {},
+  });
+
+  latestKeyboardHandlersRef.current = {
+    digit: (d: string) => handleKeypadDigit(d),
+    decimal: () => handleKeypadDecimal(),
+    backspace: () => handleKeypadBackspace(),
+    toggleSign: () => handleKeypadToggleSign(),
+    save: () => {
+      const validGrade = parseGradeInput(gradeStr);
+      setCellData(student.id, column.id, validGrade, comment);
+      onClose();
+    },
+  };
+
+  useEffect(() => {
+    if (!open || !student || !column) return;
+
+    const routeCharToComment = (ch: string) => {
+      const textarea = commentRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      setComment((prev) => {
+        if (ch === ' ' && (!prev || prev.endsWith(' '))) return prev;
+        const needsSpace =
+          prev.length > 0 &&
+          !prev.endsWith(' ') &&
+          !prev.endsWith('\n') &&
+          ch !== ' ' &&
+          !/^[,.;:!?)]$/.test(ch);
+        return needsSpace ? `${prev} ${ch}` : `${prev}${ch}`;
+      });
+      requestAnimationFrame(() => {
+        const len = textarea.value.length;
+        try {
+          textarea.setSelectionRange(len, len);
+        } catch {
+          // ignore
+        }
+      });
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing || e.keyCode === 229) return;
+      const dialogEl = formRef.current?.closest('dialog');
+      if (!dialogEl) return;
+      const isModal = dialogEl.matches(':modal');
+      const active = document.activeElement;
+      // When docked non-modal on the right, only capture keys if focus is inside this dialog
+      if (!isModal && !dialogEl.contains(active)) return;
+
+      // If comment textarea is already focused, let it handle all keys natively
+      if (active === commentRef.current) return;
+
+      const gradeInputActive =
+        active === inputRef.current && !(device.isTouch && !showTouchKeyboard);
+
+      if (gradeInputActive) {
+        if (e.key === ' ' || (e.key.length === 1 && !/^[0-9.,+\-]$/.test(e.key))) {
+          e.preventDefault();
+          routeCharToComment(e.key);
+        }
+        return;
+      }
+
+      // Neither input is actively taking text (focus is on dialog, button, or readOnly touch input)
+      if (e.key === 'Enter') {
+        if (active?.tagName === 'BUTTON') return;
+        e.preventDefault();
+        latestKeyboardHandlersRef.current.save();
+      } else if (e.key === 'Backspace') {
+        e.preventDefault();
+        latestKeyboardHandlersRef.current.backspace();
+      } else if (/^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+        latestKeyboardHandlersRef.current.digit(e.key);
+      } else if (e.key === ',' || e.key === '.') {
+        e.preventDefault();
+        latestKeyboardHandlersRef.current.decimal();
+      } else if (e.key === '-' && column.minValue < 0) {
+        e.preventDefault();
+        latestKeyboardHandlersRef.current.toggleSign();
+      } else if (e.key === ' ' || (e.key.length === 1 && !/^[0-9.,+\-]$/.test(e.key))) {
+        e.preventDefault();
+        routeCharToComment(e.key);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, student, column, device.isTouch, showTouchKeyboard]);
 
   const applyOneClickDelta = (delta: number) => {
     const base = parseGradeInput(gradeStr) ?? currentNumericGrade;
@@ -141,7 +243,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
       subtitle={`Columna: ${column.title} (${column.minValue}–${column.maxValue})`}
       maxWidthClass="w-[min(430px,95vw)]"
     >
-      <form onSubmit={handleSave} className="p-4 space-y-3.5 text-xs">
+      <form ref={formRef} onSubmit={handleSave} className="p-4 space-y-3.5 text-xs">
         {/* Counter quick actions (1-click opposite operation + standard step) */}
         {(editorMode === 'COUNTER_POS' ||
           editorMode === 'COUNTER_NEG' ||
@@ -407,6 +509,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
             Anotación / Comentario (solo visual, no afecta a los cálculos)
           </label>
           <textarea
+            ref={commentRef}
             rows={2}
             value={comment}
             onChange={(e) => setComment(e.target.value)}
@@ -414,6 +517,36 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
             className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
           />
         </div>
+
+        {(() => {
+          const educamosCell = activeBook ? activeBook.cells[cellKey(student.id, column.id)] : undefined;
+          if (!isCellOutdatedForEducamos(column, student.id, educamosCell)) return null;
+          const prevEducamos = getEducamosSnappedGrade(column, student.id);
+          const prevLabel = prevEducamos !== null ? formatGrade(prevEducamos, column.decimals) : '—';
+          const currLabel =
+            educamosCell?.grade !== null && educamosCell?.grade !== undefined
+              ? formatGrade(educamosCell.grade, column.decimals)
+              : '—';
+          return (
+            <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-orange-200 bg-orange-50 text-orange-950">
+              <div className="min-w-0">
+                <div className="font-bold text-[11px]">Cambiada desde Educamos</div>
+                <div className="text-[11px] text-orange-800 tabular-nums">
+                  En Educamos: <span className="font-semibold">{prevLabel}</span> → Actual:{' '}
+                  <span className="font-semibold">{currLabel}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => markCellEducamosUpdated(student.id, column.id)}
+                className="shrink-0 px-2.5 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-[11px] font-bold flex items-center gap-1 transition-colors"
+              >
+                <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Marcar actualizada</span>
+              </button>
+            </div>
+          );
+        })()}
 
         <div className="flex items-center justify-between pt-2.5 border-t border-slate-200">
           <button

@@ -40,6 +40,7 @@ export function cloneTabsWithRemappedIds(sourceTabs: TabEntity[]): TabEntity[] {
       ...c,
       id: colMap.get(c.id)!,
       folderId: c.folderId ? (folderMap.get(c.folderId) ?? null) : null,
+      educamos: undefined,
       averageConfig: c.averageConfig
         ? {
             ...c.averageConfig,
@@ -61,6 +62,7 @@ export function cloneSingleColumn(
     id: makeId('col'),
     folderId: targetFolderId,
     orderIndex,
+    educamos: undefined,
   };
 }
 
@@ -89,6 +91,7 @@ export function cloneFolderWithColumns(
     id: colMap.get(c.id)!,
     folderId: newFolderId,
     orderIndex: startColOrderIndex + idx,
+    educamos: undefined,
     averageConfig: c.averageConfig
       ? {
           ...c.averageConfig,

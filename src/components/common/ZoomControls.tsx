@@ -64,6 +64,11 @@ export function usePinchZoom(
       }
     };
 
+    const handleGestureEnd = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
     // 2-finger touch pinch for Android tablets/phones & iPadOS Chrome/Safari
     let pinchStartDist: number | null = null;
     let pinchStartZoom = zoomRef.current;
@@ -98,6 +103,7 @@ export function usePinchZoom(
     el.addEventListener('wheel', handleWheel, { passive: false });
     el.addEventListener('gesturestart', handleGestureStart, { passive: false });
     el.addEventListener('gesturechange', handleGestureChange, { passive: false });
+    el.addEventListener('gestureend', handleGestureEnd, { passive: false });
     el.addEventListener('touchstart', handleTouchStart, { passive: true });
     el.addEventListener('touchmove', handleTouchMove, { passive: false });
     el.addEventListener('touchend', handleTouchEnd, { passive: true });
@@ -108,6 +114,7 @@ export function usePinchZoom(
       el.removeEventListener('wheel', handleWheel);
       el.removeEventListener('gesturestart', handleGestureStart);
       el.removeEventListener('gesturechange', handleGestureChange);
+      el.removeEventListener('gestureend', handleGestureEnd);
       el.removeEventListener('touchstart', handleTouchStart);
       el.removeEventListener('touchmove', handleTouchMove);
       el.removeEventListener('touchend', handleTouchEnd);
@@ -118,24 +125,31 @@ export function usePinchZoom(
 
 /**
  * Prevents the browser from zooming the whole web page or open modals when the user
- * pinches on a trackpad/touchscreen or presses Cmd/Ctrl + +/-/0 outside the gradebook canvas.
+ * pinches on a trackpad/touchscreen, double-taps, or presses Cmd/Ctrl + +/-/0 outside the gradebook canvas.
  */
 export function usePreventGlobalBrowserZoom() {
   useEffect(() => {
+    const isInsidePinchSurface = (target: EventTarget | null) =>
+      target instanceof Element && Boolean(target.closest('[data-pinch-zoom-surface="true"]'));
+
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey) {
         e.preventDefault();
       }
     };
     const onGesture = (e: Event) => {
-      e.preventDefault();
+      if (!isInsidePinchSurface(e.target)) {
+        e.preventDefault();
+      }
+    };
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length >= 2 && !isInsidePinchSurface(e.target)) {
+        e.preventDefault();
+      }
     };
     const onTouchMove = (e: TouchEvent) => {
-      if (e.touches.length >= 2) {
-        const target = e.target as HTMLElement | null;
-        if (!target?.closest('[data-pinch-zoom-surface="true"]')) {
-          e.preventDefault();
-        }
+      if (e.touches.length >= 2 && !isInsidePinchSurface(e.target)) {
+        e.preventDefault();
       }
     };
     const onKeyDown = (e: KeyboardEvent) => {
@@ -146,16 +160,20 @@ export function usePreventGlobalBrowserZoom() {
     };
 
     window.addEventListener('wheel', onWheel, { passive: false });
-    window.addEventListener('gesturestart', onGesture, { passive: false });
-    window.addEventListener('gesturechange', onGesture, { passive: false });
-    window.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('gesturestart', onGesture, { passive: false });
+    document.addEventListener('gesturechange', onGesture, { passive: false });
+    document.addEventListener('gestureend', onGesture, { passive: false });
+    document.addEventListener('touchstart', onTouchStart, { passive: false });
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
     window.addEventListener('keydown', onKeyDown);
 
     return () => {
       window.removeEventListener('wheel', onWheel);
-      window.removeEventListener('gesturestart', onGesture);
-      window.removeEventListener('gesturechange', onGesture);
-      window.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('gesturestart', onGesture);
+      document.removeEventListener('gesturechange', onGesture);
+      document.removeEventListener('gestureend', onGesture);
+      document.removeEventListener('touchstart', onTouchStart);
+      document.removeEventListener('touchmove', onTouchMove);
       window.removeEventListener('keydown', onKeyDown);
     };
   }, []);

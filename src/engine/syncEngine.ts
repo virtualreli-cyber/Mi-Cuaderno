@@ -164,22 +164,52 @@ function mergeById<T extends { id: string }>(
   return { items, localChanges, remoteChanges };
 }
 
+function stripFolderUi(folder: FolderEntity): Omit<FolderEntity, 'width' | 'isCollapsed'> {
+  const { width: _w, isCollapsed: _c, ...rest } = folder;
+  return rest;
+}
+
+function stripColumnUi(col: ColumnEntity): Omit<ColumnEntity, 'width'> {
+  const { width: _w, ...rest } = col;
+  return rest;
+}
+
 function mergeTab(
   baseTab: TabEntity | undefined,
   localTab: TabEntity,
   remoteTab: TabEntity,
   preferLocal: boolean
 ): { tab: TabEntity; localChanges: number; remoteChanges: number } {
+  const localFolderMap = new Map(localTab.folders.map((f) => [f.id, f]));
+  const baseFoldersData = baseTab?.folders.map((f) => stripFolderUi(f) as FolderEntity);
+  const localFoldersData = localTab.folders.map((f) => stripFolderUi(f) as FolderEntity);
+  const remoteFoldersData = remoteTab.folders.map((f) => stripFolderUi(f) as FolderEntity);
+
   const folderMerge = mergeById<FolderEntity>(
-    baseTab?.folders,
-    localTab.folders,
-    remoteTab.folders,
+    baseFoldersData,
+    localFoldersData,
+    remoteFoldersData,
     preferLocal
   );
+  const restoredFolders = folderMerge.items.map((f) => {
+    const localF = localFolderMap.get(f.id);
+    if (!localF) return f;
+    return {
+      ...f,
+      width: localF.width,
+      isCollapsed: localF.isCollapsed,
+    };
+  });
+
+  const localColMap = new Map(localTab.columns.map((c) => [c.id, c]));
+  const baseColsData = baseTab?.columns.map((c) => stripColumnUi(c) as ColumnEntity);
+  const localColsData = localTab.columns.map((c) => stripColumnUi(c) as ColumnEntity);
+  const remoteColsData = remoteTab.columns.map((c) => stripColumnUi(c) as ColumnEntity);
+
   const colMerge = mergeById<ColumnEntity>(
-    baseTab?.columns,
-    localTab.columns,
-    remoteTab.columns,
+    baseColsData,
+    localColsData,
+    remoteColsData,
     preferLocal,
     (baseCol, localCol, remoteCol) => {
       const chosen = preferLocal ? localCol : remoteCol;
@@ -210,11 +240,19 @@ function mergeTab(
       return next;
     }
   );
+  const restoredCols = colMerge.items.map((c) => {
+    const localC = localColMap.get(c.id);
+    if (!localC) return c;
+    return {
+      ...c,
+      width: localC.width,
+    };
+  });
 
   // Merge itemOrder preserving all surviving top-level folder & standalone column IDs
   const validTopIds = new Set<string>([
-    ...folderMerge.items.map((f) => f.id),
-    ...colMerge.items.filter((c) => !c.folderId).map((c) => c.id),
+    ...restoredFolders.map((f) => f.id),
+    ...restoredCols.filter((c) => !c.folderId).map((c) => c.id),
   ]);
   const primaryOrder = (preferLocal ? localTab.itemOrder : remoteTab.itemOrder) ?? [];
   const secondaryOrder = (preferLocal ? remoteTab.itemOrder : localTab.itemOrder) ?? [];
@@ -256,8 +294,8 @@ function mergeTab(
     tab: {
       ...remoteTab,
       ...chosenMeta,
-      folders: folderMerge.items,
-      columns: colMerge.items,
+      folders: restoredFolders,
+      columns: restoredCols,
       itemOrder: mergedOrder,
     },
     localChanges: folderMerge.localChanges + colMerge.localChanges,
@@ -422,13 +460,13 @@ function mergeBook(
     groups: pickBookField('groups'),
     groupCategories: pickBookField('groupCategories'),
     activeGroupCategoryId: pickBookField('activeGroupCategoryId'),
-    groupSpacerRows: pickBookField('groupSpacerRows'),
-    // Keep device-local collapsedGroups preference
+    // Keep all device-local aspect & view state untouched by remote devices
+    groupSpacerRows: localBook.groupSpacerRows,
     collapsedGroups: localBook.collapsedGroups,
     summaryRows: pickBookField('summaryRows'),
     groupSummaryRows: pickBookField('groupSummaryRows'),
     lomloeCurriculumId: pickBookField('lomloeCurriculumId'),
-    showLomloeRow: pickBookField('showLomloeRow'),
+    showLomloeRow: localBook.showLomloeRow,
     isTemplate: localBook.isTemplate ?? remoteBook.isTemplate,
     students: studentMerge.items,
     tabs: tabMerge.items,
@@ -444,43 +482,131 @@ function mergeBook(
 }
 
 /**
- * Preserves device-local UI/view settings (sidebar, collapsed schools, grid zoom) while merging
- * shared preferences cleanly so an iPad never clobbers a desktop's layout and vice versa.
+ * Keeps ALL device-local aspect/UI settings (zoom, row/header height, font sizes, sidebar,
+ * collapsed schools) completely independent across devices. Sync transfers data only.
  */
 function mergeSettings(
-  base: ViewSettings | undefined,
+  _base: ViewSettings | undefined,
   local: ViewSettings,
-  remote: ViewSettings,
-  preferLocal: boolean
+  _remote: ViewSettings,
+  _preferLocal: boolean
 ): ViewSettings {
-  const pick = <K extends keyof ViewSettings>(key: K): ViewSettings[K] => {
-    if (sameValue(local[key], remote[key])) return local[key];
-    if (base && sameValue(local[key], base[key])) return remote[key];
-    if (base && sameValue(remote[key], base[key])) return local[key];
-    return preferLocal ? local[key] : remote[key];
-  };
-
   return {
-    ...remote,
-    rowHeight: pick('rowHeight'),
-    headerHeight: pick('headerHeight'),
-    studentColWidth: pick('studentColWidth'),
-    nameFormat: pick('nameFormat'),
-    showStatsRow: pick('showStatsRow'),
-    showRubricsAsPercent: pick('showRubricsAsPercent'),
-    gradeFontSize: pick('gradeFontSize'),
-    textFontSize: pick('textFontSize'),
-    iconSize: pick('iconSize'),
-    groupSpacerHeight: pick('groupSpacerHeight'),
-    summaryRowHeight: pick('summaryRowHeight'),
-    defaultColumnWidth: pick('defaultColumnWidth'),
-    defaultFolderWidth: pick('defaultFolderWidth'),
-    showLomloeRow: pick('showLomloeRow'),
-    // Always keep device-local layout/zoom state untouched by remote devices
-    sidebarVisible: local.sidebarVisible,
+    ...local,
     collapsedSchools: local.collapsedSchools ?? {},
     gridZoom: local.gridZoom ?? 1,
     rubricZoom: local.rubricZoom ?? 1,
+  };
+}
+
+function buildDeviceLocalTabMap(
+  books: ClassBook[],
+  localTabMap: Record<string, string>,
+  fallbackTabMap?: Record<string, string>
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const book of books) {
+    const validTabIds = new Set(book.tabs.map((t) => t.id));
+    const localTid = localTabMap[book.id];
+    if (localTid && validTabIds.has(localTid)) {
+      out[book.id] = localTid;
+      continue;
+    }
+    const fallbackTid = fallbackTabMap?.[book.id];
+    if (fallbackTid && validTabIds.has(fallbackTid)) {
+      out[book.id] = fallbackTid;
+      continue;
+    }
+    if (book.tabs[0]?.id) {
+      out[book.id] = book.tabs[0].id;
+    }
+  }
+  return out;
+}
+
+/**
+ * Applies incoming remote data onto the device while preserving 100% of this device's
+ * independent aspect settings, column/folder widths, collapsed states, and active screens/tabs.
+ */
+export function preserveDeviceLocalLayoutAndNav(
+  remote: GradebookWorkspace,
+  local: GradebookWorkspace
+): GradebookWorkspace {
+  const localBookMap = new Map<string, ClassBook>(
+    [...local.classes, ...local.templates].map((b) => [b.id, b])
+  );
+
+  const applyLocalToBook = (rBook: ClassBook): ClassBook => {
+    const lBook = localBookMap.get(rBook.id);
+    if (!lBook) return rBook;
+    const localTabMap = new Map(lBook.tabs.map((t) => [t.id, t]));
+    return {
+      ...rBook,
+      collapsedGroups: lBook.collapsedGroups,
+      groupSpacerRows: lBook.groupSpacerRows,
+      showLomloeRow: lBook.showLomloeRow,
+      tabs: rBook.tabs.map((rTab) => {
+        const lTab = localTabMap.get(rTab.id);
+        if (!lTab) return rTab;
+        const localFolderMap = new Map(lTab.folders.map((f) => [f.id, f]));
+        const localColMap = new Map(lTab.columns.map((c) => [c.id, c]));
+        return {
+          ...rTab,
+          folders: rTab.folders.map((rFld) => {
+            const lFld = localFolderMap.get(rFld.id);
+            return lFld
+              ? { ...rFld, width: lFld.width, isCollapsed: lFld.isCollapsed }
+              : rFld;
+          }),
+          columns: rTab.columns.map((rCol) => {
+            const lCol = localColMap.get(rCol.id);
+            return lCol ? { ...rCol, width: lCol.width } : rCol;
+          }),
+        };
+      }),
+    };
+  };
+
+  const classes = remote.classes.map(applyLocalToBook);
+  const templates = remote.templates.map(applyLocalToBook);
+  const validClassIds = new Set(classes.map((c) => c.id));
+  const validTemplateIds = new Set(templates.map((t) => t.id));
+
+  const activeClassId =
+    local.activeClassId && validClassIds.has(local.activeClassId)
+      ? local.activeClassId
+      : remote.activeClassId && validClassIds.has(remote.activeClassId)
+        ? remote.activeClassId
+        : (classes[0]?.id ?? null);
+
+  const activeTemplateId =
+    local.activeTemplateId && validTemplateIds.has(local.activeTemplateId)
+      ? local.activeTemplateId
+      : remote.activeTemplateId && validTemplateIds.has(remote.activeTemplateId)
+        ? remote.activeTemplateId
+        : (templates[0]?.id ?? null);
+
+  const activeMode =
+    local.activeMode === 'TEMPLATE' && templates.length === 0 ? 'CLASS' : local.activeMode;
+
+  return {
+    ...remote,
+    classes,
+    templates,
+    activeMode,
+    activeClassId,
+    activeTemplateId,
+    activeTabByBook: buildDeviceLocalTabMap(
+      [...classes, ...templates],
+      local.activeTabByBook ?? {},
+      remote.activeTabByBook
+    ),
+    settings: {
+      ...local.settings,
+      collapsedSchools: local.settings.collapsedSchools ?? {},
+      gridZoom: local.settings.gridZoom ?? 1,
+      rubricZoom: local.settings.rubricZoom ?? 1,
+    },
   };
 }
 
@@ -577,10 +703,11 @@ export function mergeWorkspaces3Way(
     activeMode: local.activeMode,
     activeClassId,
     activeTemplateId,
-    activeTabByBook: {
-      ...(remote.activeTabByBook ?? {}),
-      ...(local.activeTabByBook ?? {}),
-    },
+    activeTabByBook: buildDeviceLocalTabMap(
+      [...mergedClasses, ...mergedTemplates],
+      local.activeTabByBook ?? {},
+      remote.activeTabByBook
+    ),
     rubrics: rubricsMerge.items,
     lomloeKeyCompetences: preferLocal
       ? (local.lomloeKeyCompetences ?? remote.lomloeKeyCompetences)

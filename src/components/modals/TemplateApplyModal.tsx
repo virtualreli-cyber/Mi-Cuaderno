@@ -207,6 +207,7 @@ export const TemplateApplyModal: React.FC<TemplateApplyModalProps> = ({
         title={`Plantilla de clase: ${template.name}`}
         subtitle="Copia columnas, carpetas o pestañas de este borrador a tus clases, o crea una clase nueva"
         maxWidthClass="w-[min(600px,95vw)]"
+        notice={feedback}
       >
         <form onSubmit={handleSubmit} className="p-5 space-y-4 text-xs">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -403,12 +404,6 @@ export const TemplateApplyModal: React.FC<TemplateApplyModalProps> = ({
                 Si en la clase destino ya existe un elemento con el mismo nombre o similar, se mostrará
                 un aviso para cancelar, añadir ambos o sustituirlo.
               </p>
-            </div>
-          )}
-
-          {feedback && (
-            <div className="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 font-semibold">
-              {feedback}
             </div>
           )}
 

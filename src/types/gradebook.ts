@@ -149,6 +149,13 @@ export interface AverageConfig {
   ignoreEmpty: boolean;
 }
 
+export interface EducamosColumnTracking {
+  status: 'DONE';
+  /** Snapshot of non-null student grades (`studentId -> grade`) when passed/updated in Educamos */
+  snapshot: Record<string, number>;
+  updatedAt?: string;
+}
+
 export interface ColumnEntity {
   id: string;
   folderId: string | null;
@@ -182,6 +189,8 @@ export interface ColumnEntity {
   groupSummaryRowOverrides?: Record<number, ColumnSummaryMetric>;
   /** Criterios de evaluación LOMLOE conectados a esta columna/tarea (e.g. ['1.1', '5.1']) */
   lomloeCriteriaIds?: string[];
+  /** Seguimiento de exportación/actualización de notas hacia Educamos */
+  educamos?: EducamosColumnTracking;
 }
 
 export interface FolderEntity {

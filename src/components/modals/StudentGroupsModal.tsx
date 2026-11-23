@@ -222,6 +222,7 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
       title={`Grupos y Categorías · ${activeBook.name}`}
       subtitle="1. Selecciona alumnos con clic · 2. Pulsa un grupo (o crea uno nuevo) para asignarlos"
       maxWidthClass="w-[min(920px,96vw)]"
+      notice={feedbackMsg}
       headerActions={
         <label className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl border border-slate-200 bg-white text-[11px] font-semibold text-slate-700 cursor-pointer select-none">
           <input
@@ -396,14 +397,12 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
           </div>
         </div>
 
-        {/* Live Action / Feedback Banner */}
+        {/* Live Action Banner (static layout; transient feedback uses floating popup) */}
         <div
           className={`px-3 py-2 rounded-xl border flex flex-wrap items-center justify-between gap-2 transition-colors ${
             selectedCount > 0
               ? 'bg-blue-50 border-blue-300 text-blue-950'
-              : feedbackMsg
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                : 'bg-slate-50 border-slate-200 text-slate-600'
+              : 'bg-slate-50 border-slate-200 text-slate-600'
           }`}
         >
           {selectedCount > 0 ? (
@@ -436,11 +435,6 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                 </button>
               </div>
             </>
-          ) : feedbackMsg ? (
-            <span className="font-semibold flex items-center gap-1.5">
-              <Check className="w-3.5 h-3.5 text-emerald-600" />
-              <span>{feedbackMsg}</span>
-            </span>
           ) : (
             <span>
               Haz clic en los alumnos de la izquierda para seleccionarlos, y luego pulsa cualquier grupo de la derecha (o crea uno nuevo arriba) para asignarlos al instante.

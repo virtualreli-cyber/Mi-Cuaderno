@@ -59,6 +59,11 @@ import {
   shouldRenderVerticalHeader,
 } from '../../engine/gradeMath';
 import {
+  getColumnEducamosSummary,
+  getEducamosSnappedGrade,
+  isCellOutdatedForEducamos,
+} from '../../engine/educamos';
+import {
   isLomloeRowVisible,
   resolveBookCurriculum,
   resolveColumnLomloeSummary,
@@ -167,6 +172,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     addFolder,
     toggleFolderCollapse,
     setColumnLomloeCriteria,
+    setColumnEducamosStatus,
+    markCellEducamosUpdated,
     addSummaryRow,
     updateGlobalSummaryRow,
     removeSummaryRow,
@@ -189,7 +196,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   } = useGradebook();
 
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const inlineInputRef = useRef<HTMLInputElement>(null);
+  const inlineInputRef = useRef<HTMLTextAreaElement>(null);
   const addBtnRef = useRef<HTMLButtonElement>(null);
   const skipNextBlurRef = useRef(false);
   const justResizedRef = useRef(false);
@@ -206,6 +213,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   } | null>(null);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
   const [selectedStudentRowId, setSelectedStudentRowId] = useState<string | null>(null);
+  const [selectedStudentColHeader, setSelectedStudentColHeader] = useState(false);
   const [quickCounterColumnId, setQuickCounterColumnId] = useState<string | null>(null);
   const [selectedColumnTarget, setSelectedColumnTarget] = useState<SelectedColumnTarget | null>(null);
   const [copyToast, setCopyToast] = useState<string | null>(null);
@@ -219,6 +227,14 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     initialGrade?: number | null;
     initialComment?: string | null;
     mode?: 'TYPE_OVER' | 'FULL_EDIT';
+    cursorPos?: number;
+    preserveRubricGrade?: boolean;
+  } | null>(null);
+  const [inlineEditRect, setInlineEditRect] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    height: number;
   } | null>(null);
 
   const [showAddColMenu, setShowAddColMenu] = useState(false);
@@ -265,6 +281,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     colId: string;
     rect: { top: number; left: number; width: number; bottom: number };
   } | null>(null);
+  const [educamosMenu, setEducamosMenu] = useState<{
+    colId: string;
+    rect: { top: number; bottom: number; left: number; right: number };
+  } | null>(null);
   const [copiedLomloeCriteria, setCopiedLomloeCriteria] = useState<string[]>([]);
 
   const [cellTooltip, setCellTooltip] = useState<{
@@ -300,7 +320,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
   // Close menus on outside click
   useEffect(() => {
-    const close = () => {
+    const close = (e: MouseEvent) => {
       setShowAddColMenu(false);
       setShowSortMenu(false);
       setShowCategoryMenu(false);
@@ -311,6 +331,14 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       setSelectedGroupColCell(null);
       setSelectedSummaryCell(null);
       setLomloePicker(null);
+      if (
+        !(
+          e.target instanceof Element &&
+          e.target.closest('[data-educamos-menu="true"], [data-educamos-col-btn]')
+        )
+      ) {
+        setEducamosMenu(null);
+      }
     };
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
@@ -322,12 +350,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setAnchorCoord(null);
     setSelectedKeys(new Set());
     setSelectedStudentRowId(null);
+    setSelectedStudentColHeader(false);
     setQuickCounterColumnId(null);
     setSelectedColumnTarget(null);
     setSelectedGroupColCell(null);
     setSelectedSummaryCell(null);
     setInlineEdit(null);
+    setInlineEditRect(null);
     setLomloePicker(null);
+    setEducamosMenu(null);
   }, [activeBook?.id, activeTab?.id]);
 
   // Clear stale selectedColumnTarget if that column/folder was deleted
@@ -377,19 +408,40 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     selectedStudentRowId,
   ]);
 
-  // Synchronous focus on mount so fast keystrokes immediately enter the inline input
+  // Synchronous focus, cursor placement & floating anchor rect on inline edit start
   useLayoutEffect(() => {
-    if (!inlineEdit) return;
+    if (!inlineEdit) {
+      setInlineEditRect(null);
+      return;
+    }
+    const cellEl = getCellNode(inlineEdit.studentId, inlineEdit.columnId);
+    if (cellEl) {
+      const r = cellEl.getBoundingClientRect();
+      setInlineEditRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+    }
     const el = inlineInputRef.current;
     if (!el) return;
     el.focus();
-    const len = el.value.length;
+    const pos =
+      typeof inlineEdit.cursorPos === 'number'
+        ? Math.max(0, Math.min(el.value.length, inlineEdit.cursorPos))
+        : el.value.length;
     try {
-      el.setSelectionRange(len, len);
+      el.setSelectionRange(pos, pos);
     } catch {
       // ignore
     }
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(200, Math.max(38, el.scrollHeight))}px`;
   }, [inlineEdit?.studentId, inlineEdit?.columnId]);
+
+  // Keep textarea auto-grown as user types so 100% of text stays visible while editing
+  useLayoutEffect(() => {
+    const el = inlineInputRef.current;
+    if (!inlineEdit || !el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(200, Math.max(38, el.scrollHeight))}px`;
+  }, [inlineEdit?.draft, inlineEditRect]);
 
   // Filtered, sorted & optionally grouped students + group categories
   const { groupBuckets, visibleStudents, effectiveGroups, groupCategories, activeGroupCategory } =
@@ -644,6 +696,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   const selectSingleCell = useCallback((studentId: string, columnId: string) => {
     const k = cellKey(studentId, columnId);
     setSelectedStudentRowId(null);
+    setSelectedStudentColHeader(false);
     setSelectedColumnTarget(null);
     setSelectedGroupColCell(null);
     setSelectedSummaryCell(null);
@@ -774,6 +827,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         }
       }
       setSelectedStudentRowId(null);
+      setSelectedStudentColHeader(false);
       setSelectedColumnTarget(null);
       setSelectedGroupColCell(null);
       setSelectedSummaryCell(null);
@@ -784,9 +838,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     [visibleStudents, slotIdsInOrder, selectedKeys]
   );
 
-  // Clicking a column or folder header selects ONLY the header itself (no body cells highlighted)
   const selectEntireColumn = useCallback((col: ColumnEntity) => {
     setSelectedStudentRowId(null);
+    setSelectedStudentColHeader(false);
     setSelectedColumnTarget({ kind: 'COL', col });
     setSelectedGroupColCell(null);
     setSelectedSummaryCell(null);
@@ -799,6 +853,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   const selectFolderSummaryColumn = useCallback(
     (folder: FolderEntity, childCols: ColumnEntity[]) => {
       setSelectedStudentRowId(null);
+      setSelectedStudentColHeader(false);
       setSelectedColumnTarget({ kind: 'FOLDER', folder, childCols });
       setSelectedGroupColCell(null);
       setSelectedSummaryCell(null);
@@ -812,6 +867,19 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
   const selectEntireStudentRow = useCallback((studentId: string) => {
     setSelectedStudentRowId(studentId);
+    setSelectedStudentColHeader(false);
+    setSelectedColumnTarget(null);
+    setSelectedGroupColCell(null);
+    setSelectedSummaryCell(null);
+    setSelectedKeys(new Set());
+    setSelectedCoord(null);
+    setAnchorCoord(null);
+    wrapperRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  const selectStudentColHeader = useCallback(() => {
+    setSelectedStudentColHeader(true);
+    setSelectedStudentRowId(null);
     setSelectedColumnTarget(null);
     setSelectedGroupColCell(null);
     setSelectedSummaryCell(null);
@@ -826,6 +894,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setAnchorCoord(null);
     setSelectedKeys(new Set());
     setSelectedStudentRowId(null);
+    setSelectedStudentColHeader(false);
     setQuickCounterColumnId(null);
     setSelectedColumnTarget(null);
     setSelectedGroupColCell(null);
@@ -1097,20 +1166,83 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       const existing = activeBook.cells[cellKey(studentId, columnId)];
       const initialGrade = existing?.grade ?? null;
       const initialComment = existing?.comment ?? null;
+      const isRubricAuto = col.type === 'RUBRIC' && !existing?.manualOverride;
 
       let baseDraft = '';
       let mode: 'TYPE_OVER' | 'FULL_EDIT' = 'TYPE_OVER';
+      let cursorPos: number | undefined;
+      let preserveRubricGrade = false;
 
       if (initialChar !== null) {
-        baseDraft = initialChar;
-        mode = 'TYPE_OVER';
+        const isNumericKey = /^[0-9.,+\-]$/.test(initialChar);
+        if (!applyToSelection && isRubricAuto) {
+          if (!isNumericKey) {
+            // Typing comment text on a rubric-graded cell: append to existing comment and preserve rubric grade
+            preserveRubricGrade = true;
+            mode = 'FULL_EDIT';
+            const prevComment = existing?.comment ?? '';
+            if (prevComment) {
+              const sep =
+                initialChar === ' ' || /^[,.;:!?)]$/.test(initialChar) ? '' : ' ';
+              baseDraft = `${prevComment}${sep}${initialChar}`;
+            } else {
+              baseDraft = initialChar === ' ' ? '' : initialChar;
+            }
+          } else if (existing?.comment) {
+            // Typing numeric grade override when a comment already exists: keep comment visible after cursor
+            mode = 'FULL_EDIT';
+            baseDraft = `${initialChar} ${existing.comment}`;
+            cursorPos = initialChar.length;
+          } else {
+            mode = 'TYPE_OVER';
+            baseDraft = initialChar;
+            cursorPos = initialChar.length;
+          }
+        } else if (!applyToSelection && existing && (existing.comment || existing.grade !== null)) {
+          if (!isNumericKey) {
+            // Appending text to an existing cell NEVER replaces existing text!
+            mode = 'FULL_EDIT';
+            const numPart =
+              existing.grade !== null && existing.grade !== undefined
+                ? String(existing.grade)
+                : '';
+            const prevComment = existing.comment ?? '';
+            if (prevComment) {
+              const sep =
+                initialChar === ' ' || /^[,.;:!?)]$/.test(initialChar) ? '' : ' ';
+              baseDraft = [numPart, `${prevComment}${sep}${initialChar}`]
+                .filter(Boolean)
+                .join(' ');
+            } else {
+              const charPart = initialChar === ' ' ? '' : initialChar;
+              baseDraft = numPart ? (charPart ? `${numPart} ${charPart}` : `${numPart} `) : charPart;
+            }
+          } else if (existing.comment) {
+            // Typing a new grade on a cell with existing text: keep existing comment editable right after!
+            mode = 'FULL_EDIT';
+            baseDraft = `${initialChar} ${existing.comment}`;
+            cursorPos = initialChar.length;
+          } else {
+            mode = 'TYPE_OVER';
+            baseDraft = initialChar;
+            cursorPos = initialChar.length;
+          }
+        } else {
+          baseDraft = initialChar === ' ' ? '' : initialChar;
+          mode = 'TYPE_OVER';
+        }
       } else if (!applyToSelection && existing) {
         mode = 'FULL_EDIT';
-        const numPart =
-          existing.grade !== null && existing.grade !== undefined
-            ? String(existing.grade)
-            : '';
-        baseDraft = [numPart, existing.comment].filter(Boolean).join(' ');
+        if (isRubricAuto) {
+          preserveRubricGrade = true;
+          baseDraft = existing.comment ?? '';
+        } else {
+          const numPart =
+            existing.grade !== null && existing.grade !== undefined
+              ? String(existing.grade)
+              : '';
+          baseDraft = [numPart, existing.comment].filter(Boolean).join(' ');
+        }
       }
 
       skipNextBlurRef.current = false;
@@ -1127,6 +1259,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         initialGrade,
         initialComment,
         mode,
+        cursorPos,
+        preserveRubricGrade,
       });
       ensureCellVisible(studentId, columnId, 'auto');
     },
@@ -1199,6 +1333,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         initialGrade,
         initialComment,
         mode,
+        preserveRubricGrade,
       } = inlineEdit;
       const col = visibleColumns.find((c) => c.id === columnId);
 
@@ -1219,6 +1354,19 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         );
         setInlineEdit(null);
         focusCell(studentId, columnId);
+        return;
+      }
+
+      if (preserveRubricGrade && col?.type === 'RUBRIC' && parsed.grade === null) {
+        setCellData(studentId, columnId, null, draft.trim(), { preserveExistingGrade: true });
+        setInlineEdit(null);
+        if (advanceDir === 'DOWN') {
+          moveSelection(studentId, columnId, 'DOWN', true);
+        } else if (advanceDir === 'RIGHT') {
+          moveSelection(studentId, columnId, 'RIGHT', true);
+        } else {
+          focusCell(studentId, columnId);
+        }
         return;
       }
 
@@ -1384,6 +1532,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         moveSelection(studentId, columnId, e.shiftKey ? 'LEFT' : 'RIGHT');
       } else if (e.key === 'Enter') {
         if (e.isComposing || e.keyCode === 229) return;
+        if (target?.tagName === 'BUTTON') return;
         e.preventDefault();
         if (selectedTargets.length > 1) {
           const anchorTarget =
@@ -1419,6 +1568,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       } else if (e.key === 'Escape') {
         e.preventDefault();
         setLomloePicker(null);
+        setEducamosMenu(null);
         setSummaryCellPicker(null);
         setSelectedSummaryCell(null);
         setQuickCounterColumnId(null);
@@ -1851,6 +2001,13 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   })();
 
   const totalActiveStudents = activeBook.students.filter((s) => !s.isHidden).length;
+  const isSlotColumnSelected = (slot: DisplaySlot) =>
+    (selectedColumnTarget?.kind === 'COL' &&
+      slot.kind === 'COL' &&
+      selectedColumnTarget.col.id === slot.col.id) ||
+    (selectedColumnTarget?.kind === 'FOLDER' &&
+      slot.kind === 'FOLDER_SUMMARY' &&
+      selectedColumnTarget.folder.id === slot.folder.id);
 
   // Shared renderer for standalone columns (rowSpan=2 in Row 1) and child columns (in Row 2)
   const renderColumnHeaderCell = (col: ColumnEntity, isStandalone: boolean) => {
@@ -1861,6 +2018,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     const isVertical = shouldRenderVerticalHeader(col.title, col.width, col.headerOrientation);
     const cellHeight = isStandalone ? canopyH + headerH : headerH;
     const unzoomedCellH = isStandalone ? baseCanopyH + baseHeaderH : baseHeaderH;
+    const educamosSummary = getColumnEducamosSummary(col, activeBook.students, activeBook.cells);
+    const isEducamosMenuOpen = educamosMenu?.colId === col.id;
 
     return (
       <th
@@ -1947,7 +2106,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           !isStandalone ? 'border-t border-t-slate-300/80' : ''
         } p-0 relative group cursor-pointer transition-all align-middle overflow-hidden hover:brightness-97 ${
           isDraggingThis ? 'opacity-60' : ''
-        } ${isColSelected ? 'ring-2 ring-inset ring-blue-600' : ''}`}
+        } ${isColSelected ? 'col-header-selected' : ''}`}
       >
         {/* Fixed-dimension inner layer scaled smoothly so zoom NEVER reflows or shifts header titles */}
         <div
@@ -1963,6 +2122,64 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           }}
           className="px-1 py-1 relative overflow-hidden"
         >
+          {/* Discreet 1-click Educamos status & update button */}
+          <button
+            type="button"
+            data-educamos-col-btn={col.id}
+            aria-expanded={isEducamosMenuOpen}
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              const r = e.currentTarget.getBoundingClientRect();
+              setEducamosMenu((prev) =>
+                prev?.colId === col.id
+                  ? null
+                  : {
+                      colId: col.id,
+                      rect: {
+                        top: r.top,
+                        bottom: r.bottom,
+                        left: r.left,
+                        right: r.right,
+                      },
+                    }
+              );
+            }}
+            title={
+              educamosSummary.state === 'SYNCED'
+                ? 'Educamos: columna pasada y al día · Pulsa para opciones'
+                : educamosSummary.state === 'OUTDATED'
+                  ? `Educamos: ${educamosSummary.dirtyCount} celda(s) modificada(s) desde la última pasada · Pulsa para actualizar`
+                  : 'Educamos: pendiente de pasar · Pulsa para marcar como pasada'
+            }
+            aria-label={
+              educamosSummary.state === 'SYNCED'
+                ? `Educamos: ${col.title} pasada`
+                : educamosSummary.state === 'OUTDATED'
+                  ? `Educamos: ${col.title} con ${educamosSummary.dirtyCount} cambios pendientes`
+                  : `Educamos: marcar ${col.title}`
+            }
+            className={`absolute top-1 left-1 z-20 h-5 px-1.5 rounded-md border flex items-center justify-center gap-0.5 text-[10px] font-extrabold leading-none shadow-2xs transition-all ${
+              educamosSummary.state === 'SYNCED'
+                ? 'bg-emerald-600 border-emerald-700/30 text-white opacity-100 hover:bg-emerald-700'
+                : educamosSummary.state === 'OUTDATED'
+                  ? 'bg-orange-500 border-orange-600/40 text-white ring-2 ring-orange-200 opacity-100 hover:bg-orange-600'
+                  : `bg-white/90 border-slate-300/80 text-slate-600 hover:bg-slate-800 hover:text-white ${
+                      isColSelected || isEducamosMenuOpen || device.isTouch
+                        ? 'opacity-95'
+                        : 'opacity-40 group-hover:opacity-100 focus:opacity-100'
+                    }`
+            }`}
+          >
+            <span>E</span>
+            {educamosSummary.state === 'SYNCED' && <Check className="w-2.5 h-2.5 stroke-[3]" aria-hidden="true" />}
+            {educamosSummary.state === 'OUTDATED' && (
+              <span className="tabular-nums">·{educamosSummary.dirtyCount}</span>
+            )}
+          </button>
+
           {/* Discreet 1-click Copy Column button (ALWAYS alphabetical by Apellidos!) */}
           <button
             type="button"
@@ -2012,34 +2229,38 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           </div>
         </div>
 
-        {/* Independent Right-Edge Width Resize Handle (Double-click = auto-fit / restore) */}
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label={`Cambiar anchura de ${col.title}`}
-          title="Arrastra para ajustar ancho · Doble clic: ajustar al texto más largo"
-          style={device.isTouch ? { touchAction: 'none' } : undefined}
-          onClick={(e) => e.stopPropagation()}
-          onDoubleClick={(e) => toggleAutoFitColumn(e, col)}
-          onPointerDown={(e) => startColumnResize(e, col)}
-          className={`absolute top-0 right-0 ${
-            device.isTouch ? 'w-3.5' : 'w-1.5'
-          } h-full cursor-col-resize hover:bg-blue-500/60 transition-colors z-20`}
-        />
-        {/* Bottom-Edge Header Height Resize Handle */}
-        <div
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label="Cambiar altura de cabecera"
-          title="Arrastra para ajustar altura de cabecera · Doble clic: autoajustar"
-          style={device.isTouch ? { touchAction: 'none' } : undefined}
-          onClick={(e) => e.stopPropagation()}
-          onDoubleClick={toggleAutoFitHeaderHeight}
-          onPointerDown={startHeaderHeightResize}
-          className={`absolute left-0 bottom-0 w-full ${
-            device.isTouch ? 'h-3' : 'h-1.5'
-          } cursor-row-resize hover:bg-blue-500/60 transition-colors z-20`}
-        />
+        {/* Independent Right-Edge Width Resize Handle (Tablet: only after column is selected!) */}
+        {(!device.isTouch || isColSelected) && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={`Cambiar anchura de ${col.title}`}
+            title="Arrastra para ajustar ancho · Doble clic: ajustar al texto más largo"
+            style={device.isTouch ? { touchAction: 'none' } : undefined}
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => toggleAutoFitColumn(e, col)}
+            onPointerDown={(e) => startColumnResize(e, col)}
+            className={`absolute top-0 right-0 ${
+              device.isTouch ? 'w-3.5 bg-blue-500/20' : 'w-1.5'
+            } h-full cursor-col-resize hover:bg-blue-500/60 transition-colors z-20`}
+          />
+        )}
+        {/* Bottom-Edge Header Height Resize Handle (Tablet: only after column is selected!) */}
+        {(!device.isTouch || isColSelected) && (
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Cambiar altura de cabecera"
+            title="Arrastra para ajustar altura de cabecera · Doble clic: autoajustar"
+            style={device.isTouch ? { touchAction: 'none' } : undefined}
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={toggleAutoFitHeaderHeight}
+            onPointerDown={startHeaderHeightResize}
+            className={`absolute left-0 bottom-0 w-full ${
+              device.isTouch ? 'h-3 bg-blue-500/20' : 'h-1.5'
+            } cursor-row-resize hover:bg-blue-500/60 transition-colors z-20`}
+          />
+        )}
       </th>
     );
   };
@@ -2100,11 +2321,20 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           <tr>
             <th
               rowSpan={showLomloeBar ? 3 : 2}
+              onClick={(e) => {
+                if (!device.isTouch || justResizedRef.current) return;
+                const target = e.target as HTMLElement | null;
+                if (target?.closest('button, input, select')) return;
+                e.stopPropagation();
+                selectStudentColHeader();
+              }}
               style={{
                 width: studentColW,
                 backgroundColor: blendWithWhite(activeTab.color, 0.45),
               }}
-              className="sticky left-0 z-40 border-r-2 border-b border-slate-300 px-2 py-1 text-left align-top relative"
+              className={`sticky left-0 z-40 border-r-2 border-b border-slate-300 px-2 py-1 text-left align-top relative ${
+                selectedStudentColHeader ? 'col-header-selected' : ''
+              }`}
             >
               <div
                 className="flex flex-col justify-between min-w-0"
@@ -2417,28 +2647,38 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 </div>
               </div>
 
-              {/* Resize handle on right edge of student column (Double-click = auto-fit / restore) */}
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Redimensionar columna de alumnos"
-                title="Arrastra para ajustar ancho de alumnos · Doble clic: ajustar al nombre más largo"
-                onClick={(e) => e.stopPropagation()}
-                onDoubleClick={toggleAutoFitStudentCol}
-                onPointerDown={startStudentColResize}
-                className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-blue-500/50 transition-colors z-20"
-              />
+              {/* Resize handle on right edge of student column (Tablet: only after student header is selected!) */}
+              {(!device.isTouch || selectedStudentColHeader) && (
+                <div
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Redimensionar columna de alumnos"
+                  title="Arrastra para ajustar ancho de alumnos · Doble clic: ajustar al nombre más largo"
+                  style={device.isTouch ? { touchAction: 'none' } : undefined}
+                  onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={toggleAutoFitStudentCol}
+                  onPointerDown={startStudentColResize}
+                  className={`absolute top-0 right-0 ${
+                    device.isTouch ? 'w-3.5 bg-blue-500/20' : 'w-1.5'
+                  } h-full cursor-col-resize hover:bg-blue-500/50 transition-colors z-20`}
+                />
+              )}
               {/* Bottom-Edge Header Height Resize Handle */}
-              <div
-                role="separator"
-                aria-orientation="horizontal"
-                aria-label="Redimensionar altura de cabecera"
-                title="Arrastra para ajustar altura de cabecera · Doble clic: autoajustar"
-                onClick={(e) => e.stopPropagation()}
-                onDoubleClick={toggleAutoFitHeaderHeight}
-                onPointerDown={startHeaderHeightResize}
-                className="absolute left-0 bottom-0 w-full h-1.5 cursor-row-resize hover:bg-blue-500/50 transition-colors z-20"
-              />
+              {(!device.isTouch || selectedStudentColHeader) && (
+                <div
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label="Redimensionar altura de cabecera"
+                  title="Arrastra para ajustar altura de cabecera · Doble clic: autoajustar"
+                  style={device.isTouch ? { touchAction: 'none' } : undefined}
+                  onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={toggleAutoFitHeaderHeight}
+                  onPointerDown={startHeaderHeightResize}
+                  className={`absolute left-0 bottom-0 w-full ${
+                    device.isTouch ? 'h-3 bg-blue-500/20' : 'h-1.5'
+                  } cursor-row-resize hover:bg-blue-500/50 transition-colors z-20`}
+                />
+              )}
             </th>
 
             {/* Row 1 Dynamic Headers: Standalone Cols (rowSpan=2) + Folder Canopies (BOTH open & closed keep Row 1 + Row 2 so header height NEVER changes!) */}
@@ -2549,7 +2789,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   className={`border-r border-b-0 border-slate-300 p-0 text-center cursor-pointer hover:brightness-97 transition-all relative group overflow-hidden ${
                     hint === 'INSIDE' ? 'ring-2 ring-inset ring-blue-500' : ''
                   } ${isDraggingThis ? 'opacity-60' : ''} ${
-                    isFldSelected ? 'ring-2 ring-inset ring-blue-600' : ''
+                    isFldSelected ? 'col-header-selected' : ''
                   }`}
                 >
                   <div
@@ -2593,16 +2833,19 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     </button>
                   </div>
 
-                  {isClosed && (
+                  {isClosed && (!device.isTouch || isFldSelected) && (
                     <div
                       role="separator"
                       aria-orientation="vertical"
                       aria-label={`Cambiar anchura de carpeta ${folder.title}`}
                       title="Arrastra para ajustar ancho · Doble clic: ajustar al texto más largo"
+                      style={device.isTouch ? { touchAction: 'none' } : undefined}
                       onClick={(e) => e.stopPropagation()}
                       onDoubleClick={(e) => toggleAutoFitFolder(e, folder, childCols)}
                       onPointerDown={(e) => startFolderResize(e, folder)}
-                      className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-blue-500/60 transition-colors z-20"
+                      className={`absolute top-0 right-0 ${
+                        device.isTouch ? 'w-3.5 bg-blue-500/20' : 'w-1.5'
+                      } h-full cursor-col-resize hover:bg-blue-500/60 transition-colors z-20`}
                     />
                   )}
                 </th>
@@ -2842,7 +3085,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     }`}
                     className={`border-r border-b border-t-0 border-slate-300 p-0 relative group cursor-pointer align-middle transition-all hover:brightness-97 overflow-hidden ${
                       dropHint?.key === key ? 'ring-2 ring-inset ring-blue-500' : ''
-                    } ${isFldSelected ? 'ring-2 ring-inset ring-blue-600' : ''}`}
+                    } ${isFldSelected ? 'col-header-selected' : ''}`}
                   >
                     <div
                       style={{
@@ -2920,28 +3163,38 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       </div>
                     </div>
 
-                    {/* Independent Folder Width Resize Handle (Double-click = auto-fit / restore) */}
-                    <div
-                      role="separator"
-                      aria-orientation="vertical"
-                      aria-label={`Cambiar anchura de carpeta ${folder.title}`}
-                      title="Arrastra para ajustar ancho · Doble clic: ajustar al texto más largo"
-                      onClick={(e) => e.stopPropagation()}
-                      onDoubleClick={(e) => toggleAutoFitFolder(e, folder, childCols)}
-                      onPointerDown={(e) => startFolderResize(e, folder)}
-                      className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-blue-500/60 transition-colors z-20"
-                    />
+                    {/* Independent Folder Width Resize Handle (Tablet: only after folder is selected!) */}
+                    {(!device.isTouch || isFldSelected) && (
+                      <div
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label={`Cambiar anchura de carpeta ${folder.title}`}
+                        title="Arrastra para ajustar ancho · Doble clic: ajustar al texto más largo"
+                        style={device.isTouch ? { touchAction: 'none' } : undefined}
+                        onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => toggleAutoFitFolder(e, folder, childCols)}
+                        onPointerDown={(e) => startFolderResize(e, folder)}
+                        className={`absolute top-0 right-0 ${
+                          device.isTouch ? 'w-3.5 bg-blue-500/20' : 'w-1.5'
+                        } h-full cursor-col-resize hover:bg-blue-500/60 transition-colors z-20`}
+                      />
+                    )}
                     {/* Bottom-Edge Header Height Resize Handle */}
-                    <div
-                      role="separator"
-                      aria-orientation="horizontal"
-                      aria-label="Cambiar altura de cabecera"
-                      title="Arrastra para ajustar altura de cabecera · Doble clic: autoajustar"
-                      onClick={(e) => e.stopPropagation()}
-                      onDoubleClick={toggleAutoFitHeaderHeight}
-                      onPointerDown={startHeaderHeightResize}
-                      className="absolute left-0 bottom-0 w-full h-1.5 cursor-row-resize hover:bg-blue-500/60 transition-colors z-20"
-                    />
+                    {(!device.isTouch || isFldSelected) && (
+                      <div
+                        role="separator"
+                        aria-orientation="horizontal"
+                        aria-label="Cambiar altura de cabecera"
+                        title="Arrastra para ajustar altura de cabecera · Doble clic: autoajustar"
+                        style={device.isTouch ? { touchAction: 'none' } : undefined}
+                        onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={toggleAutoFitHeaderHeight}
+                        onPointerDown={startHeaderHeightResize}
+                        className={`absolute left-0 bottom-0 w-full ${
+                          device.isTouch ? 'h-3 bg-blue-500/20' : 'h-1.5'
+                        } cursor-row-resize hover:bg-blue-500/60 transition-colors z-20`}
+                      />
+                    )}
                   </th>
                 );
               }
@@ -3022,7 +3275,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         : `Conectar criterios LOMLOE a "${col.title}"`
                     }
                     className={`border-r border-b border-t-0 border-slate-300 px-1 py-1 align-middle text-center cursor-pointer relative group transition-colors hover:bg-indigo-50/70 ${
-                      isPickerOpen ? 'ring-2 ring-inset ring-indigo-500' : ''
+                      isPickerOpen
+                        ? 'ring-2 ring-inset ring-indigo-500'
+                        : selectedColumnTarget?.kind === 'COL' && selectedColumnTarget.col.id === col.id
+                          ? 'col-cell-tint'
+                          : ''
                     }`}
                   >
                     {summary.criteria.length === 0 ? (
@@ -3057,15 +3314,22 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       </div>
                     )}
 
-                    {/* Resize Column Width Handle continued cleanly on LOMLOE cell */}
-                    <div
-                      role="separator"
-                      aria-orientation="vertical"
-                      onClick={(e) => e.stopPropagation()}
-                      onDoubleClick={(e) => toggleAutoFitColumn(e, col)}
-                      onPointerDown={(e) => startColumnResize(e, col)}
-                      className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-blue-500/60 transition-colors z-20"
-                    />
+                    {/* Resize Column Width Handle continued cleanly on LOMLOE cell (Tablet: only when selected) */}
+                    {(!device.isTouch ||
+                      (selectedColumnTarget?.kind === 'COL' &&
+                        selectedColumnTarget.col.id === col.id)) && (
+                      <div
+                        role="separator"
+                        aria-orientation="vertical"
+                        onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => toggleAutoFitColumn(e, col)}
+                        onPointerDown={(e) => startColumnResize(e, col)}
+                        style={device.isTouch ? { touchAction: 'none' } : undefined}
+                        className={`absolute top-0 right-0 ${
+                          device.isTouch ? 'w-3.5 bg-blue-500/20' : 'w-1.5'
+                        } h-full cursor-col-resize hover:bg-blue-500/60 transition-colors z-20`}
+                      />
+                    )}
                   </th>
                 );
               })}
@@ -3240,7 +3504,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                               : `Grupo "${bucket.name}" · Doble clic: modificar notas o ver estadísticas en ${slot.col.title}`
                           }
                           className={`border-r border-b border-t border-slate-300 text-center align-middle cursor-pointer hover:brightness-95 transition-all ${
-                            isActivePopover || isSelectedGroupCol ? 'ring-2 ring-inset ring-blue-600' : ''
+                            isActivePopover || isSelectedGroupCol
+                              ? 'ring-2 ring-inset ring-blue-600'
+                              : isSlotColumnSelected(slot)
+                                ? 'col-cell-tint'
+                                : ''
                           }`}
                         >
                           <div className="flex items-center justify-center h-full text-slate-500/80 hover:text-blue-700">
@@ -3461,7 +3729,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                                 ? 'cell-multi-selected z-10'
                                 : isStudentRowSelected
                                   ? 'student-row-cell-tint'
-                                  : 'hover:brightness-98'
+                                  : isSlotColumnSelected(slot)
+                                    ? 'col-cell-tint'
+                                    : 'hover:brightness-98'
                           }`}
                         >
                           {val !== null ? formatGrade(val, 2) : ''}
@@ -3498,34 +3768,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     const cellBg = isInline ? '#FFFFFF' : (colors.bgColor ?? baseColBg);
 
                     const isManualRubricEdit = col.type === 'RUBRIC' && Boolean(cell?.manualOverride);
-                    const liveSplit =
-                      isInline && inlineEdit ? parseLiveMixedInput(inlineEdit.draft) : null;
-
-                    const isTypingComment = Boolean(liveSplit && !liveSplit.gradeText && liveSplit.commentText);
-                    const isPreservedGrade = Boolean(
-                      isTypingComment &&
-                      inlineEdit?.initialGrade !== null &&
-                      inlineEdit?.initialGrade !== undefined &&
-                      (col.type === 'RUBRIC' || inlineEdit?.mode === 'TYPE_OVER')
-                    );
-
-                    const liveGradeDisplay = liveSplit
-                      ? liveSplit.gradeText ||
-                        (isPreservedGrade
-                          ? formatGrade(inlineEdit!.initialGrade, col.decimals)
-                          : '')
-                      : '';
-
-                    const isTypingGrade = Boolean(liveSplit && liveSplit.gradeText && !liveSplit.commentText);
-                    const isPreservedComment = Boolean(
-                      isTypingGrade &&
-                      inlineEdit?.initialComment &&
-                      inlineEdit?.mode === 'TYPE_OVER'
-                    );
-
-                    const liveCommentDisplay = liveSplit
-                      ? liveSplit.commentText || (isPreservedComment ? inlineEdit!.initialComment! : '')
-                      : '';
+                    const isEducamosOutdated = isCellOutdatedForEducamos(col, student.id, cell);
+                    const isColCellSelected = isSlotColumnSelected(slot);
 
                     return (
                       <td
@@ -3533,11 +3777,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         data-cell={key}
                         aria-selected={isInMultiSelection || isFocusedCell}
                         tabIndex={isFocusedCell ? 0 : -1}
-                        title={
-                          isManualRubricEdit
-                            ? 'Nota de rúbrica editada manualmente (doble clic para abrir la rúbrica)'
-                            : undefined
-                        }
                         onMouseDown={(e) => {
                           if (e.shiftKey || e.metaKey || e.ctrlKey) {
                             e.preventDefault();
@@ -3657,16 +3896,34 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           backgroundColor: cellBg,
                           color: colors.textColor ?? '#0F172A',
                         }}
-                        className={`border-r border-b border-slate-200 px-1.5 py-0.5 text-center align-middle relative cursor-pointer overflow-hidden ${
-                          isFocusedCell
+                        className={`border-r border-b border-slate-200 px-1 py-0.5 text-center align-middle relative cursor-pointer overflow-hidden ${
+                          isFocusedCell || isInline
                             ? 'cell-selected z-10'
                             : isInMultiSelection
                               ? 'cell-multi-selected z-10'
-                              : isStudentRowSelected
-                                ? 'student-row-cell-tint'
-                                : 'hover:brightness-98'
+                              : isEducamosOutdated
+                                ? `${
+                                    isStudentRowSelected
+                                      ? 'student-row-cell-tint'
+                                      : isColCellSelected
+                                        ? 'col-cell-tint'
+                                        : 'hover:brightness-98'
+                                  } ring-1 ring-inset ring-orange-500/80`
+                                : isStudentRowSelected
+                                  ? 'student-row-cell-tint'
+                                  : isColCellSelected
+                                    ? 'col-cell-tint'
+                                    : 'hover:brightness-98'
                         }`}
                       >
+                        {/* Discreet corner indicator for cells changed after passing to Educamos */}
+                        {isEducamosOutdated && !isInline && (
+                          <span
+                            aria-label="Nota modificada desde el último paso a Educamos"
+                            title="Nota modificada desde que se pasó a Educamos"
+                            className="absolute top-0 left-0 w-0 h-0 border-t-[9px] border-r-[9px] border-t-orange-500 border-r-transparent pointer-events-none"
+                          />
+                        )}
                         {/* Discreet corner indicator for manually-edited rubric cells */}
                         {isManualRubricEdit && !isInline && (
                           <span
@@ -3675,123 +3932,46 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           />
                         )}
 
-                        {isInline && inlineEdit && liveSplit ? (
-                          <div className="w-full h-[calc(100%-2px)] px-1 bg-white border border-blue-500 rounded-md relative flex flex-col items-center justify-center overflow-hidden leading-tight">
-                            {/* Live top line: numeric grade */}
-                            <div className="min-h-[1.15em] flex items-center justify-center max-w-full truncate">
-                              {liveGradeDisplay && (
-                                <span
-                                  className={`text-[1em] font-bold tabular-nums ${
-                                    isPreservedGrade ? 'text-slate-400' : 'text-blue-700'
-                                  }`}
-                                >
-                                  {liveGradeDisplay}
-                                </span>
-                              )}
-                              {liveSplit.activePart === 'GRADE' && (
-                                <span className="inline-block w-[1.5px] h-[1em] bg-blue-600 ml-0.5 animate-pulse shrink-0" />
-                              )}
-                            </div>
-
-                            {/* Live bottom line: comment text */}
-                            {(liveCommentDisplay || liveSplit.activePart === 'COMMENT') && (
-                              <div className="flex items-center justify-center max-w-full truncate mt-0.5">
-                                {liveCommentDisplay && (
-                                  <span
-                                    className={`text-[0.83em] truncate ${
-                                      isPreservedComment
-                                        ? 'text-slate-400 font-normal'
-                                        : 'font-medium text-slate-600'
-                                    }`}
-                                  >
-                                    {liveCommentDisplay}
-                                  </span>
-                                )}
-                                {liveSplit.activePart === 'COMMENT' && (
-                                  <span className="inline-block w-[1.5px] h-[0.9em] bg-slate-500 ml-0.5 animate-pulse shrink-0" />
-                                )}
-                              </div>
-                            )}
-
-                            {/* Real focused input capturing all typing, IME, selection & paste natively */}
-                            <input
-                              ref={inlineInputRef}
-                              type="text"
-                              autoFocus
-                              aria-label={
-                                inlineEdit.applyToSelection
-                                  ? `Editar nota para ${editableNumericTargets.length} celdas`
-                                  : 'Editar nota y comentario'
-                              }
-                              value={inlineEdit.draft}
-                              onChange={(e) =>
-                                setInlineEdit((prev) =>
-                                  prev ? { ...prev, draft: e.target.value } : null
+                        <div className="flex flex-col items-center justify-center gap-0 h-full w-full overflow-hidden leading-tight px-0">
+                          {grade !== null && (
+                            <span
+                              style={{ fontSize: `${scaledGradeFs}px` }}
+                              className="font-bold tabular-nums leading-[1.05] shrink-0"
+                            >
+                              {formatCellDisplayGrade(
+                                grade,
+                                col,
+                                Boolean(
+                                  col.rubricShowPercentage ||
+                                    workspace.settings.showRubricsAsPercent
                                 )
-                              }
-                              onBlur={() => {
-                                if (skipNextBlurRef.current) {
-                                  skipNextBlurRef.current = false;
-                                  return;
-                                }
-                                commitInlineEdit('STAY');
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  const isMod = e.metaKey || e.ctrlKey;
-                                  if (e.shiftKey && isMod) {
-                                    commitInlineEdit('RIGHT');
-                                  } else if (e.shiftKey) {
-                                    commitInlineEdit('DOWN');
-                                  } else {
-                                    commitInlineEdit('STAY');
-                                  }
-                                } else if (e.key === 'Escape') {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  cancelInlineEdit();
-                                } else if (e.key === 'Tab') {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  commitInlineEdit('RIGHT');
-                                }
-                              }}
-                              className="absolute inset-0 w-full h-full opacity-0 cursor-text"
-                            />
-                          </div>
-                        ) : (
-                          <div className="flex flex-col items-center justify-center gap-0.5 h-full w-full overflow-hidden leading-tight px-0.5">
-                            {grade !== null && (
-                              <span
-                                style={{ fontSize: `${scaledGradeFs}px` }}
-                                className="font-bold tabular-nums leading-[1.05] shrink-0"
-                              >
-                                {formatCellDisplayGrade(
-                                  grade,
-                                  col,
-                                  Boolean(
-                                    col.rubricShowPercentage ||
-                                      workspace.settings.showRubricsAsPercent
-                                  )
-                                )}
-                              </span>
-                            )}
-                            {comment && (
-                              <span
-                                className={`max-w-full overflow-hidden text-ellipsis break-normal [overflow-wrap:normal] ${
-                                  grade !== null
-                                    ? `${rowH >= 54 ? 'line-clamp-2' : 'line-clamp-1'} text-[0.76em] font-normal text-slate-600 leading-[1.15]`
-                                    : `${rowH >= 54 ? 'line-clamp-3' : 'line-clamp-2'} text-[0.86em] font-medium text-slate-700 leading-[1.2]`
-                                }`}
-                              >
-                                {comment}
-                              </span>
-                            )}
-                          </div>
-                        )}
+                              )}
+                            </span>
+                          )}
+                          {comment && (
+                            <span
+                              className={`w-full overflow-hidden text-ellipsis break-words [overflow-wrap:break-word] ${
+                                grade !== null
+                                  ? `${
+                                      rowH >= 60
+                                        ? 'line-clamp-3'
+                                        : rowH >= 42
+                                          ? 'line-clamp-2'
+                                          : 'line-clamp-1'
+                                    } text-[0.76em] font-normal text-slate-600 leading-[1.12]`
+                                  : `${
+                                      rowH >= 60
+                                        ? 'line-clamp-4'
+                                        : rowH >= 42
+                                          ? 'line-clamp-3'
+                                          : 'line-clamp-2'
+                                    } text-[0.82em] font-medium text-slate-700 leading-[1.14]`
+                              }`}
+                            >
+                              {comment}
+                            </span>
+                          )}
+                        </div>
                       </td>
                     );
                   })}
@@ -4021,7 +4201,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             }}
                             title={`${bucket.name} · ${metricOpt?.label ?? ''}: ${formatted || '—'} · Doble clic para cambiar (se aplica a todos los grupos)`}
                             className={`border-r border-b border-slate-200 px-1 py-0.5 text-center align-middle cursor-pointer hover:brightness-95 transition-all ${
-                              isSelectedGrpCell ? 'ring-2 ring-inset ring-blue-600 z-10' : ''
+                              isSelectedGrpCell
+                                ? 'ring-2 ring-inset ring-blue-600 z-10'
+                                : isSlotColumnSelected(slot)
+                                  ? 'col-cell-tint'
+                                  : ''
                             }`}
                           >
                             <div className="font-bold text-slate-900 tabular-nums text-[0.88em] leading-tight truncate">
@@ -4277,7 +4461,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       className={`border-r border-b border-slate-300 ${
                         rowIdx === 0 ? 'border-t-2 border-t-slate-300' : ''
                       } px-1 py-0.5 text-center font-bold text-slate-800 tabular-nums cursor-pointer hover:brightness-95 transition-all text-[0.9em] ${
-                        isSelectedCell ? 'ring-2 ring-inset ring-blue-600 z-10' : ''
+                        isSelectedCell
+                          ? 'ring-2 ring-inset ring-blue-600 z-10'
+                          : isSlotColumnSelected(slot)
+                            ? 'col-cell-tint'
+                            : ''
                       }`}
                     >
                       <div className="truncate">{formatted || '—'}</div>
@@ -4959,8 +5147,97 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   >
                     <ArrowRight className="w-4 h-4" aria-hidden="true" />
                   </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      resizeFolder(activeTab.id, folder.id, Math.max(38, (folder.width ?? 68) - 14))
+                    }
+                    aria-label="Estrechar carpeta"
+                    className="min-h-[38px] px-2 rounded-xl border border-slate-200 bg-slate-50 shrink-0"
+                  >
+                    −Ancho
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      resizeFolder(activeTab.id, folder.id, Math.min(280, (folder.width ?? 68) + 14))
+                    }
+                    aria-label="Ensanchar carpeta"
+                    className="min-h-[38px] px-2 rounded-xl border border-slate-200 bg-slate-50 shrink-0"
+                  >
+                    +Ancho
+                  </button>
                 </>
               )}
+            </div>
+          );
+        }
+
+        // 1b. Selected Student Column Header (Tablet width/header-height resize)
+        if (selectedStudentColHeader) {
+          return (
+            <div
+              data-touch-action-bar="student-col"
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                bottom: 'calc(0.75rem + var(--safe-bottom))',
+                left: 'max(0.75rem, var(--safe-left))',
+                maxWidth: 'calc(100dvw - 170px)',
+              }}
+              className="absolute z-30 flex items-center gap-1 px-1.5 py-1 rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-xs shadow-lg overflow-x-auto no-scrollbar text-xs font-semibold text-slate-700"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  beginAspectChange();
+                  updateSettings({
+                    studentColWidth: Math.max(150, workspace.settings.studentColWidth - 16),
+                  });
+                }}
+                aria-label="Estrechar columna de alumnos"
+                className="min-h-[38px] px-2.5 rounded-xl border border-slate-200 bg-slate-50 shrink-0"
+              >
+                −Ancho
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  beginAspectChange();
+                  updateSettings({
+                    studentColWidth: Math.min(460, workspace.settings.studentColWidth + 16),
+                  });
+                }}
+                aria-label="Ensanchar columna de alumnos"
+                className="min-h-[38px] px-2.5 rounded-xl border border-slate-200 bg-slate-50 shrink-0"
+              >
+                +Ancho
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  beginAspectChange();
+                  updateSettings({
+                    headerHeight: Math.max(52, workspace.settings.headerHeight - 8),
+                  });
+                }}
+                aria-label="Reducir altura de cabecera"
+                className="min-h-[38px] px-2.5 rounded-xl border border-slate-200 bg-slate-50 shrink-0"
+              >
+                −Cabecera
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  beginAspectChange();
+                  updateSettings({
+                    headerHeight: Math.min(220, workspace.settings.headerHeight + 8),
+                  });
+                }}
+                aria-label="Aumentar altura de cabecera"
+                className="min-h-[38px] px-2.5 rounded-xl border border-slate-200 bg-slate-50 shrink-0"
+              >
+                +Cabecera
+              </button>
             </div>
           );
         }
@@ -5001,6 +5278,28 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               >
                 <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Ficha de {st.firstName}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  beginAspectChange();
+                  updateSettings({ rowHeight: Math.max(36, workspace.settings.rowHeight - 4) });
+                }}
+                aria-label="Reducir altura de filas"
+                className="min-h-[38px] px-2 rounded-xl border border-slate-200 bg-slate-50 shrink-0"
+              >
+                −Alto
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  beginAspectChange();
+                  updateSettings({ rowHeight: Math.min(88, workspace.settings.rowHeight + 4) });
+                }}
+                aria-label="Aumentar altura de filas"
+                className="min-h-[38px] px-2 rounded-xl border border-slate-200 bg-slate-50 shrink-0"
+              >
+                +Alto
               </button>
               {activeBook.sortMode === 'MANUAL' && (
                 <>
@@ -5062,6 +5361,32 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>{col.type === 'RUBRIC' ? 'Rúbrica' : 'Editar'}</span>
               </button>
+
+              {col.type === 'RUBRIC' && !col.isLocked && !activeTab.isLocked && (
+                <button
+                  type="button"
+                  onClick={() => onOpenCellModal(st, col)}
+                  title="Cambiar manualmente la nota de la rúbrica"
+                  className="min-h-[38px] px-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-600 flex items-center gap-1 shrink-0"
+                >
+                  <span>Nota</span>
+                </button>
+              )}
+
+              {isCellOutdatedForEducamos(col, st.id, cell) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    markCellEducamosUpdated(st.id, col.id);
+                    showCopyToast('Celda marcada como actualizada en Educamos');
+                  }}
+                  title="Marcar esta celda como actualizada en Educamos"
+                  className="min-h-[38px] px-2.5 rounded-xl border border-orange-300 bg-orange-50 text-orange-800 flex items-center gap-1 shrink-0"
+                >
+                  <Check className="w-3.5 h-3.5 text-orange-600" aria-hidden="true" />
+                  <span>Educamos</span>
+                </button>
+              )}
 
               {col.type === 'NUMERIC' && edMode === 'COUNTER_POS' && !col.isLocked && !activeTab.isLocked && (
                 <button
@@ -5128,6 +5453,43 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         return null;
       })()}
 
+      {/* Desktop quick Educamos action pill when a single outdated cell is selected */}
+      {!device.isTouch && !inlineEdit && selectedCoord && selectedKeys.size <= 1 && (() => {
+        const st = visibleStudents.find((s) => s.id === selectedCoord.studentId);
+        const col = activeTab.columns.find((c) => c.id === selectedCoord.columnId);
+        if (!st || !col) return null;
+        const cell = activeBook.cells[cellKey(st.id, col.id)];
+        if (!isCellOutdatedForEducamos(col, st.id, cell)) return null;
+        const prev = getEducamosSnappedGrade(col, st.id);
+        const prevLabel = prev !== null ? formatGrade(prev, col.decimals) : '—';
+        return (
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              bottom: 'calc(0.75rem + var(--safe-bottom))',
+              left: 'max(0.75rem, var(--safe-left))',
+            }}
+            className="absolute z-30 flex items-center gap-2 pl-3 pr-1.5 py-1.5 rounded-2xl border border-orange-200 bg-orange-50/95 backdrop-blur-xs shadow-lg text-xs text-orange-950"
+          >
+            <span className="font-medium truncate max-w-[230px]">
+              <strong className="font-semibold">{st.lastName}:</strong> en Educamos era{' '}
+              <span className="font-bold tabular-nums">{prevLabel}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                markCellEducamosUpdated(st.id, col.id);
+                showCopyToast('Celda marcada como actualizada en Educamos');
+              }}
+              className="px-2.5 py-1 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-semibold flex items-center gap-1 shrink-0 transition-colors"
+            >
+              <Check className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Actualizar celda</span>
+            </button>
+          </div>
+        );
+      })()}
+
       {/* Floating iDoceo-style Zoom Controls (affects ONLY the gradebook grid) */}
       <div
         style={{
@@ -5172,6 +5534,294 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             onOpenLomloeManager={() => onOpenLomloeManager?.()}
             onClose={() => setLomloePicker(null)}
           />
+        );
+      })()}
+
+      {/* Educamos column status & individual cell sync popover */}
+      {educamosMenu && (() => {
+        const targetCol = activeTab.columns.find((c) => c.id === educamosMenu.colId);
+        if (!targetCol) return null;
+        const summary = getColumnEducamosSummary(
+          targetCol,
+          activeBook.students,
+          activeBook.cells
+        );
+        const sortedDirty = [...summary.dirtyStudents].sort(
+          (a, b) =>
+            a.student.lastName.localeCompare(b.student.lastName, 'es') ||
+            a.student.firstName.localeCompare(b.student.firstName, 'es')
+        );
+        const viewportW = typeof window !== 'undefined' ? window.innerWidth : 1024;
+        const viewportH = typeof window !== 'undefined' ? window.innerHeight : 768;
+        const cardWidth = Math.min(312, viewportW - 16);
+        const left = Math.min(Math.max(8, educamosMenu.rect.left), viewportW - cardWidth - 8);
+        const spaceBelow = viewportH - educamosMenu.rect.bottom - 12;
+        const spaceAbove = educamosMenu.rect.top - 12;
+        const openAbove = spaceBelow < 220 && spaceAbove > spaceBelow;
+        const maxHeight = Math.max(180, openAbove ? spaceAbove : spaceBelow);
+
+        return createPortal(
+          <div
+            data-educamos-menu="true"
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            style={{
+              position: 'fixed',
+              left,
+              width: cardWidth,
+              top: openAbove ? undefined : Math.min(educamosMenu.rect.bottom + 6, viewportH - 24),
+              bottom: openAbove ? viewportH - educamosMenu.rect.top + 6 : undefined,
+              maxHeight,
+              zIndex: 80,
+            }}
+            className="rounded-2xl border border-slate-200 bg-white shadow-2xl flex flex-col overflow-hidden text-xs"
+          >
+            <div className="px-3.5 py-2.5 border-b border-slate-100 bg-slate-50/90 flex items-center justify-between gap-2 shrink-0">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-slate-900">Educamos</span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      summary.state === 'SYNCED'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : summary.state === 'OUTDATED'
+                          ? 'bg-orange-100 text-orange-800'
+                          : 'bg-slate-200 text-slate-700'
+                    }`}
+                  >
+                    {summary.state === 'SYNCED'
+                      ? 'Pasada'
+                      : summary.state === 'OUTDATED'
+                        ? `${summary.dirtyCount} ${summary.dirtyCount === 1 ? 'cambio' : 'cambios'}`
+                        : 'Pendiente'}
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-500 truncate">{targetCol.title}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEducamosMenu(null)}
+                aria-label="Cerrar menú Educamos"
+                className="w-7 h-7 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 flex items-center justify-center shrink-0"
+              >
+                <X className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="p-3 space-y-2.5 overflow-y-auto">
+              {summary.state === 'PENDING' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setColumnEducamosStatus(targetCol.id, 'DONE');
+                    setEducamosMenu(null);
+                    showCopyToast('Columna marcada como pasada a Educamos');
+                  }}
+                  className="w-full py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <Check className="w-4 h-4" aria-hidden="true" />
+                  <span>Marcar columna como pasada</span>
+                </button>
+              )}
+
+              {summary.state === 'SYNCED' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setColumnEducamosStatus(targetCol.id, 'PENDING');
+                    setEducamosMenu(null);
+                    showCopyToast('Columna marcada como no pasada a Educamos');
+                  }}
+                  className="w-full py-2 px-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold transition-colors"
+                >
+                  Quitar marca de pasada (Pendiente)
+                </button>
+              )}
+
+              {summary.state === 'OUTDATED' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setColumnEducamosStatus(targetCol.id, 'DONE');
+                      setEducamosMenu(null);
+                      showCopyToast('Columna marcada como actualizada en Educamos');
+                    }}
+                    className="w-full py-2 px-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <Check className="w-4 h-4" aria-hidden="true" />
+                    <span>Marcar toda la columna actualizada</span>
+                  </button>
+
+                  <div className="space-y-1.5 pt-1">
+                    <div className="text-[11px] font-semibold text-slate-500">
+                      Celdas modificadas desde el último paso ({sortedDirty.length}):
+                    </div>
+                    <div className="space-y-1 max-h-48 overflow-y-auto pr-0.5">
+                      {sortedDirty.map(({ student: dirtyStudent, previousGrade, currentGrade }) => {
+                        const prevStr =
+                          previousGrade !== null ? formatGrade(previousGrade, targetCol.decimals) : '—';
+                        const currStr =
+                          currentGrade !== null ? formatGrade(currentGrade, targetCol.decimals) : '—';
+                        return (
+                          <div
+                            key={dirtyStudent.id}
+                            className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl border border-orange-200/80 bg-orange-50/70"
+                          >
+                            <div className="min-w-0">
+                              <div className="font-semibold text-slate-800 truncate">
+                                {dirtyStudent.lastName}, {dirtyStudent.firstName}
+                              </div>
+                              <div className="text-[11px] text-orange-800 tabular-nums">
+                                {prevStr} → <span className="font-bold">{currStr}</span>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                markCellEducamosUpdated(dirtyStudent.id, targetCol.id);
+                                showCopyToast(`${dirtyStudent.lastName} actualizado en Educamos`);
+                              }}
+                              title="Marcar esta celda como actualizada en Educamos"
+                              className="shrink-0 px-2 py-1 rounded-lg bg-white border border-orange-300 hover:bg-orange-600 hover:text-white hover:border-orange-600 text-orange-800 font-semibold flex items-center gap-1 transition-colors"
+                            >
+                              <Check className="w-3 h-3" aria-hidden="true" />
+                              <span>Actualizar</span>
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setColumnEducamosStatus(targetCol.id, 'PENDING');
+                      setEducamosMenu(null);
+                      showCopyToast('Columna marcada como no pasada a Educamos');
+                    }}
+                    className="w-full py-1.5 px-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 font-medium transition-colors"
+                  >
+                    Marcar columna como no pasada
+                  </button>
+                </>
+              )}
+            </div>
+          </div>,
+          document.body
+        );
+      })()}
+
+      {/* Expanded Inline Cell Editor Portal (shows 100% of text + real cursor navigation across all text) */}
+      {inlineEdit && inlineEditRect && (() => {
+        const col = visibleColumns.find((c) => c.id === inlineEdit.columnId);
+        if (!col) return null;
+        const liveSplit = parseLiveMixedInput(inlineEdit.draft);
+        const editorWidth = Math.max(
+          inlineEditRect.width + 6,
+          Math.min(340, window.innerWidth - 24)
+        );
+        const left = Math.max(
+          12,
+          Math.min(window.innerWidth - editorWidth - 12, inlineEditRect.left - 3)
+        );
+        const top = Math.max(
+          12,
+          Math.min(window.innerHeight - 150, inlineEditRect.top - 3)
+        );
+
+        const badgeGrade =
+          inlineEdit.preserveRubricGrade && !liveSplit.gradeText
+            ? inlineEdit.initialGrade !== null && inlineEdit.initialGrade !== undefined
+              ? `${formatGrade(inlineEdit.initialGrade, col.decimals)} (rúbrica)`
+              : ''
+            : liveSplit.gradeText ||
+              (inlineEdit.mode === 'TYPE_OVER' &&
+              inlineEdit.initialGrade !== null &&
+              inlineEdit.initialGrade !== undefined
+                ? formatGrade(inlineEdit.initialGrade, col.decimals)
+                : '');
+
+        return createPortal(
+          <div
+            data-inline-cell-editor="true"
+            onMouseDown={(e) => {
+              if ((e.target as HTMLElement).tagName !== 'TEXTAREA') {
+                e.preventDefault();
+              }
+            }}
+            style={{
+              position: 'fixed',
+              top,
+              left,
+              width: editorWidth,
+              zIndex: 90,
+            }}
+            className="rounded-xl border-2 border-blue-600 bg-white shadow-2xl p-1.5 space-y-1"
+          >
+            <div className="flex items-center justify-between gap-2 px-1 text-[10px] font-semibold text-slate-500">
+              <span className="truncate">
+                {inlineEdit.applyToSelection
+                  ? `${editableNumericTargets.length} celdas`
+                  : col.title}
+              </span>
+              {badgeGrade && (
+                <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-bold tabular-nums shrink-0">
+                  Nota: {badgeGrade}
+                </span>
+              )}
+            </div>
+
+            <textarea
+              ref={inlineInputRef}
+              rows={1}
+              autoFocus
+              aria-label={
+                inlineEdit.applyToSelection
+                  ? `Editar nota para ${editableNumericTargets.length} celdas`
+                  : 'Editar nota y comentario'
+              }
+              value={inlineEdit.draft}
+              onChange={(e) =>
+                setInlineEdit((prev) =>
+                  prev ? { ...prev, draft: e.target.value } : null
+                )
+              }
+              onBlur={() => {
+                if (skipNextBlurRef.current) {
+                  skipNextBlurRef.current = false;
+                  return;
+                }
+                commitInlineEdit('STAY');
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const isMod = e.metaKey || e.ctrlKey;
+                  if (e.shiftKey && isMod) {
+                    commitInlineEdit('RIGHT');
+                  } else if (e.shiftKey) {
+                    commitInlineEdit('DOWN');
+                  } else {
+                    commitInlineEdit('STAY');
+                  }
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  cancelInlineEdit();
+                } else if (e.key === 'Tab') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  commitInlineEdit('RIGHT');
+                }
+              }}
+              className="w-full min-h-[38px] max-h-[200px] overflow-y-auto resize-none rounded-lg border border-slate-200 bg-slate-50/60 focus:bg-white px-2 py-1.5 text-sm font-medium text-slate-900 leading-snug focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+            />
+          </div>,
+          document.body
         );
       })()}
 
