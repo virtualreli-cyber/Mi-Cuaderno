@@ -220,8 +220,8 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
       open={open}
       onClose={onClose}
       title={`Grupos y Categorías · ${activeBook.name}`}
-      subtitle="1. Selecciona alumnos con clic · 2. Pulsa un grupo (o crea uno nuevo) para asignarlos"
-      maxWidthClass="w-[min(920px,96vw)]"
+      subtitle="Selecciona alumnos en la lista o dentro de cualquier grupo para asignarlos, moverlos o quitarlos"
+      maxWidthClass="w-[min(1000px,96vw)]"
       notice={feedbackMsg}
       headerActions={
         <label className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl border border-slate-200 bg-white text-[11px] font-semibold text-slate-700 cursor-pointer select-none">
@@ -413,8 +413,8 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                 </span>
                 <span>
                   {selectedCount === 1
-                    ? 'alumno seleccionado — haz clic en un grupo a la derecha o crea uno nuevo'
-                    : 'alumnos seleccionados — haz clic en un grupo a la derecha o crea uno nuevo'}
+                    ? 'alumno seleccionado — pulsa "Mover aquí" en un grupo, crea uno nuevo o quítalo'
+                    : 'alumnos seleccionados — pulsa "Mover aquí" en un grupo, crea uno nuevo o quítalos'}
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
@@ -424,7 +424,7 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                   className="px-2.5 py-1 rounded-lg border border-rose-200 bg-white hover:bg-rose-50 text-rose-700 font-semibold flex items-center gap-1"
                 >
                   <UserMinus className="w-3.5 h-3.5" />
-                  <span>Quitar de grupo</span>
+                  <span>Quitar de su grupo</span>
                 </button>
                 <button
                   type="button"
@@ -437,13 +437,13 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
             </>
           ) : (
             <span>
-              Haz clic en los alumnos de la izquierda para seleccionarlos, y luego pulsa cualquier grupo de la derecha (o crea uno nuevo arriba) para asignarlos al instante.
+              Haz clic en los alumnos (en la lista o dentro de cualquier grupo) para seleccionarlos, cambiarlos de grupo o quitarlos.
             </span>
           )}
         </div>
 
-        {/* Main 2-column iDoceo board: Left = Click-to-Select Students · Right = Click-to-Assign Groups */}
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5">
+        {/* Main 2-column iDoceo board: Left = Click-to-Select Students · Right = Full Group Cards List */}
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-start">
           {/* LEFT: Student Picker (multi-select with 1 click) */}
           <div className="md:col-span-5 rounded-2xl border border-slate-200 bg-slate-50/60 p-3 flex flex-col gap-2">
             <div className="flex items-center justify-between gap-2">
@@ -508,7 +508,7 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
               </button>
             </div>
 
-            <div className="flex-1 max-h-[340px] overflow-y-auto space-y-1 pr-0.5">
+            <div className="max-h-[48dvh] md:max-h-[460px] overflow-y-auto space-y-1 pr-0.5">
               {filteredStudents.length === 0 ? (
                 <div className="py-10 text-center text-slate-400 italic">
                   {studentFilter === 'UNASSIGNED'
@@ -569,12 +569,12 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
             </div>
           </div>
 
-          {/* RIGHT: Create New Group + Group Cards Grid */}
-          <div className="md:col-span-7 flex flex-col gap-2.5">
+          {/* RIGHT: Create New Group + Full Vertical List of Groups & All Their Members */}
+          <div className="md:col-span-7 flex flex-col gap-2.5 min-w-0">
             {/* Inline Create Group Bar */}
             <form
               onSubmit={handleCreateGroup}
-              className="p-2.5 rounded-2xl border border-slate-200 bg-white flex flex-wrap items-center gap-2 shadow-2xs"
+              className="p-2.5 rounded-2xl border border-slate-200 bg-white flex flex-wrap items-center gap-2 shadow-2xs shrink-0"
             >
               <input
                 type="text"
@@ -613,10 +613,10 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
               </button>
             </form>
 
-            {/* Group Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-[345px] overflow-y-auto pr-0.5">
+            {/* Group Cards List: always 1 full-width card per row so every group & all members remain 100% visible */}
+            <div className="flex flex-col gap-3 max-h-[54dvh] md:max-h-[465px] overflow-y-auto pr-1">
               {effectiveGroups.length === 0 ? (
-                <div className="sm:col-span-2 py-12 rounded-2xl border border-dashed border-slate-300 bg-slate-50/50 text-center text-slate-500">
+                <div className="py-12 rounded-2xl border border-dashed border-slate-300 bg-slate-50/50 text-center text-slate-500 shrink-0">
                   Aún no hay grupos en <strong>{activeCategory.name}</strong>.
                   <br />
                   Escribe un nombre arriba y pulsa <strong>Crear grupo</strong>.
@@ -630,6 +630,23 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                   );
                   const isDragOver = dragOverGroup === grp.name;
                   const isEditingThis = editingGroupName === grp.name;
+                  const allMembersSelected =
+                    members.length > 0 && members.every((m) => selectedStudentIds.has(m.id));
+                  const selectedInThisGroup = members.filter((m) =>
+                    selectedStudentIds.has(m.id)
+                  ).length;
+
+                  const toggleSelectWholeGroup = () => {
+                    setSelectedStudentIds((prev) => {
+                      const next = new Set(prev);
+                      if (allMembersSelected) {
+                        for (const m of members) next.delete(m.id);
+                      } else {
+                        for (const m of members) next.add(m.id);
+                      }
+                      return next;
+                    });
+                  };
 
                   return (
                     <div
@@ -655,23 +672,25 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                         setDragStudentId(null);
                         setDragOverGroup(null);
                       }}
-                      onClick={() => {
-                        if (!isEditingThis && selectedCount > 0) {
-                          handleAssignSelectedToGroup(grp.name);
-                        }
-                      }}
-                      className={`rounded-2xl border overflow-hidden flex flex-col transition-all ${
+                      className={`shrink-0 rounded-2xl border bg-white flex flex-col transition-all ${
                         isDragOver
-                          ? 'border-blue-500 ring-2 ring-blue-300 scale-[1.01] shadow-md'
+                          ? 'border-blue-500 ring-2 ring-blue-300 shadow-md'
                           : selectedCount > 0 && !isEditingThis
-                            ? 'border-blue-300 hover:border-blue-500 hover:ring-2 hover:ring-blue-200 cursor-pointer shadow-xs'
-                            : 'border-slate-200 bg-white'
+                            ? 'border-blue-300 shadow-xs'
+                            : 'border-slate-200'
                       }`}
                     >
-                      {/* Group Card Header */}
+                      {/* Group Card Header (click when students selected assigns them here) */}
                       <div
                         style={{ backgroundColor: grp.color }}
-                        className="px-3 py-2 border-b border-black/10 flex items-center justify-between gap-2"
+                        onClick={() => {
+                          if (!isEditingThis && selectedCount > 0) {
+                            handleAssignSelectedToGroup(grp.name);
+                          }
+                        }}
+                        className={`px-3 py-2 rounded-t-2xl border-b border-black/10 flex flex-wrap items-center justify-between gap-2 ${
+                          selectedCount > 0 && !isEditingThis ? 'cursor-pointer hover:brightness-97' : ''
+                        }`}
                       >
                         {isEditingThis ? (
                           <form
@@ -718,95 +737,163 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                         ) : (
                           <>
                             <div className="flex items-center gap-1.5 min-w-0">
-                              <span className="font-bold text-slate-900 truncate">{grp.name}</span>
-                              <span className="px-1.5 py-0.2 rounded-full bg-white/75 text-slate-700 text-[10px] font-bold tabular-nums">
-                                {members.length}
+                              <span className="font-bold text-slate-900 break-words">{grp.name}</span>
+                              <span className="px-2 py-0.5 rounded-full bg-white/80 text-slate-700 text-[10px] font-bold tabular-nums shrink-0">
+                                {members.length} {members.length === 1 ? 'alumno' : 'alumnos'}
                               </span>
+                              {selectedInThisGroup > 0 && (
+                                <span className="px-1.5 py-0.5 rounded-full bg-blue-600 text-white text-[10px] font-bold tabular-nums shrink-0">
+                                  {selectedInThisGroup} sel.
+                                </span>
+                              )}
                             </div>
 
                             <div
-                              className="flex items-center gap-0.5 shrink-0"
+                              className="flex items-center gap-1 shrink-0"
                               onClick={(e) => e.stopPropagation()}
                             >
-                              {selectedCount > 0 ? (
+                              {members.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={toggleSelectWholeGroup}
+                                  title={
+                                    allMembersSelected
+                                      ? `Deseleccionar los ${members.length} alumnos de "${grp.name}"`
+                                      : `Seleccionar todos los alumnos de "${grp.name}"`
+                                  }
+                                  className={`px-2 py-1 rounded-lg border text-[10.5px] font-semibold transition-colors ${
+                                    allMembersSelected
+                                      ? 'bg-blue-600 border-blue-600 text-white'
+                                      : 'bg-white/80 border-black/10 text-slate-700 hover:bg-white'
+                                  }`}
+                                >
+                                  {allMembersSelected ? 'Deselec.' : 'Sel. grupo'}
+                                </button>
+                              )}
+
+                              {selectedCount > 0 && (
                                 <button
                                   type="button"
                                   onClick={() => handleAssignSelectedToGroup(grp.name)}
-                                  className="px-2 py-0.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[10.5px] font-bold shadow-2xs"
+                                  className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[10.5px] font-bold shadow-2xs"
                                 >
-                                  + Asignar ({selectedCount})
+                                  Mover aquí ({selectedCount})
                                 </button>
-                              ) : (
-                                <>
-                                  <button
-                                    type="button"
-                                    onClick={() => startEditGroup(grp.name, grp.color)}
-                                    title="Editar nombre y color"
-                                    className="p-1 rounded-lg hover:bg-white/60 text-slate-700"
-                                  >
-                                    <Pencil className="w-3 h-3" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      if (
-                                        window.confirm(
-                                          `¿Eliminar el grupo "${grp.name}"? Los alumnos quedarán sin grupo.`
-                                        )
-                                      ) {
-                                        deleteStudentGroup(grp.name);
-                                      }
-                                    }}
-                                    title="Eliminar grupo"
-                                    className="p-1 rounded-lg hover:bg-rose-100 text-rose-700"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                  </button>
-                                </>
                               )}
+
+                              <button
+                                type="button"
+                                onClick={() => startEditGroup(grp.name, grp.color)}
+                                title="Editar nombre y color"
+                                className="p-1 rounded-lg hover:bg-white/70 text-slate-700"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (
+                                    window.confirm(
+                                      `¿Eliminar el grupo "${grp.name}"? Los alumnos quedarán sin grupo.`
+                                    )
+                                  ) {
+                                    deleteStudentGroup(grp.name);
+                                  }
+                                }}
+                                title="Eliminar grupo"
+                                className="p-1 rounded-lg hover:bg-rose-100 text-rose-700"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
                             </div>
                           </>
                         )}
                       </div>
 
-                      {/* Group Members List (same full-width row style as left panel; 1 click anywhere removes student) */}
-                      <div className="p-2 bg-slate-50/60 flex-1 min-h-[72px] flex flex-col gap-1">
+                      {/* Group Members List: NEVER clips or shrinks; displays 100% of members below the header */}
+                      <div className="p-2.5 bg-slate-50/70 rounded-b-2xl flex flex-col gap-1.5">
                         {members.length === 0 ? (
-                          <span className="text-[11px] text-slate-400 italic m-auto py-3">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!isEditingThis && selectedCount > 0) {
+                                handleAssignSelectedToGroup(grp.name);
+                              }
+                            }}
+                            disabled={selectedCount === 0 || isEditingThis}
+                            className={`w-full py-3 px-2 rounded-xl border border-dashed text-[11px] italic text-center transition-colors ${
+                              selectedCount > 0 && !isEditingThis
+                                ? 'border-blue-300 bg-blue-50/60 hover:bg-blue-100/70 text-blue-700 font-semibold not-italic cursor-pointer'
+                                : 'border-slate-200 text-slate-400 cursor-default'
+                            }`}
+                          >
                             {selectedCount > 0
-                              ? `Pulsa aquí para asignar ${selectedCount} alumnos`
+                              ? `Pulsa aquí para meter a los ${selectedCount} alumnos seleccionados`
                               : 'Sin alumnos aún'}
-                          </span>
+                          </button>
                         ) : (
-                          members.map((st) => (
-                            <button
-                              key={st.id}
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                assignStudentsToGroup([st.id], undefined);
-                                flash(`"${st.lastName}, ${st.firstName}" quitado de "${grp.name}"`);
-                              }}
-                              title={`Quitar a ${st.lastName}, ${st.firstName} de "${grp.name}" con 1 clic`}
-                              className="group/member w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-white hover:border-rose-300 hover:bg-rose-50/70 text-left flex items-center justify-between gap-2 transition-all"
-                            >
-                              <div className="flex items-center gap-2 min-w-0">
-                                <span
-                                  style={{ backgroundColor: grp.color }}
-                                  className="w-3.5 h-3.5 rounded-sm border border-black/10 shrink-0 flex items-center justify-center"
+                          members.map((st, idx) => {
+                            const isMemberSelected = selectedStudentIds.has(st.id);
+                            return (
+                              <div
+                                key={st.id}
+                                draggable
+                                onDragStart={(e) => {
+                                  setDragStudentId(st.id);
+                                  e.dataTransfer.effectAllowed = 'move';
+                                  e.dataTransfer.setData('text/plain', st.id);
+                                }}
+                                onDragEnd={() => {
+                                  setDragStudentId(null);
+                                  setDragOverGroup(null);
+                                }}
+                                className={`w-full rounded-xl border flex items-stretch gap-1 transition-all ${
+                                  isMemberSelected
+                                    ? 'bg-blue-50 border-blue-400 ring-1 ring-blue-300 shadow-2xs'
+                                    : 'bg-white border-slate-200 hover:border-blue-300'
+                                }`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => toggleStudentSelection(st.id)}
+                                  title="Seleccionar alumno para cambiarlo de grupo o quitarlo"
+                                  className="flex-1 min-w-0 px-2.5 py-2 text-left flex items-center gap-2"
                                 >
-                                  <Check className="w-2.5 h-2.5 text-slate-800" />
-                                </span>
-                                <span className="font-semibold text-slate-800 group-hover/member:text-rose-800 truncate">
-                                  {st.lastName}, {st.firstName}
-                                </span>
+                                  {isMemberSelected ? (
+                                    <CheckSquare className="w-4 h-4 text-blue-600 shrink-0" />
+                                  ) : (
+                                    <Square className="w-4 h-4 text-slate-300 shrink-0" />
+                                  )}
+                                  <span className="text-[10.5px] font-bold text-slate-400 tabular-nums shrink-0">
+                                    {idx + 1}.
+                                  </span>
+                                  <span className="font-semibold text-slate-800 leading-snug break-words">
+                                    {st.lastName}, {st.firstName}
+                                  </span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    assignStudentsToGroup([st.id], undefined);
+                                    setSelectedStudentIds((prev) => {
+                                      if (!prev.has(st.id)) return prev;
+                                      const next = new Set(prev);
+                                      next.delete(st.id);
+                                      return next;
+                                    });
+                                    flash(`"${st.lastName}, ${st.firstName}" quitado de "${grp.name}"`);
+                                  }}
+                                  title={`Quitar a ${st.lastName}, ${st.firstName} de "${grp.name}"`}
+                                  aria-label={`Quitar a ${st.lastName}, ${st.firstName} de ${grp.name}`}
+                                  className="px-2.5 py-1.5 rounded-r-xl text-slate-400 hover:text-rose-700 hover:bg-rose-50 border-l border-slate-100 flex items-center gap-1 text-[10.5px] font-semibold shrink-0 transition-colors"
+                                >
+                                  <UserMinus className="w-3.5 h-3.5" />
+                                  <span className="hidden sm:inline">Quitar</span>
+                                </button>
                               </div>
-                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-400 group-hover/member:text-rose-600 shrink-0">
-                                <span className="hidden group-hover/member:inline">Quitar</span>
-                                <UserMinus className="w-3.5 h-3.5" />
-                              </span>
-                            </button>
-                          ))
+                            );
+                          })
                         )}
                       </div>
                     </div>
