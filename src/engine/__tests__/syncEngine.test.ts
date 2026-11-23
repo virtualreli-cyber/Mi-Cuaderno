@@ -148,4 +148,22 @@ describe('syncEngine — 3-way offline multi-device merge', () => {
     expect(result.workspace.settings.gridZoom).toBe(1.25);
     expect(result.workspace.settings.sidebarVisible).toBe(false);
   });
+
+  it('preserves remote lomloeCriteriaIds when local device only modified column width', () => {
+    const base = createSeedWorkspace();
+    const local = structuredClone(base);
+    const remote = structuredClone(base);
+
+    const targetColId = base.classes[0].tabs[0].columns[0].id;
+    local.classes[0].tabs[0].columns[0].width = 80;
+    local.updatedAt = '2026-11-23T10:00:00.000Z';
+
+    remote.classes[0].tabs[0].columns[0].lomloeCriteriaIds = ['1.1', '5.1'];
+    remote.updatedAt = '2026-11-23T09:00:00.000Z';
+
+    const result = mergeWorkspaces3Way(base, local, remote);
+    const mergedCol = result.workspace.classes[0].tabs[0].columns.find((c) => c.id === targetColId)!;
+    expect(mergedCol.width).toBe(80);
+    expect(mergedCol.lomloeCriteriaIds).toEqual(['1.1', '5.1']);
+  });
 });

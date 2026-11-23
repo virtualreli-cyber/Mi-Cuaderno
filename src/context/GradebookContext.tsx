@@ -68,6 +68,7 @@ import {
 import { mergeWorkspaces3Way, type SyncCellConflict } from '../engine/syncEngine';
 import {
   clearLocalWorkspace,
+  hydrateWorkspace,
   loadFirebaseWorkspace,
   loadLocalWorkspace,
   loadLocalWorkspaceSync,
@@ -3143,29 +3144,15 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, []);
 
   const restoreBackup = useCallback<GradebookContextValue['restoreBackup']>((backup) => {
-    if (!backup || !Array.isArray(backup.classes)) {
+    const hydrated = hydrateWorkspace(backup);
+    if (!hydrated) {
       throw new Error('El archivo no contiene un formato válido de copia de seguridad del cuaderno.');
     }
     const validated: GradebookWorkspace = {
-      version: backup.version || 1,
-      classes: backup.classes || [],
-      templates: backup.templates || [],
-      activeMode: backup.activeMode || 'CLASS',
-      activeClassId: backup.activeClassId || backup.classes[0]?.id || null,
-      activeTemplateId: backup.activeTemplateId || null,
-      activeTabByBook: backup.activeTabByBook || {},
-      rubrics: backup.rubrics || [],
-      lomloeKeyCompetences:
-        backup.lomloeKeyCompetences && backup.lomloeKeyCompetences.length > 0
-          ? backup.lomloeKeyCompetences
-          : DEFAULT_LOMLOE_KEY_COMPETENCES,
-      lomloeCurricula:
-        backup.lomloeCurricula && backup.lomloeCurricula.length > 0
-          ? backup.lomloeCurricula
-          : DEFAULT_LOMLOE_RELIGION_CURRICULA,
+      ...hydrated,
       settings: {
         ...createSeedWorkspace().settings,
-        ...(backup.settings || {}),
+        ...(hydrated.settings || {}),
       },
       updatedAt: new Date().toISOString(),
     };

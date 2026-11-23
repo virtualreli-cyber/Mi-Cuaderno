@@ -213,7 +213,7 @@ export function computeRubricPercentage(
   let hasAnySelection = false;
 
   for (const crit of rubric.criteria) {
-    const sel = evalData.selections[crit.id];
+    const sel = evalData.selections?.[crit.id];
     if (!sel?.levelId) continue;
     const lvl = rubric.levels.find((l) => l.id === sel.levelId);
     if (!lvl) continue;

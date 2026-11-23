@@ -42,6 +42,63 @@ export function inferReligionCurriculumId(
   return null;
 }
 
+/**
+ * Mapeo canónico verificado en las capturas de iDoceo para tareas de 1ª Evaluación
+ * (1º ESO desde Plantilla_1_ESO y 3º ESO desde 3 ESO A - M - Ed - 26/27).
+ */
+export const VERIFIED_IDOCEO_CRITERIA_MAP: Record<'1_ESO' | '3_ESO', Record<string, string[]>> = {
+  '1_ESO': {
+    'talentos propios': ['1.1'],
+    'contextos dignos': ['1.2'],
+    'citas biblicas': ['1.2', '3.1', '6.1'],
+    'mediambiente': ['3.1', '6.1'],
+    'medioambiente': ['3.1', '6.1'],
+    'derechos humanos': ['1.1', '1.2', '3.2'],
+    'noticias de esperanza': ['1.2', '2.1', '4.2'],
+    'examen': ['1.1', '1.2', '2.1', '2.2', '6.1', '6.2'],
+  },
+  '3_ESO': {
+    'preguntas fundamentales': ['1.1', '5.1'],
+    'creencias y certezas': ['1.1', '6.2'],
+    'tabla de sentidos': ['1.2', '5.1'],
+    'mi religion': ['4.2', '5.1'],
+    'gabinete existencial': ['1.2', '2.2', '5.1', '6.2'],
+    'ex - busqueda de sentido': ['1.2', '5.1', '5.2', '6.2'],
+  },
+};
+
+function normalizeLomloeMatchText(value?: string | null): string {
+  return (value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+export function getVerifiedLomloeCriteriaForColumn(
+  bookName: string | null | undefined,
+  tabTitle: string | null | undefined,
+  columnTitle: string | null | undefined
+): string[] | undefined {
+  const normBook = normalizeLomloeMatchText(bookName);
+  const normTab = normalizeLomloeMatchText(tabTitle);
+  const normCol = normalizeLomloeMatchText(columnTitle);
+  if (!normBook || !normCol) return undefined;
+  if (!/^1[aªº°]?\s*evaluacion$/.test(normTab)) return undefined;
+
+  let courseKey: '1_ESO' | '3_ESO' | null = null;
+  if (/\b(?:1(?:\.?[ºoaª°])?|primero)\s*(?:de\s*)?eso\b/.test(normBook)) {
+    courseKey = '1_ESO';
+  } else if (/\b(?:3(?:\.?[ºoaª°])?|tercero)\s*(?:de\s*)?eso\b/.test(normBook)) {
+    courseKey = '3_ESO';
+  }
+  if (!courseKey) return undefined;
+
+  const found = VERIFIED_IDOCEO_CRITERIA_MAP[courseKey][normCol];
+  return found ? [...found] : undefined;
+}
+
 export function resolveBookCurriculum(
   book: Pick<ClassBook, 'name' | 'subject' | 'lomloeCurriculumId'> | null | undefined,
   curricula: LomloeCurriculum[] | undefined

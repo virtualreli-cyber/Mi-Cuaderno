@@ -5,6 +5,7 @@ import {
 } from '../../data/lomloeReligion';
 import {
   computeStudentLomloeStats,
+  getVerifiedLomloeCriteriaForColumn,
   inferReligionCurriculumId,
   resolveBookCurriculum,
   resolveColumnLomloeSummary,
@@ -137,5 +138,31 @@ describe('LOMLOE Religión Católica curriculum engine', () => {
     expect(stats.byCriterion['1.1'].count).toBe(2);
     expect(stats.byCriterion['5.1'].avg).toBeCloseTo(9.0);
     expect(stats.byKeyCompetence['CC'].avg).toBeCloseTo(8.5);
+  });
+
+  it('resolves verified iDoceo criteria strictly for 1º ESO and 3º ESO 1ª Evaluación tasks', () => {
+    expect(
+      getVerifiedLomloeCriteriaForColumn('1º ESO B · Ribarroja', '1ª Evaluación', 'Talentos propios')
+    ).toEqual(['1.1']);
+    expect(
+      getVerifiedLomloeCriteriaForColumn('1º ESO A · Manises', '1ª Evaluación', 'Examen')
+    ).toEqual(['1.1', '1.2', '2.1', '2.2', '6.1', '6.2']);
+    expect(
+      getVerifiedLomloeCriteriaForColumn('3º ESO A · Ribarroja', '1ª Evaluación', 'Preguntas fundamentales')
+    ).toEqual(['1.1', '5.1']);
+    expect(
+      getVerifiedLomloeCriteriaForColumn('3º ESO B · Manises', '1ª Evaluación', 'EX - Búsqueda de sentido')
+    ).toEqual(['1.2', '5.1', '5.2', '6.2']);
+
+    // Do NOT apply 1ª Ev criteria to 2ª/3ª Ev placeholders or unverified grades (2º ESO, 4º ESO, 1º BAC)
+    expect(
+      getVerifiedLomloeCriteriaForColumn('1º ESO A · Ribarroja', '2ª Evaluación', 'Examen')
+    ).toBeUndefined();
+    expect(
+      getVerifiedLomloeCriteriaForColumn('2º ESO A · Ribarroja', '1ª Evaluación', 'Examen')
+    ).toBeUndefined();
+    expect(
+      getVerifiedLomloeCriteriaForColumn('4º ESO A · Manises', '1ª Evaluación', 'Etiquetas')
+    ).toBeUndefined();
   });
 });

@@ -180,7 +180,35 @@ function mergeTab(
     baseTab?.columns,
     localTab.columns,
     remoteTab.columns,
-    preferLocal
+    preferLocal,
+    (baseCol, localCol, remoteCol) => {
+      const chosen = preferLocal ? localCol : remoteCol;
+      const baseCriteria = baseCol?.lomloeCriteriaIds ?? [];
+      const localCriteria = localCol.lomloeCriteriaIds ?? [];
+      const remoteCriteria = remoteCol.lomloeCriteriaIds ?? [];
+      let mergedCriteria = chosen.lomloeCriteriaIds;
+      if (baseCol) {
+        const localChangedCrit = !sameValue(localCriteria, baseCriteria);
+        const remoteChangedCrit = !sameValue(remoteCriteria, baseCriteria);
+        if (localChangedCrit && !remoteChangedCrit) {
+          mergedCriteria = localCol.lomloeCriteriaIds;
+        } else if (!localChangedCrit && remoteChangedCrit) {
+          mergedCriteria = remoteCol.lomloeCriteriaIds;
+        }
+      } else if (
+        (!mergedCriteria || mergedCriteria.length === 0) &&
+        (localCriteria.length > 0 || remoteCriteria.length > 0)
+      ) {
+        mergedCriteria =
+          localCriteria.length > 0 ? localCol.lomloeCriteriaIds : remoteCol.lomloeCriteriaIds;
+      }
+      if (mergedCriteria !== undefined) {
+        return { ...chosen, lomloeCriteriaIds: mergedCriteria };
+      }
+      const next = { ...chosen };
+      delete next.lomloeCriteriaIds;
+      return next;
+    }
   );
 
   // Merge itemOrder preserving all surviving top-level folder & standalone column IDs

@@ -5,6 +5,7 @@ import {
   DEFAULT_LOMLOE_RELIGION_CURRICULA,
 } from '../data/lomloeReligion';
 import { migrateRedundantFolderAverageColumns, recalculateBook } from '../engine/gradeMath';
+import { getVerifiedLomloeCriteriaForColumn, inferReligionCurriculumId } from '../engine/lomloe';
 import type {
   CellEntity,
   ClassBook,
@@ -118,7 +119,8 @@ function hydrateCells(rawCells: Record<string, CellEntity> | undefined): Record<
 function hydrateBook(
   book: ClassBook,
   rubrics: GradebookWorkspace['rubrics'],
-  isTemplate = false
+  isTemplate = false,
+  backfillVerifiedLomloe = false
 ): ClassBook {
   const hydrated: ClassBook = {
     ...book,
@@ -143,7 +145,9 @@ function hydrateBook(
       ? toArray<ColumnSummaryMetric>(book.groupSummaryRows)
       : undefined,
     lomloeCurriculumId:
-      book.lomloeCurriculumId !== undefined ? book.lomloeCurriculumId : undefined,
+      book.lomloeCurriculumId !== undefined
+        ? book.lomloeCurriculumId
+        : inferReligionCurriculumId(book.name, book.subject) ?? undefined,
     showLomloeRow:
       typeof book.showLomloeRow === 'boolean' ? book.showLomloeRow : undefined,
     students: toArray<ClassBook['students'][number]>(book.students).map((s, idx) => ({
@@ -186,9 +190,15 @@ function hydrateBook(
         rubricShowPercentage: Boolean(c.rubricShowPercentage),
         summaryRowOverrides: c.summaryRowOverrides ?? undefined,
         groupSummaryRowOverrides: c.groupSummaryRowOverrides ?? undefined,
-        lomloeCriteriaIds: c.lomloeCriteriaIds
-          ? toArray<string>(c.lomloeCriteriaIds)
-          : undefined,
+        lomloeCriteriaIds: (() => {
+          const direct = c.lomloeCriteriaIds ? toArray<string>(c.lomloeCriteriaIds) : [];
+          if (direct.length > 0) return direct;
+          if (backfillVerifiedLomloe && !isTemplate) {
+            const verified = getVerifiedLomloeCriteriaForColumn(book.name, t.title, c.title);
+            if (verified && verified.length > 0) return verified;
+          }
+          return undefined;
+        })(),
         averageConfig:
           c.type === 'AVERAGE'
             ? {
@@ -251,10 +261,14 @@ export function hydrateWorkspace(raw: Partial<GradebookWorkspace>): GradebookWor
           criteria: cur.criteria.map((cr) => ({ ...cr })),
         }));
 
-  const classes = rawClasses.map((c) => hydrateBook(c, rubrics, false));
-  const templates = toArray<ClassBook>(raw.templates).map((t) => hydrateBook(t, rubrics, true));
+  const rawVersion = typeof raw.version === 'number' ? raw.version : 1;
+  const shouldBackfillLomloe = rawVersion < 3;
+  const classes = rawClasses.map((c) => hydrateBook(c, rubrics, false, shouldBackfillLomloe));
+  const templates = toArray<ClassBook>(raw.templates).map((t) =>
+    hydrateBook(t, rubrics, true, false)
+  );
   return {
-    version: raw.version ?? 1,
+    version: Math.max(rawVersion, 3),
     classes,
     templates,
     activeMode: raw.activeMode ?? 'CLASS',
