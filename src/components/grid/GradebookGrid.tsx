@@ -1,4 +1,12 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { createPortal } from 'react-dom';
 import {
   ArrowDown,
@@ -81,7 +89,12 @@ import {
   type FolderEntity,
   type StudentEntity,
 } from '../../types/gradebook';
-import { clampZoom, usePinchZoom, ZoomControls } from '../common/ZoomControls';
+import {
+  clampZoom,
+  usePinchZoom,
+  ZoomControls,
+  type PinchGestureMeta,
+} from '../common/ZoomControls';
 import { LomloeCompetenceBadge } from '../lomloe/LomloeCompetenceBadge';
 import { LomloeCriteriaPickerPopover } from '../lomloe/LomloeCriteriaPickerPopover';
 
@@ -148,6 +161,34 @@ function measureTextPx(text: string, font: string): number {
   return ctx.measureText(text).width;
 }
 
+interface GradebookZoomBarHandle {
+  setPreviewZoom: (next: number | null) => void;
+}
+
+const GradebookZoomBar = React.memo(
+  React.forwardRef<
+    GradebookZoomBarHandle,
+    {
+      zoom: number;
+      min?: number;
+      max?: number;
+      onChangeZoom: (next: number) => void;
+    }
+  >(({ zoom, min = 0.5, max = 1.8, onChangeZoom }, ref) => {
+    const [previewZoom, setPreviewZoom] = useState<number | null>(null);
+    useImperativeHandle(ref, () => ({ setPreviewZoom }), []);
+    return (
+      <ZoomControls
+        zoom={previewZoom ?? zoom}
+        min={min}
+        max={max}
+        onChangeZoom={onChangeZoom}
+      />
+    );
+  })
+);
+GradebookZoomBar.displayName = 'GradebookZoomBar';
+
 export const GradebookGrid: React.FC<GradebookGridProps> = ({
   searchQuery,
   onEditStudent,
@@ -204,6 +245,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   } = useGradebook();
 
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const tableRef = useRef<HTMLTableElement>(null);
+  const zoomBarRef = useRef<GradebookZoomBarHandle>(null);
   const inlineInputRef = useRef<HTMLTextAreaElement>(null);
   const addBtnRef = useRef<HTMLButtonElement>(null);
   const skipNextBlurRef = useRef(false);
@@ -320,12 +363,269 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   const lastHandledUndoneSeqRef = useRef(0);
 
   const gridZoom = workspace.settings.gridZoom ?? 1;
+  const prevCommittedZoomRef = useRef(gridZoom);
+  const activeZoomAnimRef = useRef<Animation | null>(null);
+  const livePinchZoomRef = useRef<number | null>(null);
+  const pinchRafRef = useRef<number | null>(null);
+  const pinchCommitMetaRef = useRef<{
+    targetZoom: number;
+    fromLayoutZoom: number;
+    fromScrollLeft: number;
+    fromScrollTop: number;
+  } | null>(null);
+  const pendingZoomTransitionRef = useRef<{
+    fromVisualZoom: number;
+    fromLayoutZoom: number;
+    fromScrollLeft: number;
+    fromScrollTop: number;
+  } | null>(null);
+
+  const readTableLiveScale = useCallback((tableEl: HTMLTableElement | null): number => {
+    if (!tableEl) return 1;
+    const inlineScale = Number.parseFloat(tableEl.style.scale);
+    if (Number.isFinite(inlineScale) && inlineScale > 0.05) return inlineScale;
+    const computedScale = Number.parseFloat(getComputedStyle(tableEl).scale);
+    if (Number.isFinite(computedScale) && computedScale > 0.05) return computedScale;
+    const matrixStr = getComputedStyle(tableEl).transform;
+    if (matrixStr && matrixStr !== 'none') {
+      const m = new DOMMatrixReadOnly(matrixStr);
+      if (Number.isFinite(m.a) && m.a > 0.05) return m.a;
+    }
+    return 1;
+  }, []);
+
+  const capturePreZoomVisualState = useCallback(() => {
+    const tableEl = tableRef.current;
+    const wrapper = wrapperRef.current;
+    const prevLayoutZoom = prevCommittedZoomRef.current;
+    let currentVisualZoom = prevLayoutZoom;
+
+    if (livePinchZoomRef.current !== null) {
+      currentVisualZoom = livePinchZoomRef.current;
+    } else if (tableEl && activeZoomAnimRef.current) {
+      currentVisualZoom = prevLayoutZoom * readTableLiveScale(tableEl);
+    }
+
+    pendingZoomTransitionRef.current = {
+      fromVisualZoom: currentVisualZoom,
+      fromLayoutZoom: prevLayoutZoom,
+      fromScrollLeft: wrapper?.scrollLeft ?? 0,
+      fromScrollTop: wrapper?.scrollTop ?? 0,
+    };
+  }, [readTableLiveScale]);
+
+  const commitSteppedZoom = useCallback(
+    (nextRaw: number) => {
+      const nextZoom = clampZoom(nextRaw, 0.5, 1.8);
+      if (Math.abs(nextZoom - gridZoom) < 0.001) return;
+      capturePreZoomVisualState();
+      updateSettings({ gridZoom: nextZoom });
+    },
+    [gridZoom, capturePreZoomVisualState, updateSettings]
+  );
+
+  const applyLivePinchScaleFrame = useCallback(() => {
+    pinchRafRef.current = null;
+    const tableEl = tableRef.current;
+    const wrapper = wrapperRef.current;
+    const liveZoom = livePinchZoomRef.current;
+    if (!tableEl || !wrapper || liveZoom === null) return;
+    const ratio = liveZoom / prevCommittedZoomRef.current;
+    tableEl.style.willChange = 'transform';
+    tableEl.style.transformOrigin = `${wrapper.scrollLeft}px ${wrapper.scrollTop}px`;
+    tableEl.style.scale = String(ratio);
+  }, []);
+
+  const handleLivePinchZoom = useCallback(
+    (liveZoom: number, meta: PinchGestureMeta) => {
+      const tableEl = tableRef.current;
+      const wrapper = wrapperRef.current;
+
+      if (meta.phase === 'start') {
+        if (activeZoomAnimRef.current && tableEl) {
+          const midScale = readTableLiveScale(tableEl);
+          livePinchZoomRef.current = prevCommittedZoomRef.current * midScale;
+          activeZoomAnimRef.current.cancel();
+          activeZoomAnimRef.current = null;
+        }
+        return;
+      }
+
+      if (meta.phase === 'move') {
+        livePinchZoomRef.current = liveZoom;
+        zoomBarRef.current?.setPreviewZoom(liveZoom);
+        if (pinchRafRef.current === null) {
+          pinchRafRef.current = window.requestAnimationFrame(applyLivePinchScaleFrame);
+        }
+        return;
+      }
+
+      // phase === 'end'
+      if (pinchRafRef.current !== null) {
+        window.cancelAnimationFrame(pinchRafRef.current);
+        pinchRafRef.current = null;
+      }
+      zoomBarRef.current?.setPreviewZoom(null);
+      const fromVisualZoom = livePinchZoomRef.current ?? prevCommittedZoomRef.current;
+      livePinchZoomRef.current = null;
+
+      const committed = clampZoom(liveZoom, 0.5, 1.8);
+      const fromLayoutZoom = prevCommittedZoomRef.current;
+
+      if (Math.abs(committed - fromLayoutZoom) < 0.005) {
+        // Returned to the same committed zoom: smoothly release any residual scale
+        if (tableEl) {
+          const startScale = fromVisualZoom / fromLayoutZoom;
+          tableEl.style.scale = '1';
+          const prefersReduced =
+            typeof window !== 'undefined' &&
+            window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          if (!prefersReduced && Math.abs(startScale - 1) > 0.004 && typeof tableEl.animate === 'function') {
+            tableEl.style.willChange = 'transform';
+            if (wrapper) {
+              tableEl.style.transformOrigin = `${wrapper.scrollLeft}px ${wrapper.scrollTop}px`;
+            }
+            const anim = tableEl.animate(
+              [{ scale: String(startScale) }, { scale: '1' }],
+              { duration: 160, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
+            );
+            activeZoomAnimRef.current = anim;
+            const cleanup = () => {
+              if (activeZoomAnimRef.current !== anim) return;
+              activeZoomAnimRef.current = null;
+              tableEl.style.willChange = '';
+              tableEl.style.transformOrigin = '';
+            };
+            anim.onfinish = cleanup;
+            anim.oncancel = cleanup;
+          } else {
+            tableEl.style.willChange = '';
+            tableEl.style.transformOrigin = '';
+          }
+        }
+        return;
+      }
+
+      pinchCommitMetaRef.current = {
+        targetZoom: committed,
+        fromLayoutZoom,
+        fromScrollLeft: wrapper?.scrollLeft ?? 0,
+        fromScrollTop: wrapper?.scrollTop ?? 0,
+      };
+    },
+    [applyLivePinchScaleFrame, readTableLiveScale]
+  );
+
   usePinchZoom(
     wrapperRef,
     gridZoom,
     (next) => updateSettings({ gridZoom: next }),
-    { min: 0.5, max: 1.8 }
+    { min: 0.5, max: 1.8, onLiveZoom: handleLivePinchZoom }
   );
+
+  // Smoothly reconcile layout zoom changes:
+  // - After a live pinch finishes, swap GPU scale for crisp vector layout in a single pre-paint frame.
+  // - After clicking +/-/100% or Cmd/Ctrl +/-/0 (or Aspect Undo), play a GPU FLIP scale animation.
+  useLayoutEffect(() => {
+    const prevZoom = prevCommittedZoomRef.current;
+    prevCommittedZoomRef.current = gridZoom;
+    if (prevZoom === gridZoom) return;
+
+    if (pinchRafRef.current !== null) {
+      window.cancelAnimationFrame(pinchRafRef.current);
+      pinchRafRef.current = null;
+    }
+    if (activeZoomAnimRef.current) {
+      activeZoomAnimRef.current.cancel();
+      activeZoomAnimRef.current = null;
+    }
+    livePinchZoomRef.current = null;
+
+    const tableEl = tableRef.current;
+    const wrapper = wrapperRef.current;
+    if (!tableEl) return;
+
+    const pinchMeta = pinchCommitMetaRef.current;
+    if (pinchMeta && Math.abs(pinchMeta.targetZoom - gridZoom) < 0.001) {
+      pinchCommitMetaRef.current = null;
+      pendingZoomTransitionRef.current = null;
+      const ratio = gridZoom / pinchMeta.fromLayoutZoom;
+      tableEl.style.scale = '1';
+      tableEl.style.willChange = '';
+      tableEl.style.transformOrigin = '';
+      if (wrapper) {
+        wrapper.scrollLeft = Math.round(pinchMeta.fromScrollLeft * ratio);
+        wrapper.scrollTop = Math.round(pinchMeta.fromScrollTop * ratio);
+      }
+      return;
+    }
+    pinchCommitMetaRef.current = null;
+
+    const pending = pendingZoomTransitionRef.current;
+    pendingZoomTransitionRef.current = null;
+
+    const fromVisualZoom = pending?.fromVisualZoom ?? prevZoom;
+    const fromLayoutZoom = pending?.fromLayoutZoom ?? prevZoom;
+    const ratio = gridZoom / fromLayoutZoom;
+
+    if (wrapper) {
+      const baseSL = pending?.fromScrollLeft ?? wrapper.scrollLeft;
+      const baseST = pending?.fromScrollTop ?? wrapper.scrollTop;
+      wrapper.scrollLeft = Math.round(baseSL * ratio);
+      wrapper.scrollTop = Math.round(baseST * ratio);
+    }
+
+    tableEl.style.scale = '1';
+
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const startScale = fromVisualZoom / gridZoom;
+
+    if (
+      prefersReducedMotion ||
+      Math.abs(startScale - 1) <= 0.002 ||
+      typeof tableEl.animate !== 'function'
+    ) {
+      tableEl.style.willChange = '';
+      tableEl.style.transformOrigin = '';
+      return;
+    }
+
+    const sL = wrapper?.scrollLeft ?? 0;
+    const sT = wrapper?.scrollTop ?? 0;
+    tableEl.style.transformOrigin = `${sL}px ${sT}px`;
+    tableEl.style.willChange = 'transform';
+
+    const anim = tableEl.animate(
+      [{ scale: String(startScale) }, { scale: '1' }],
+      {
+        duration: 210,
+        easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+      }
+    );
+    activeZoomAnimRef.current = anim;
+
+    const cleanup = () => {
+      if (activeZoomAnimRef.current !== anim) return;
+      activeZoomAnimRef.current = null;
+      tableEl.style.willChange = '';
+      tableEl.style.transformOrigin = '';
+    };
+    anim.onfinish = cleanup;
+    anim.oncancel = cleanup;
+  }, [gridZoom]);
+
+  useEffect(() => {
+    return () => {
+      if (pinchRafRef.current !== null) {
+        window.cancelAnimationFrame(pinchRafRef.current);
+      }
+      if (activeZoomAnimRef.current) {
+        activeZoomAnimRef.current.cancel();
+      }
+    };
+  }, []);
 
   // Close menus on outside click
   useEffect(() => {
@@ -1577,17 +1877,17 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       if (isMod && !inInput && !inlineEdit) {
         if (e.key === '+' || e.key === '=') {
           e.preventDefault();
-          updateSettings({ gridZoom: clampZoom(gridZoom + 0.1, 0.5, 1.8) });
+          commitSteppedZoom(gridZoom + 0.1);
           return;
         }
         if (e.key === '-') {
           e.preventDefault();
-          updateSettings({ gridZoom: clampZoom(gridZoom - 0.1, 0.5, 1.8) });
+          commitSteppedZoom(gridZoom - 0.1);
           return;
         }
         if (e.key === '0') {
           e.preventDefault();
-          updateSettings({ gridZoom: 1 });
+          commitSteppedZoom(1);
           return;
         }
       }
@@ -1755,7 +2055,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     copySelectionToClipboard,
     undo,
     gridZoom,
-    updateSettings,
+    commitSteppedZoom,
   ]);
 
   // Global Ctrl/Cmd + V paste handler when cell(s) are selected in the grid
@@ -2269,7 +2569,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         title={`${col.title} — 1 clic: seleccionar columna · Doble clic o clic derecho: editar · Arrastra borde derecho para ancho`}
         className={`border-r border-b border-slate-300 ${
           !isStandalone ? 'border-t border-t-slate-300/80' : ''
-        } p-0 relative group cursor-pointer transition-all align-middle overflow-hidden hover:brightness-97 ${
+        } p-0 relative group cursor-pointer transition-[background-color,border-color,color,filter,opacity,box-shadow] align-middle overflow-hidden hover:brightness-97 ${
           isDraggingThis ? 'opacity-60' : ''
         } ${isColSelected ? 'col-header-selected' : ''}`}
       >
@@ -2462,13 +2762,16 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         }}
         className="flex-1 min-h-0 overflow-auto bg-slate-50 focus:outline-none relative gradebook-touch-surface"
       >
+      <div style={{ width: totalTableWidth, minWidth: '100%', overflow: 'clip' }}>
       <table
+        ref={tableRef}
         style={{
           tableLayout: 'fixed',
           width: totalTableWidth,
           borderCollapse: 'separate',
           borderSpacing: 0,
           fontSize: `${scaledTextFs}px`,
+          scale: '1',
         }}
         className="select-none"
       >
@@ -2951,7 +3254,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   title={`${folder.title} — Doble clic aquí: ${
                     isClosed ? 'desplegar' : 'plegar'
                   } carpeta · 1 clic: seleccionar · Clic derecho o ⋮: configurar`}
-                  className={`border-r border-b-0 border-slate-300 p-0 text-center cursor-pointer hover:brightness-97 transition-all relative group overflow-hidden ${
+                  className={`border-r border-b-0 border-slate-300 p-0 text-center cursor-pointer hover:brightness-97 transition-[background-color,border-color,color,filter,opacity,box-shadow] relative group overflow-hidden ${
                     hint === 'INSIDE' ? 'ring-2 ring-inset ring-blue-500' : ''
                   } ${isDraggingThis ? 'opacity-60' : ''} ${
                     isFldSelected ? 'col-header-selected' : ''
@@ -3248,7 +3551,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     title={`${folder.title} (resumen) — 1 clic: seleccionar · Doble clic o clic derecho aquí: configurar · Doble clic arriba: ${
                       isOpen ? 'plegar' : 'desplegar'
                     }`}
-                    className={`border-r border-b border-t-0 border-slate-300 p-0 relative group cursor-pointer align-middle transition-all hover:brightness-97 overflow-hidden ${
+                    className={`border-r border-b border-t-0 border-slate-300 p-0 relative group cursor-pointer align-middle transition-[background-color,border-color,color,filter,opacity,box-shadow] hover:brightness-97 overflow-hidden ${
                       dropHint?.key === key ? 'ring-2 ring-inset ring-blue-500' : ''
                     } ${isFldSelected ? 'col-header-selected' : ''}`}
                   >
@@ -3668,7 +3971,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                               ? `Grupo "${bucket.name}" · Doble clic: ver estadísticas en carpeta ${slot.folder.title}`
                               : `Grupo "${bucket.name}" · Doble clic: modificar notas o ver estadísticas en ${slot.col.title}`
                           }
-                          className={`border-r border-b border-t border-slate-300 text-center align-middle cursor-pointer hover:brightness-95 transition-all ${
+                          className={`border-r border-b border-t border-slate-300 text-center align-middle cursor-pointer hover:brightness-95 transition-[background-color,border-color,color,filter,opacity,box-shadow] ${
                             isActivePopover || isSelectedGroupCol
                               ? 'ring-2 ring-inset ring-blue-600'
                               : isSlotColumnSelected(slot)
@@ -4511,7 +4814,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                               });
                             }}
                             title={`${bucket.name} · ${metricOpt?.label ?? ''}: ${formatted || '—'} · Doble clic para cambiar (se aplica a todos los grupos)`}
-                            className={`border-r border-b border-slate-200 px-1 py-0.5 text-center align-middle cursor-pointer hover:brightness-95 transition-all ${
+                            className={`border-r border-b border-slate-200 px-1 py-0.5 text-center align-middle cursor-pointer hover:brightness-95 transition-[background-color,border-color,color,filter,opacity,box-shadow] ${
                               isSelectedGrpCell
                                 ? 'ring-2 ring-inset ring-blue-600 z-10'
                                 : isSlotColumnSelected(slot)
@@ -4786,7 +5089,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       title={`${metricOpt?.label ?? ''}: ${formatted || '—'} · Doble clic para cambiar resumen de esta columna`}
                       className={`border-r border-b border-slate-300 ${
                         rowIdx === 0 ? 'border-t-2 border-t-slate-300' : ''
-                      } px-1 py-0.5 text-center font-bold text-slate-800 tabular-nums cursor-pointer hover:brightness-95 transition-all text-[0.9em] ${
+                      } px-1 py-0.5 text-center font-bold text-slate-800 tabular-nums cursor-pointer hover:brightness-95 transition-[background-color,border-color,color,filter,opacity,box-shadow] text-[0.9em] ${
                         isSelectedCell
                           ? 'ring-2 ring-inset ring-blue-600 z-10'
                           : isSlotColumnSelected(slot)
@@ -4901,6 +5204,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         </tfoot>
         )}
       </table>
+      </div>
 
       {/* Floating Quick-Counter +/- popup strip anchored to the RIGHT of the active column */}
       {quickCounterPopup && (
@@ -6147,11 +6451,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         }}
         className="absolute z-30"
       >
-        <ZoomControls
+        <GradebookZoomBar
+          ref={zoomBarRef}
           zoom={gridZoom}
           min={0.5}
           max={1.8}
-          onChangeZoom={(next) => updateSettings({ gridZoom: next })}
+          onChangeZoom={commitSteppedZoom}
         />
       </div>
       </div>

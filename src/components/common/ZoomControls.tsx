@@ -5,6 +5,15 @@ export function clampZoom(value: number, min = 0.5, max = 1.8): number {
   return Math.round(Math.max(min, Math.min(max, value)) * 100) / 100;
 }
 
+export function clampFloatZoom(value: number, min = 0.5, max = 1.8): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+export interface PinchGestureMeta {
+  phase: 'start' | 'move' | 'end';
+  source: 'wheel' | 'gesture' | 'touch';
+}
+
 function getTouchDistance(t1: Touch, t2: Touch): number {
   const dx = t1.clientX - t2.clientX;
   const dy = t1.clientY - t2.clientY;
@@ -14,27 +23,60 @@ function getTouchDistance(t1: Touch, t2: Touch): number {
 /**
  * Attaches non-passive pinch-to-zoom to a scrollable container without triggering browser full-page zoom:
  * - Desktop trackpad / Ctrl+wheel (`wheel` with `ctrlKey`)
- * - Safari macOS/iPadOS `gesturestart` / `gesturechange`
- * - Multi-touch 2-finger pinch (`touchstart` / `touchmove` on iPadOS & Android tablets/phones)
+ * - Safari macOS/iPadOS `gesturestart` / `gesturechange` / `gestureend`
+ * - Multi-touch 2-finger pinch (`touchstart` / `touchmove` / `touchend` on iPadOS & Android tablets/phones)
  * Single-finger panning stays 100% native and uninterrupted.
+ *
+ * When `onLiveZoom` is provided, emits continuous unrounded zoom values at frame rate during the
+ * gesture without committing to React state/undo until the gesture settles (`phase: 'end'`).
  */
 export function usePinchZoom(
   containerRef: React.RefObject<HTMLElement | null>,
   zoom: number,
   onChangeZoom: (nextZoom: number) => void,
-  options: { min?: number; max?: number; enabled?: boolean } = {}
+  options: {
+    min?: number;
+    max?: number;
+    enabled?: boolean;
+    onLiveZoom?: (liveZoom: number, meta: PinchGestureMeta) => void;
+    wheelSettleMs?: number;
+  } = {}
 ) {
-  const { min = 0.5, max = 1.8, enabled = true } = options;
+  const { min = 0.5, max = 1.8, enabled = true, onLiveZoom, wheelSettleMs = 130 } = options;
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
   const onChangeRef = useRef(onChangeZoom);
   onChangeRef.current = onChangeZoom;
+  const onLiveZoomRef = useRef(onLiveZoom);
+  onLiveZoomRef.current = onLiveZoom;
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el || !enabled) return;
 
     el.setAttribute('data-pinch-zoom-surface', 'true');
+
+    let wheelActive = false;
+    let wheelSettleTimer: number | null = null;
+    let liveWheelZoom = zoomRef.current;
+
+    const clearWheelSettle = () => {
+      if (wheelSettleTimer !== null) {
+        window.clearTimeout(wheelSettleTimer);
+        wheelSettleTimer = null;
+      }
+    };
+
+    const finishWheelGesture = () => {
+      clearWheelSettle();
+      if (!wheelActive) return;
+      wheelActive = false;
+      const committed = clampZoom(liveWheelZoom, min, max);
+      onLiveZoomRef.current?.(committed, { phase: 'end', source: 'wheel' });
+      if (Math.abs(committed - zoomRef.current) >= 0.005) {
+        onChangeRef.current(committed);
+      }
+    };
 
     const handleWheel = (e: WheelEvent) => {
       if (!e.ctrlKey) return;
@@ -43,40 +85,84 @@ export function usePinchZoom(
 
       // Trackpad pinch deltaY is small; mouse ctrl+wheel is larger (~100)
       const stepFactor = Math.abs(e.deltaY) > 40 ? 0.0022 : 0.0065;
-      const next = clampZoom(zoomRef.current * Math.exp(-e.deltaY * stepFactor), min, max);
-      if (Math.abs(next - zoomRef.current) >= 0.005) {
-        onChangeRef.current(next);
+      if (!wheelActive) {
+        wheelActive = true;
+        liveWheelZoom = zoomRef.current;
+        onLiveZoomRef.current?.(liveWheelZoom, { phase: 'start', source: 'wheel' });
+      }
+      liveWheelZoom = clampFloatZoom(liveWheelZoom * Math.exp(-e.deltaY * stepFactor), min, max);
+
+      if (onLiveZoomRef.current) {
+        onLiveZoomRef.current(liveWheelZoom, { phase: 'move', source: 'wheel' });
+        clearWheelSettle();
+        wheelSettleTimer = window.setTimeout(finishWheelGesture, wheelSettleMs);
+      } else {
+        const next = clampZoom(liveWheelZoom, min, max);
+        if (Math.abs(next - zoomRef.current) >= 0.005) {
+          onChangeRef.current(next);
+        }
+        clearWheelSettle();
+        wheelSettleTimer = window.setTimeout(() => {
+          wheelActive = false;
+          wheelSettleTimer = null;
+        }, wheelSettleMs);
       }
     };
 
     let gestureBaseZoom = zoomRef.current;
+    let liveGestureZoom = zoomRef.current;
+    let gestureActive = false;
     const handleGestureStart = (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
+      clearWheelSettle();
+      wheelActive = false;
+      gestureActive = true;
       gestureBaseZoom = zoomRef.current;
+      liveGestureZoom = gestureBaseZoom;
+      onLiveZoomRef.current?.(liveGestureZoom, { phase: 'start', source: 'gesture' });
     };
     const handleGestureChange = (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
       const scale = (e as unknown as { scale?: number }).scale;
       if (typeof scale === 'number' && scale > 0) {
-        onChangeRef.current(clampZoom(gestureBaseZoom * scale, min, max));
+        liveGestureZoom = clampFloatZoom(gestureBaseZoom * scale, min, max);
+        if (onLiveZoomRef.current) {
+          onLiveZoomRef.current(liveGestureZoom, { phase: 'move', source: 'gesture' });
+        } else {
+          onChangeRef.current(clampZoom(liveGestureZoom, min, max));
+        }
       }
     };
 
     const handleGestureEnd = (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
+      if (!gestureActive) return;
+      gestureActive = false;
+      if (onLiveZoomRef.current) {
+        const committed = clampZoom(liveGestureZoom, min, max);
+        onLiveZoomRef.current(committed, { phase: 'end', source: 'gesture' });
+        if (Math.abs(committed - zoomRef.current) >= 0.005) {
+          onChangeRef.current(committed);
+        }
+      }
     };
 
     // 2-finger touch pinch for Android tablets/phones & iPadOS Chrome/Safari
     let pinchStartDist: number | null = null;
     let pinchStartZoom = zoomRef.current;
+    let liveTouchZoom = zoomRef.current;
 
     const handleTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 2) {
+        clearWheelSettle();
+        wheelActive = false;
         pinchStartDist = getTouchDistance(e.touches[0], e.touches[1]);
         pinchStartZoom = zoomRef.current;
+        liveTouchZoom = pinchStartZoom;
+        onLiveZoomRef.current?.(liveTouchZoom, { phase: 'start', source: 'touch' });
       } else {
         pinchStartDist = null;
       }
@@ -88,15 +174,27 @@ export function usePinchZoom(
       e.stopPropagation();
       const dist = getTouchDistance(e.touches[0], e.touches[1]);
       const ratio = dist / pinchStartDist;
-      const next = clampZoom(pinchStartZoom * ratio, min, max);
-      if (Math.abs(next - zoomRef.current) >= 0.01) {
-        onChangeRef.current(next);
+      liveTouchZoom = clampFloatZoom(pinchStartZoom * ratio, min, max);
+      if (onLiveZoomRef.current) {
+        onLiveZoomRef.current(liveTouchZoom, { phase: 'move', source: 'touch' });
+      } else {
+        const next = clampZoom(liveTouchZoom, min, max);
+        if (Math.abs(next - zoomRef.current) >= 0.01) {
+          onChangeRef.current(next);
+        }
       }
     };
 
     const handleTouchEnd = (e: TouchEvent) => {
-      if (e.touches.length < 2) {
+      if (e.touches.length < 2 && pinchStartDist !== null) {
         pinchStartDist = null;
+        if (onLiveZoomRef.current) {
+          const committed = clampZoom(liveTouchZoom, min, max);
+          onLiveZoomRef.current(committed, { phase: 'end', source: 'touch' });
+          if (Math.abs(committed - zoomRef.current) >= 0.005) {
+            onChangeRef.current(committed);
+          }
+        }
       }
     };
 
@@ -110,6 +208,7 @@ export function usePinchZoom(
     el.addEventListener('touchcancel', handleTouchEnd, { passive: true });
 
     return () => {
+      clearWheelSettle();
       el.removeAttribute('data-pinch-zoom-surface');
       el.removeEventListener('wheel', handleWheel);
       el.removeEventListener('gesturestart', handleGestureStart);
@@ -120,7 +219,7 @@ export function usePinchZoom(
       el.removeEventListener('touchend', handleTouchEnd);
       el.removeEventListener('touchcancel', handleTouchEnd);
     };
-  }, [containerRef, enabled, min, max]);
+  }, [containerRef, enabled, min, max, wheelSettleMs]);
 }
 
 /**
