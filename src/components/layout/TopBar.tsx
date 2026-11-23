@@ -68,6 +68,7 @@ export const TopBar: React.FC<TopBarProps> = ({
     hasPendingSync,
     syncConflicts,
     isFirebaseConfigured,
+    autoBackup,
     loadDemoData,
   } = useGradebook();
 
@@ -710,11 +711,29 @@ export const TopBar: React.FC<TopBarProps> = ({
           <button
             type="button"
             onClick={onOpenBackup}
-            title="Copia de seguridad y restauración del cuaderno (.json)"
+            title={
+              autoBackup.status === 'ACTIVE' || autoBackup.status === 'SAVING'
+                ? `Copia automática activa en «${autoBackup.folderName}» (Mi Cuaderno.json)`
+                : autoBackup.status === 'NEEDS_PERMISSION'
+                  ? `Copia automática en «${autoBackup.folderName}» pendiente de reactivar (1 clic)`
+                  : 'Copia de seguridad y restauración (Mi Cuaderno.json)'
+            }
             aria-label="Copia de seguridad y restauración"
-            className={`${iconBtnSize} shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 flex items-center justify-center transition-colors`}
+            className={`relative ${iconBtnSize} shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 flex items-center justify-center transition-colors`}
           >
             <HardDrive className="w-4 h-4 shrink-0" aria-hidden="true" />
+            {(autoBackup.status === 'ACTIVE' || autoBackup.status === 'SAVING') && (
+              <span
+                className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white"
+                aria-hidden="true"
+              />
+            )}
+            {autoBackup.status === 'NEEDS_PERMISSION' && (
+              <span
+                className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-amber-500 ring-2 ring-white"
+                aria-hidden="true"
+              />
+            )}
           </button>
 
           {pwa.canPromptInstall && (

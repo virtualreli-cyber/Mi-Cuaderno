@@ -528,7 +528,7 @@ export const ViewSettingsModal: React.FC<{
     window.setTimeout(() => setAppliedHint((prev) => (prev === msg ? null : prev)), 2200);
   };
 
-  const gradeFs = s.gradeFontSize ?? 15;
+  const gradeFs = s.gradeFontSize ?? 12.5;
   const textFs = s.textFontSize ?? 13.5;
   const iconSz = s.iconSize ?? 15;
   const groupSpacerH = s.groupSpacerHeight ?? 24;
@@ -836,7 +836,7 @@ export const ViewSettingsModal: React.FC<{
               type="button"
               onClick={() => {
                 updateSettings({
-                  gradeFontSize: 15,
+                  gradeFontSize: 12.5,
                   textFontSize: 13.5,
                   iconSize: 15,
                   groupSpacerHeight: 24,
@@ -860,8 +860,8 @@ export const ViewSettingsModal: React.FC<{
               </div>
               <input
                 type="range"
-                min={11}
-                max={24}
+                min={9}
+                max={22}
                 step={0.5}
                 value={gradeFs}
                 onPointerDown={beginAspectChange}

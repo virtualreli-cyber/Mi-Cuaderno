@@ -41,11 +41,15 @@ import {
 } from '../engine/educamos';
 import {
   clampGradeForColumn,
+  computeFolderSourceSignature,
   ensureGroupCategories,
+  fillColumnsEmptyWithNP,
   getEffectiveBookGroups,
   makeId,
   normalizeRubricLevels,
   recalculateBook,
+  restoreFolderCellsCalculation,
+  roundTo,
 } from '../engine/gradeMath';
 import {
   aspectSnapshotsEqual,
@@ -92,6 +96,19 @@ import {
   saveUiMenuPrefs,
   subscribeFirebaseWorkspace,
 } from '../services/storage';
+import {
+  clearBackupDirHandle,
+  downloadBackupFile,
+  ensureBackupFolderPermission,
+  isDirectoryPickerSupported,
+  loadBackupDirHandle,
+  loadLocalBackupMeta,
+  pickBackupFolder,
+  queryBackupFolderPermission,
+  writeBackupToDirectory,
+  type AutoBackupStatus,
+  type BackupDirectoryHandle,
+} from '../services/localBackup';
 import {
   cellKey,
   type ClassBook,
@@ -300,6 +317,12 @@ interface GradebookContextValue {
   ) => void;
   clearCell: (studentId: string, columnId: string) => void;
   clearMultipleCells: (targets: Array<{ studentId: string; columnId: string }>) => void;
+  fillEmptyGradesWithNP: (columnIds: string[]) => {
+    filledCount: number;
+    affectedColumnCount: number;
+  };
+  restoreFolderCellCalculation: (studentId: string, folderId: string) => void;
+  restoreFolderCalculation: (folderId: string) => number;
 
   // Rubrics CRUD
   saveRubric: (rubric: RubricEntity) => RubricEntity;
@@ -319,6 +342,17 @@ interface GradebookContextValue {
   markCellEducamosUpdated: (studentId: string, columnId: string) => void;
 
   // Demo, Backup & Reset
+  autoBackup: {
+    supported: boolean;
+    status: AutoBackupStatus;
+    folderName: string | null;
+    lastSavedAt: string | null;
+    error: string | null;
+  };
+  configureAutoBackupFolder: () => Promise<boolean>;
+  reactivateAutoBackup: () => Promise<boolean>;
+  disableAutoBackupFolder: () => Promise<void>;
+  saveManualBackup: () => Promise<'FOLDER' | 'DOWNLOAD'>;
   loadDemoData: () => void;
   restoreBackup: (backup: GradebookWorkspace) => void;
   resetAll: () => void;
@@ -384,6 +418,22 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   userRef.current = user;
   const workspaceRef = useRef<GradebookWorkspace>(workspace);
   workspaceRef.current = workspace;
+
+  const initialBackupMeta = useMemo(() => loadLocalBackupMeta(), []);
+  const backupDirHandleRef = useRef<BackupDirectoryHandle | null>(null);
+  const lastBackedUpUpdatedAtRef = useRef<string | null>(initialBackupMeta.lastBackedUpUpdatedAt);
+  const autoBackupTimerRef = useRef<number | null>(null);
+  const [autoBackup, setAutoBackup] = useState<GradebookContextValue['autoBackup']>(() => ({
+    supported: isDirectoryPickerSupported(),
+    status: isDirectoryPickerSupported()
+      ? initialBackupMeta.folderName
+        ? 'NEEDS_PERMISSION'
+        : 'UNCONFIGURED'
+      : 'UNSUPPORTED',
+    folderName: initialBackupMeta.folderName,
+    lastSavedAt: initialBackupMeta.lastSavedAt,
+    error: null,
+  }));
 
   const markLocalDirty = useCallback(() => {
     const prevMeta = loadSyncMeta();
@@ -1035,6 +1085,27 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [commit, pushAspectUndo]
   );
 
+  // One-time device migration: compact default cell grade font size (15 px -> 12.5 px)
+  useEffect(() => {
+    if (!hydrated || typeof window === 'undefined') return;
+    const key = 'cuaderno_grade_font_default_v2';
+    try {
+      if (localStorage.getItem(key) === '1') return;
+      localStorage.setItem(key, '1');
+      if (workspaceRef.current.settings.gradeFontSize === 15) {
+        commit(
+          (prev) => ({
+            ...prev,
+            settings: { ...prev.settings, gradeFontSize: 12.5 },
+          }),
+          false
+        );
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, [hydrated, commit]);
+
   const createBook = useCallback<GradebookContextValue['createBook']>(
     (kind, data) => {
       const isTpl = kind === 'TEMPLATE';
@@ -1663,28 +1734,41 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const deleteFolder = useCallback<GradebookContextValue['deleteFolder']>(
     (tabId, folderId) => {
-      mutateActiveBook((book) => ({
-        ...book,
-        tabs: book.tabs.map((t) => {
-          if (t.id !== tabId) return t;
-          const childIds = t.columns
-            .filter((c) => c.folderId === folderId)
-            .sort((a, b) => a.orderIndex - b.orderIndex)
-            .map((c) => c.id);
-          const currentOrder = getCanonicalItemOrder(t);
-          const nextOrder = currentOrder.flatMap((id) => (id === folderId ? childIds : [id]));
-          return syncTabOrderIndices(
-            {
-              ...t,
-              folders: t.folders.filter((f) => f.id !== folderId),
-              columns: t.columns.map((c) =>
-                c.folderId === folderId ? { ...c, folderId: null } : c
-              ),
-            },
-            nextOrder
-          );
-        }),
-      }));
+      mutateActiveBook((book, ws) => {
+        const suffix = `::${folderId}`;
+        const nextCells = { ...book.cells };
+        for (const k of Object.keys(nextCells)) {
+          if (k.endsWith(suffix)) {
+            delete nextCells[k];
+          }
+        }
+        return recalculateBook(
+          {
+            ...book,
+            cells: nextCells,
+            tabs: book.tabs.map((t) => {
+              if (t.id !== tabId) return t;
+              const childIds = t.columns
+                .filter((c) => c.folderId === folderId)
+                .sort((a, b) => a.orderIndex - b.orderIndex)
+                .map((c) => c.id);
+              const currentOrder = getCanonicalItemOrder(t);
+              const nextOrder = currentOrder.flatMap((id) => (id === folderId ? childIds : [id]));
+              return syncTabOrderIndices(
+                {
+                  ...t,
+                  folders: t.folders.filter((f) => f.id !== folderId),
+                  columns: t.columns.map((c) =>
+                    c.folderId === folderId ? { ...c, folderId: null } : c
+                  ),
+                },
+                nextOrder
+              );
+            }),
+          },
+          ws.rubrics
+        );
+      });
     },
     [mutateActiveBook]
   );
@@ -2805,15 +2889,17 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   // Cells CRUD
   // =====================================================================
   const applySingleCellInput = (
+    bookSnapshot: ClassBook,
     nextCells: Record<string, ClassBook['cells'][string]>,
-    col: ColumnEntity | undefined,
+    colMap: Map<string, ColumnEntity>,
+    folderMap: Map<string, { folder: FolderEntity; childCols: ColumnEntity[]; tabLocked: boolean }>,
     studentId: string,
+    targetId: string,
     grade: number | null,
     comment: string,
     options?: { preserveExistingGrade?: boolean; preserveExistingComment?: boolean }
   ) => {
-    if (!col || col.isLocked || col.type === 'AVERAGE') return;
-    const k = cellKey(studentId, col.id);
+    const k = cellKey(studentId, targetId);
     const prev = nextCells[k];
 
     let cleanComment = comment.trim();
@@ -2826,62 +2912,133 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       targetGrade = prev.grade;
     }
 
-    if (col.type === 'RUBRIC') {
-      if (options?.preserveExistingGrade || (targetGrade === null && cleanComment)) {
-        // Pure comment edit/clear on a RUBRIC cell: keep existing grade, rubricEval & manualOverride untouched!
-        if (prev?.grade === null && !prev?.rubricEval && !cleanComment) {
-          delete nextCells[k];
-        } else {
+    const col = colMap.get(targetId);
+    if (col) {
+      if (col.isLocked || col.type === 'AVERAGE') return;
+
+      if (col.type === 'RUBRIC') {
+        if (options?.preserveExistingGrade || (targetGrade === null && cleanComment)) {
+          if (prev?.grade === null && !prev?.rubricEval && !cleanComment) {
+            delete nextCells[k];
+          } else {
+            nextCells[k] = {
+              grade: prev?.grade ?? null,
+              comment: cleanComment,
+              rubricEval: prev?.rubricEval,
+              manualOverride: prev?.manualOverride,
+            };
+          }
+        } else if (targetGrade !== null) {
+          const finalGrade = clampGradeForColumn(targetGrade, col);
+          const unchangedRubricGrade =
+            Boolean(prev?.rubricEval) &&
+            !prev?.manualOverride &&
+            prev?.grade !== null &&
+            prev?.grade !== undefined &&
+            finalGrade !== null &&
+            Math.abs(finalGrade - prev.grade) < 1e-6;
           nextCells[k] = {
-            grade: prev?.grade ?? null,
+            grade: finalGrade,
             comment: cleanComment,
             rubricEval: prev?.rubricEval,
-            manualOverride: prev?.manualOverride,
+            manualOverride: unchangedRubricGrade ? undefined : true,
           };
+        } else {
+          delete nextCells[k];
         }
-      } else if (targetGrade !== null) {
-        // Explicit numeric grade typed/pasted on a RUBRIC cell:
-        const finalGrade = clampGradeForColumn(targetGrade, col);
-        const unchangedRubricGrade =
-          Boolean(prev?.rubricEval) &&
-          !prev?.manualOverride &&
-          prev?.grade !== null &&
-          prev?.grade !== undefined &&
-          finalGrade !== null &&
-          Math.abs(finalGrade - prev.grade) < 1e-6;
+        return;
+      }
+
+      // NUMERIC column
+      const finalGrade = targetGrade !== null ? clampGradeForColumn(targetGrade, col) : null;
+      if (finalGrade === null && !cleanComment) {
+        delete nextCells[k];
+      } else {
         nextCells[k] = {
+          ...prev,
           grade: finalGrade,
           comment: cleanComment,
-          rubricEval: prev?.rubricEval,
-          manualOverride: unchangedRubricGrade ? undefined : true,
         };
-      } else {
-        // Both empty -> clear cell
-        delete nextCells[k];
       }
       return;
     }
 
-    // NUMERIC column
-    const finalGrade = targetGrade !== null ? clampGradeForColumn(targetGrade, col) : null;
-    if (finalGrade === null && !cleanComment) {
-      delete nextCells[k];
-    } else {
+    // Folder summary column cell (editable calculated cell with upstream auto-recalc tracking)
+    const fldInfo = folderMap.get(targetId);
+    if (!fldInfo || fldInfo.tabLocked) return;
+    const { folder, childCols } = fldInfo;
+    const baseChild = childCols[0];
+    const fMin = baseChild ? baseChild.minValue : 0;
+    const fMax = baseChild ? baseChild.maxValue : 10;
+
+    if (options?.preserveExistingGrade || (targetGrade === null && cleanComment)) {
+      const hasPrevGrade = prev?.grade !== null && prev?.grade !== undefined;
+      if (!hasPrevGrade && !prev?.manualOverride && !prev?.autoRecalcNotice && !cleanComment) {
+        delete nextCells[k];
+      } else {
+        nextCells[k] = {
+          grade: prev?.grade ?? null,
+          comment: cleanComment,
+          manualOverride: prev?.manualOverride,
+          manualSourceSignature: prev?.manualSourceSignature,
+          autoRecalcNotice: prev?.autoRecalcNotice,
+        };
+      }
+    } else if (targetGrade !== null) {
+      const clamped = roundTo(Math.max(fMin, Math.min(fMax, targetGrade)), 2);
       nextCells[k] = {
-        ...prev,
-        grade: finalGrade,
+        grade: clamped,
         comment: cleanComment,
+        manualOverride: true,
+        manualSourceSignature: computeFolderSourceSignature(
+          folder,
+          childCols,
+          studentId,
+          bookSnapshot
+        ),
+        autoRecalcNotice: undefined,
       };
+    } else {
+      delete nextCells[k];
     }
+  };
+
+  const buildBookColumnAndFolderMaps = (book: ClassBook) => {
+    const colMap = new Map<string, ColumnEntity>();
+    const folderMap = new Map<
+      string,
+      { folder: FolderEntity; childCols: ColumnEntity[]; tabLocked: boolean }
+    >();
+    for (const tab of book.tabs) {
+      const tabLocked = Boolean(tab.isLocked);
+      for (const col of tab.columns) colMap.set(col.id, col);
+      for (const folder of tab.folders) {
+        const childCols = tab.columns
+          .filter((c) => c.folderId === folder.id)
+          .sort((a, b) => a.orderIndex - b.orderIndex);
+        folderMap.set(folder.id, { folder, childCols, tabLocked });
+      }
+    }
+    return { colMap, folderMap };
   };
 
   const setCellData = useCallback<GradebookContextValue['setCellData']>(
     (studentId, columnId, grade, comment, options) => {
       mutateActiveBook(
         (book, ws) => {
-          const col = book.tabs.flatMap((t) => t.columns).find((c) => c.id === columnId);
+          const { colMap, folderMap } = buildBookColumnAndFolderMaps(book);
           const nextCells = { ...book.cells };
-          applySingleCellInput(nextCells, col, studentId, grade, comment, options);
+          applySingleCellInput(
+            book,
+            nextCells,
+            colMap,
+            folderMap,
+            studentId,
+            columnId,
+            grade,
+            comment,
+            options
+          );
           return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
         },
         true,
@@ -2942,17 +3099,17 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (targets.length === 0) return;
       mutateActiveBook(
         (book, ws) => {
-          const colMap = new Map<string, ColumnEntity>();
-          for (const tab of book.tabs) {
-            for (const col of tab.columns) colMap.set(col.id, col);
-          }
+          const { colMap, folderMap } = buildBookColumnAndFolderMaps(book);
           const nextCells = { ...book.cells };
 
           for (const { studentId, columnId } of targets) {
             applySingleCellInput(
+              book,
               nextCells,
-              colMap.get(columnId),
+              colMap,
+              folderMap,
               studentId,
+              columnId,
               grade,
               comment,
               options
@@ -2973,17 +3130,17 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (entries.length === 0) return;
       mutateActiveBook(
         (book, ws) => {
-          const colMap = new Map<string, ColumnEntity>();
-          for (const tab of book.tabs) {
-            for (const col of tab.columns) colMap.set(col.id, col);
-          }
+          const { colMap, folderMap } = buildBookColumnAndFolderMaps(book);
           const nextCells = { ...book.cells };
 
           for (const entry of entries) {
             applySingleCellInput(
+              book,
               nextCells,
-              colMap.get(entry.columnId),
+              colMap,
+              folderMap,
               entry.studentId,
+              entry.columnId,
               entry.grade,
               entry.comment
             );
@@ -3003,15 +3160,19 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (targets.length === 0) return;
       mutateActiveBook(
         (book, ws) => {
-          const colMap = new Map<string, ColumnEntity>();
-          for (const tab of book.tabs) {
-            for (const col of tab.columns) colMap.set(col.id, col);
-          }
+          const { colMap, folderMap } = buildBookColumnAndFolderMaps(book);
           const nextCells = { ...book.cells };
           for (const { studentId, columnId } of targets) {
             const col = colMap.get(columnId);
-            if (!col || col.isLocked || col.type === 'AVERAGE') continue;
-            delete nextCells[cellKey(studentId, columnId)];
+            if (col) {
+              if (col.isLocked || col.type === 'AVERAGE') continue;
+              delete nextCells[cellKey(studentId, columnId)];
+              continue;
+            }
+            const fld = folderMap.get(columnId);
+            if (fld && !fld.tabLocked) {
+              delete nextCells[cellKey(studentId, columnId)];
+            }
           }
           return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
         },
@@ -3037,6 +3198,76 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         if (!changed) return book;
         return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
       });
+    },
+    [mutateActiveBook]
+  );
+
+  const fillEmptyGradesWithNP = useCallback<GradebookContextValue['fillEmptyGradesWithNP']>(
+    (columnIds) => {
+      const ws = workspaceRef.current;
+      const currentBook =
+        ws.activeMode === 'TEMPLATE'
+          ? ws.templates.find((t) => t.id === (ws.activeTemplateId ?? ws.templates[0]?.id))
+          : ws.classes.find((c) => c.id === (ws.activeClassId ?? ws.classes[0]?.id));
+      if (!currentBook) return { filledCount: 0, affectedColumnCount: 0 };
+
+      const preview = fillColumnsEmptyWithNP(currentBook, columnIds, ws.rubrics);
+      if (preview.filledCount === 0) {
+        return { filledCount: 0, affectedColumnCount: 0 };
+      }
+
+      mutateActiveBook(
+        (book, curWs) => fillColumnsEmptyWithNP(book, columnIds, curWs.rubrics).book,
+        true,
+        preview.firstTarget
+      );
+
+      return {
+        filledCount: preview.filledCount,
+        affectedColumnCount: preview.affectedColumnCount,
+      };
+    },
+    [mutateActiveBook]
+  );
+
+  const restoreFolderCellCalculation = useCallback<
+    GradebookContextValue['restoreFolderCellCalculation']
+  >(
+    (studentId, folderId) => {
+      const ws = workspaceRef.current;
+      const currentBook =
+        ws.activeMode === 'TEMPLATE'
+          ? ws.templates.find((t) => t.id === (ws.activeTemplateId ?? ws.templates[0]?.id))
+          : ws.classes.find((c) => c.id === (ws.activeClassId ?? ws.classes[0]?.id));
+      if (!currentBook) return;
+      const preview = restoreFolderCellsCalculation(currentBook, folderId, ws.rubrics, [studentId]);
+      if (preview.restoredCount === 0) return;
+      mutateActiveBook(
+        (book, curWs) => restoreFolderCellsCalculation(book, folderId, curWs.rubrics, [studentId]).book,
+        true,
+        { studentId, columnId: folderId }
+      );
+    },
+    [mutateActiveBook]
+  );
+
+  const restoreFolderCalculation = useCallback<
+    GradebookContextValue['restoreFolderCalculation']
+  >(
+    (folderId) => {
+      const ws = workspaceRef.current;
+      const currentBook =
+        ws.activeMode === 'TEMPLATE'
+          ? ws.templates.find((t) => t.id === (ws.activeTemplateId ?? ws.templates[0]?.id))
+          : ws.classes.find((c) => c.id === (ws.activeClassId ?? ws.classes[0]?.id));
+      if (!currentBook) return 0;
+      const preview = restoreFolderCellsCalculation(currentBook, folderId, ws.rubrics);
+      if (preview.restoredCount === 0) return 0;
+      mutateActiveBook(
+        (book, curWs) => restoreFolderCellsCalculation(book, folderId, curWs.rubrics).book,
+        true
+      );
+      return preview.restoredCount;
     },
     [mutateActiveBook]
   );
@@ -3218,6 +3449,174 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [mutateActiveBook]
   );
 
+  const runAutoBackupWrite = useCallback(async (handle: BackupDirectoryHandle, ws: GradebookWorkspace) => {
+    setAutoBackup((prev) => ({ ...prev, status: 'SAVING', error: null }));
+    try {
+      const meta = await writeBackupToDirectory(handle, ws);
+      lastBackedUpUpdatedAtRef.current = meta.lastBackedUpUpdatedAt;
+      setAutoBackup((prev) => ({
+        ...prev,
+        status: 'ACTIVE',
+        folderName: meta.folderName ?? handle.name,
+        lastSavedAt: meta.lastSavedAt,
+        error: null,
+      }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'No se pudo guardar la copia en la carpeta.';
+      const isPermErr =
+        err instanceof DOMException &&
+        (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+      setAutoBackup((prev) => ({
+        ...prev,
+        status: isPermErr ? 'NEEDS_PERMISSION' : 'ERROR',
+        error: isPermErr ? null : msg,
+      }));
+    }
+  }, []);
+
+  // Load saved backup directory handle on startup and inspect existing permission
+  useEffect(() => {
+    if (!isDirectoryPickerSupported()) return;
+    let cancelled = false;
+    (async () => {
+      const handle = await loadBackupDirHandle();
+      if (cancelled || !handle) return;
+      backupDirHandleRef.current = handle;
+      const perm = await queryBackupFolderPermission(handle);
+      if (cancelled) return;
+      setAutoBackup((prev) => ({
+        ...prev,
+        supported: true,
+        status: perm === 'granted' ? 'ACTIVE' : 'NEEDS_PERMISSION',
+        folderName: handle.name || prev.folderName,
+        error: null,
+      }));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Automatically overwrite `Mi Cuaderno.json` in background when data changes or remote sync lands
+  useEffect(() => {
+    if (!hydrated || autoBackup.status !== 'ACTIVE') return;
+    const handle = backupDirHandleRef.current;
+    if (!handle) return;
+    if (workspace.updatedAt === lastBackedUpUpdatedAtRef.current) return;
+
+    if (autoBackupTimerRef.current) window.clearTimeout(autoBackupTimerRef.current);
+    const snapshot = workspace;
+    autoBackupTimerRef.current = window.setTimeout(() => {
+      autoBackupTimerRef.current = null;
+      void runAutoBackupWrite(handle, snapshot);
+    }, 1800);
+
+    return () => {
+      if (autoBackupTimerRef.current) {
+        window.clearTimeout(autoBackupTimerRef.current);
+        autoBackupTimerRef.current = null;
+      }
+    };
+  }, [hydrated, autoBackup.status, workspace, runAutoBackupWrite]);
+
+  // Flush pending local file backup if user hides/leaves tab right after editing
+  useEffect(() => {
+    const flushPendingBackup = () => {
+      if (autoBackupTimerRef.current && backupDirHandleRef.current) {
+        window.clearTimeout(autoBackupTimerRef.current);
+        autoBackupTimerRef.current = null;
+        void writeBackupToDirectory(backupDirHandleRef.current, workspaceRef.current)
+          .then((meta) => {
+            lastBackedUpUpdatedAtRef.current = meta.lastBackedUpUpdatedAt;
+          })
+          .catch(() => {
+            // ignore background flush failure on unload
+          });
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flushPendingBackup();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
+
+  const configureAutoBackupFolder = useCallback(async (): Promise<boolean> => {
+    if (!isDirectoryPickerSupported()) return false;
+    try {
+      const handle = await pickBackupFolder();
+      if (!handle) return false;
+      backupDirHandleRef.current = handle;
+      await runAutoBackupWrite(handle, workspaceRef.current);
+      return true;
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return false;
+      }
+      setAutoBackup((prev) => ({
+        ...prev,
+        status: backupDirHandleRef.current ? 'ERROR' : 'UNCONFIGURED',
+        error: err instanceof Error ? err.message : 'No se pudo configurar la carpeta de copias.',
+      }));
+      return false;
+    }
+  }, [runAutoBackupWrite]);
+
+  const reactivateAutoBackup = useCallback(async (): Promise<boolean> => {
+    const handle = backupDirHandleRef.current ?? (await loadBackupDirHandle());
+    if (!handle) {
+      return configureAutoBackupFolder();
+    }
+    backupDirHandleRef.current = handle;
+    const perm = await ensureBackupFolderPermission(handle, true);
+    if (perm === 'granted') {
+      await runAutoBackupWrite(handle, workspaceRef.current);
+      return true;
+    }
+    setAutoBackup((prev) => ({
+      ...prev,
+      status: 'NEEDS_PERMISSION',
+      folderName: handle.name || prev.folderName,
+    }));
+    return false;
+  }, [configureAutoBackupFolder, runAutoBackupWrite]);
+
+  const disableAutoBackupFolder = useCallback(async (): Promise<void> => {
+    if (autoBackupTimerRef.current) {
+      window.clearTimeout(autoBackupTimerRef.current);
+      autoBackupTimerRef.current = null;
+    }
+    backupDirHandleRef.current = null;
+    lastBackedUpUpdatedAtRef.current = null;
+    await clearBackupDirHandle();
+    setAutoBackup({
+      supported: isDirectoryPickerSupported(),
+      status: isDirectoryPickerSupported() ? 'UNCONFIGURED' : 'UNSUPPORTED',
+      folderName: null,
+      lastSavedAt: null,
+      error: null,
+    });
+  }, []);
+
+  const saveManualBackup = useCallback(async (): Promise<'FOLDER' | 'DOWNLOAD'> => {
+    const handle = backupDirHandleRef.current ?? (await loadBackupDirHandle());
+    if (handle) {
+      backupDirHandleRef.current = handle;
+      const perm = await ensureBackupFolderPermission(handle, true);
+      if (perm === 'granted') {
+        await runAutoBackupWrite(handle, workspaceRef.current);
+        return 'FOLDER';
+      }
+    }
+    downloadBackupFile(workspaceRef.current);
+    const meta = loadLocalBackupMeta();
+    setAutoBackup((prev) => ({
+      ...prev,
+      lastSavedAt: meta.lastSavedAt,
+    }));
+    return 'DOWNLOAD';
+  }, [runAutoBackupWrite]);
+
   const loadDemoData = useCallback(() => {
     const seeded = createSeedWorkspace();
     setUndoStack([]);
@@ -3397,6 +3796,9 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setCellRubricEval,
     clearCell,
     clearMultipleCells,
+    fillEmptyGradesWithNP,
+    restoreFolderCellCalculation,
+    restoreFolderCalculation,
     saveRubric,
     deleteRubric,
     setColumnLomloeCriteria,
@@ -3406,6 +3808,11 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     updateLomloeKeyCompetences,
     setColumnEducamosStatus,
     markCellEducamosUpdated,
+    autoBackup,
+    configureAutoBackupFolder,
+    reactivateAutoBackup,
+    disableAutoBackupFolder,
+    saveManualBackup,
     loadDemoData,
     restoreBackup,
     resetAll,

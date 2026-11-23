@@ -6,10 +6,15 @@ import {
   Download,
   FileJson,
   FolderArchive,
+  FolderCheck,
+  FolderCog,
+  FolderSync,
   HardDrive,
+  Trash2,
   Upload,
 } from 'lucide-react';
 import { useGradebook } from '../../context/GradebookContext';
+import { BACKUP_FILENAME } from '../../services/localBackup';
 import { type GradebookWorkspace } from '../../types/gradebook';
 import { Modal } from '../common/Modal';
 
@@ -19,10 +24,19 @@ interface BackupModalProps {
 }
 
 export const BackupModal: React.FC<BackupModalProps> = ({ open, onClose }) => {
-  const { workspace, restoreBackup } = useGradebook();
+  const {
+    workspace,
+    restoreBackup,
+    autoBackup,
+    configureAutoBackupFolder,
+    reactivateAutoBackup,
+    disableAutoBackupFolder,
+    saveManualBackup,
+  } = useGradebook();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [downloadSuccess, setDownloadSuccess] = useState(false);
+  const [downloadSuccess, setDownloadSuccess] = useState<'FOLDER' | 'DOWNLOAD' | null>(null);
+  const [busyAction, setBusyAction] = useState(false);
   const [fileToRestore, setFileToRestore] = useState<{
     rawJson: GradebookWorkspace;
     fileName: string;
@@ -38,28 +52,42 @@ export const BackupModal: React.FC<BackupModalProps> = ({ open, onClose }) => {
     return workspace.classes.reduce((sum, c) => sum + c.students.length, 0);
   }, [workspace.classes]);
 
-  const handleDownloadBackup = () => {
+  const handleSaveBackupNow = async () => {
+    setBusyAction(true);
     try {
-      const now = new Date();
-      const pad = (n: number) => String(n).padStart(2, '0');
-      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(
-        now.getHours()
-      )}${pad(now.getMinutes())}`;
-      const filename = `cuaderno_profesor_backup_${stamp}.json`;
-
-      const jsonStr = JSON.stringify(workspace, null, 2);
-      const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-
-      setDownloadSuccess(true);
-      setTimeout(() => setDownloadSuccess(false), 3000);
+      const mode = await saveManualBackup();
+      setDownloadSuccess(mode);
+      setTimeout(() => setDownloadSuccess(null), 3000);
     } catch (err) {
       console.error('Error al generar copia de seguridad:', err);
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handlePickFolder = async () => {
+    setBusyAction(true);
+    try {
+      const ok = await configureAutoBackupFolder();
+      if (ok) {
+        setDownloadSuccess('FOLDER');
+        setTimeout(() => setDownloadSuccess(null), 3000);
+      }
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleReactivateFolder = async () => {
+    setBusyAction(true);
+    try {
+      const ok = await reactivateAutoBackup();
+      if (ok) {
+        setDownloadSuccess('FOLDER');
+        setTimeout(() => setDownloadSuccess(null), 3000);
+      }
+    } finally {
+      setBusyAction(false);
     }
   };
 
@@ -148,7 +176,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ open, onClose }) => {
       maxWidthClass="w-[min(620px,95vw)]"
     >
       <div className="p-5 space-y-5 text-xs">
-        {/* Section 1: Descargar Copia de Seguridad */}
+        {/* Section 1: Copia automática en carpeta fija (`Mi Cuaderno.json`) + Descarga manual */}
         <div className="p-4 rounded-2xl border border-blue-200 bg-blue-50/50 space-y-3">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-2.5">
@@ -157,10 +185,10 @@ export const BackupModal: React.FC<BackupModalProps> = ({ open, onClose }) => {
               </div>
               <div>
                 <h3 className="font-bold text-sm text-slate-900 leading-tight">
-                  Descargar Copia de Seguridad
+                  Copia de Seguridad (<span className="font-mono text-xs">{BACKUP_FILENAME}</span>)
                 </h3>
                 <p className="text-[11px] text-slate-600 mt-0.5">
-                  Genera un archivo seguro (.json) descargable con todos tus datos actuales.
+                  Se guarda siempre como <strong>{BACKUP_FILENAME}</strong> reemplazando la copia anterior.
                 </p>
               </div>
             </div>
@@ -175,14 +203,125 @@ export const BackupModal: React.FC<BackupModalProps> = ({ open, onClose }) => {
             </div>
           </div>
 
+          {/* Automatic fixed-folder status box */}
+          {autoBackup.supported ? (
+            <div className="p-3 rounded-xl border border-blue-200/80 bg-white/90 space-y-2.5">
+              {autoBackup.status === 'ACTIVE' || autoBackup.status === 'SAVING' ? (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FolderCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <div className="min-w-0">
+                      <div className="font-bold text-emerald-800 truncate">
+                        Guardado automático activo en «{autoBackup.folderName}»
+                      </div>
+                      <div className="text-[11px] text-slate-500">
+                        {autoBackup.status === 'SAVING'
+                          ? `Guardando ${BACKUP_FILENAME}...`
+                          : autoBackup.lastSavedAt
+                            ? `Última copia automática: ${new Date(
+                                autoBackup.lastSavedAt
+                              ).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}`
+                            : 'Se actualizará automáticamente al realizar cambios'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      disabled={busyAction}
+                      onClick={() => void handlePickFolder()}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold flex items-center gap-1"
+                    >
+                      <FolderCog className="w-3.5 h-3.5" />
+                      <span>Cambiar carpeta</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busyAction}
+                      onClick={() => void disableAutoBackupFolder()}
+                      title="Dejar de guardar automáticamente en esta carpeta"
+                      aria-label="Quitar carpeta fija"
+                      className="p-1.5 rounded-lg border border-slate-200 hover:bg-rose-50 hover:text-rose-600 text-slate-400"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ) : autoBackup.status === 'NEEDS_PERMISSION' ? (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FolderSync className="w-4 h-4 text-amber-600 shrink-0" />
+                    <div className="min-w-0">
+                      <div className="font-bold text-amber-900 truncate">
+                        Carpeta recordada: «{autoBackup.folderName}»
+                      </div>
+                      <div className="text-[11px] text-amber-800">
+                        El navegador pide confirmar permiso en esta sesión (elige «Permitir en cada visita» si aparece para no volver a preguntar).
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      disabled={busyAction}
+                      onClick={() => void handleReactivateFolder()}
+                      className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold"
+                    >
+                      Reactivar carpeta
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busyAction}
+                      onClick={() => void handlePickFolder()}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold"
+                    >
+                      Cambiar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-800">
+                      Selecciona una carpeta fija para copias automáticas
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      Una vez elegida, cada cambio sobrescribirá automáticamente <strong>{BACKUP_FILENAME}</strong> sin preguntar ni abrir diálogos.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busyAction}
+                    onClick={() => void handlePickFolder()}
+                    className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold flex items-center gap-1.5 shrink-0 shadow-2xs"
+                  >
+                    <FolderCog className="w-4 h-4" />
+                    <span>Elegir carpeta fija</span>
+                  </button>
+                </div>
+              )}
+
+              {autoBackup.error && (
+                <div className="text-[11px] text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-1.5">
+                  {autoBackup.error}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="p-2.5 rounded-xl border border-slate-200 bg-white/80 text-[11px] text-slate-600">
+              Este navegador (como Safari / iPadOS) no permite a las webs sobrescribir archivos automáticamente dentro de una carpeta elegida por seguridad del sistema. Al pulsar descargar se guardará siempre como <strong>{BACKUP_FILENAME}</strong>; en Chrome o Edge de ordenador sí funciona el guardado automático silencioso en carpeta fija.
+            </div>
+          )}
+
           <div className="flex items-center justify-between pt-1">
             <span className="text-[11px] text-slate-500">
-              Última actualización: {new Date(workspace.updatedAt).toLocaleTimeString('es-ES')}
+              Último cambio del cuaderno: {new Date(workspace.updatedAt).toLocaleTimeString('es-ES')}
             </span>
 
             <button
               type="button"
-              onClick={handleDownloadBackup}
+              disabled={busyAction}
+              onClick={() => void handleSaveBackupNow()}
               className={`px-4 py-2 rounded-xl font-semibold flex items-center gap-1.5 shadow-sm transition-colors ${
                 downloadSuccess
                   ? 'bg-emerald-600 text-white'
@@ -192,12 +331,20 @@ export const BackupModal: React.FC<BackupModalProps> = ({ open, onClose }) => {
               {downloadSuccess ? (
                 <>
                   <Check className="w-4 h-4" />
-                  <span>¡Copia descargada!</span>
+                  <span>
+                    {downloadSuccess === 'FOLDER'
+                      ? `¡Guardado en ${BACKUP_FILENAME}!`
+                      : `¡${BACKUP_FILENAME} descargado!`}
+                  </span>
                 </>
               ) : (
                 <>
                   <Download className="w-4 h-4" />
-                  <span>Descargar archivo .json</span>
+                  <span>
+                    {autoBackup.folderName && autoBackup.supported
+                      ? `Guardar ${BACKUP_FILENAME} ahora`
+                      : `Descargar ${BACKUP_FILENAME}`}
+                  </span>
                 </>
               )}
             </button>

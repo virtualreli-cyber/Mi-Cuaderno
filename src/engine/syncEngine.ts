@@ -53,12 +53,17 @@ function normalizeCell(cell: CellEntity | undefined): CellEntity | null {
   const hasGrade = cell.grade !== null && cell.grade !== undefined && !Number.isNaN(cell.grade);
   const cleanComment = (cell.comment ?? '').trim();
   const hasRubric = Boolean(cell.rubricEval && Object.keys(cell.rubricEval.selections ?? {}).length > 0);
-  if (!hasGrade && !cleanComment && !hasRubric) return null;
+  const hasNotice = Boolean(cell.autoRecalcNotice);
+  if (!hasGrade && !cleanComment && !hasRubric && !hasNotice) return null;
   return {
     grade: hasGrade ? cell.grade : null,
     comment: cleanComment,
     ...(cell.rubricEval ? { rubricEval: cell.rubricEval } : {}),
     ...(cell.manualOverride ? { manualOverride: true } : {}),
+    ...(typeof cell.manualSourceSignature === 'string' && cell.manualOverride
+      ? { manualSourceSignature: cell.manualSourceSignature }
+      : {}),
+    ...(hasNotice ? { autoRecalcNotice: true } : {}),
   };
 }
 

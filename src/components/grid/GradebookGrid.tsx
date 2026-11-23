@@ -14,6 +14,7 @@ import {
   ChevronsDown,
   Copy,
   Eraser,
+  FileX2,
   FolderOutput,
   FolderPlus,
   GripVertical,
@@ -26,6 +27,7 @@ import {
   MoreVertical,
   Pencil,
   Plus,
+  RotateCcw,
   Sigma,
   UserPlus,
   Users,
@@ -45,7 +47,10 @@ import {
   clampGradeForColumn,
   COLUMN_SUMMARY_OPTIONS,
   computeColumnSummaryMetric,
+  computeFolderFormulaValue,
   computeFolderSummary,
+  countEmptyGradesInColumns,
+  countFolderOverridesAndNotices,
   ensureGroupCategories,
   formatCellCopyValue,
   formatCellDisplayGrade,
@@ -190,6 +195,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     applyCellsBatch,
     clearCell,
     clearMultipleCells,
+    fillEmptyGradesWithNP,
+    restoreFolderCellCalculation,
+    restoreFolderCalculation,
     undo,
     lastUndoneTarget,
     beginAspectChange,
@@ -664,29 +672,107 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     [ensureCellVisible]
   );
 
+  const folderSlotById = useMemo(() => {
+    const map = new Map<string, { folder: FolderEntity; childCols: ColumnEntity[] }>();
+    for (const slot of displaySlots) {
+      if (slot.kind === 'FOLDER_SUMMARY') {
+        map.set(slot.key, { folder: slot.folder, childCols: slot.childCols });
+      }
+    }
+    return map;
+  }, [displaySlots]);
+
+  const makeVirtualFolderCol = useCallback(
+    (folder: FolderEntity, childCols: ColumnEntity[]): ColumnEntity => {
+      const baseChild = childCols[0];
+      return {
+        id: folder.id,
+        folderId: null,
+        title: folder.title,
+        color: folder.color,
+        width: folder.width ?? 68,
+        orderIndex: folder.orderIndex,
+        type: 'NUMERIC',
+        isLocked: Boolean(activeTab?.isLocked),
+        minValue: baseChild ? baseChild.minValue : 0,
+        maxValue: baseChild ? baseChild.maxValue : 10,
+        decimals: 2,
+        passThreshold: activeBook?.passThreshold ?? 5,
+        colorMode: folder.colorMode ?? 'NONE',
+      };
+    },
+    [activeTab?.isLocked, activeBook?.passThreshold]
+  );
+
+  const resolveEditableTarget = useCallback(
+    (
+      targetId: string
+    ): {
+      col: ColumnEntity;
+      isFolder: boolean;
+      folder?: FolderEntity;
+      childCols?: ColumnEntity[];
+    } | null => {
+      const col = visibleColumns.find((c) => c.id === targetId);
+      if (col) {
+        return { col, isFolder: false };
+      }
+      const fldEntry = folderSlotById.get(targetId);
+      if (fldEntry) {
+        return {
+          col: makeVirtualFolderCol(fldEntry.folder, fldEntry.childCols),
+          isFolder: true,
+          folder: fldEntry.folder,
+          childCols: fldEntry.childCols,
+        };
+      }
+      return null;
+    },
+    [visibleColumns, folderSlotById, makeVirtualFolderCol]
+  );
+
   const canTypeInline = useCallback(
     (col: ColumnEntity) =>
       Boolean(!activeTab?.isLocked && !col.isLocked && (col.type === 'NUMERIC' || col.type === 'RUBRIC')),
     [activeTab?.isLocked]
   );
 
+  const canTypeInlineTarget = useCallback(
+    (targetId: string) => {
+      const info = resolveEditableTarget(targetId);
+      return info ? canTypeInline(info.col) : false;
+    },
+    [resolveEditableTarget, canTypeInline]
+  );
+
   // Resolve active visible selected cells from selectedKeys
   const selectedTargets = useMemo(() => {
     const visStSet = new Set(visibleStudents.map((s) => s.id));
     const visColMap = new Map(visibleColumns.map((c) => [c.id, c]));
-    const list: Array<{ studentId: string; columnId: string; col: ColumnEntity }> = [];
+    const list: Array<{ studentId: string; columnId: string; col: ColumnEntity; isFolder: boolean }> = [];
     for (const key of selectedKeys) {
       const sep = key.indexOf('::');
       if (sep < 0) continue;
       const studentId = key.slice(0, sep);
       const columnId = key.slice(sep + 2);
+      if (!visStSet.has(studentId)) continue;
       const col = visColMap.get(columnId);
-      if (col && visStSet.has(studentId)) {
-        list.push({ studentId, columnId, col });
+      if (col) {
+        list.push({ studentId, columnId, col, isFolder: false });
+        continue;
+      }
+      const fldEntry = folderSlotById.get(columnId);
+      if (fldEntry) {
+        list.push({
+          studentId,
+          columnId,
+          col: makeVirtualFolderCol(fldEntry.folder, fldEntry.childCols),
+          isFolder: true,
+        });
       }
     }
     return list;
-  }, [selectedKeys, visibleStudents, visibleColumns]);
+  }, [selectedKeys, visibleStudents, visibleColumns, folderSlotById, makeVirtualFolderCol]);
 
   const editableNumericTargets = useMemo(
     () =>
@@ -944,6 +1030,22 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     [activeBook, showCopyToast]
   );
 
+  const triggerFillEmptyWithNP = useCallback(
+    (columnIds: string[], targetLabel: string) => {
+      const res = fillEmptyGradesWithNP(columnIds);
+      if (res.filledCount === 0) {
+        showCopyToast(`«${targetLabel}» no tiene celdas sin nota`);
+        return;
+      }
+      showCopyToast(
+        `«${targetLabel}»: ${res.filledCount} ${
+          res.filledCount === 1 ? 'celda sin nota rellenada' : 'celdas sin nota rellenadas'
+        } con 0 (NP)`
+      );
+    },
+    [fillEmptyGradesWithNP, showCopyToast]
+  );
+
   /**
    * Builds a TSV payload for the currently selected cell(s) or selected column.
    * - If an entire column (or folder summary column) is selected, ALWAYS copies ALL active students
@@ -1111,14 +1213,14 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       let startCol = -1;
       if (selectedCoord) {
         startRow = visibleStudents.findIndex((s) => s.id === selectedCoord.studentId);
-        startCol = visibleColumns.findIndex((c) => c.id === selectedCoord.columnId);
+        startCol = slotIdsInOrder.indexOf(selectedCoord.columnId);
       }
       if (selectedTargets.length > 1) {
         const rIdxs = selectedTargets
           .map((t) => visibleStudents.findIndex((s) => s.id === t.studentId))
           .filter((i) => i >= 0);
         const cIdxs = selectedTargets
-          .map((t) => visibleColumns.findIndex((c) => c.id === t.columnId))
+          .map((t) => slotIdsInOrder.indexOf(t.columnId))
           .filter((i) => i >= 0);
         if (rIdxs.length > 0 && cIdxs.length > 0) {
           startRow = Math.min(...rIdxs);
@@ -1138,13 +1240,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         const st = visibleStudents[startRow + dr];
         if (!st) break;
         for (let dc = 0; dc < matrix[dr].length; dc++) {
-          const col = visibleColumns[startCol + dc];
-          if (!col) break;
-          if (!canTypeInline(col)) continue;
+          const targetSlot = displaySlots[startCol + dc];
+          if (!targetSlot) break;
+          const targetId =
+            targetSlot.kind === 'FOLDER_SUMMARY' ? targetSlot.key : targetSlot.col.id;
+          if (!canTypeInlineTarget(targetId)) continue;
           const parsed = parseMixedInput(matrix[dr][dc]);
           entries.push({
             studentId: st.id,
-            columnId: col.id,
+            columnId: targetId,
             grade: parsed.grade,
             comment: parsed.comment,
           });
@@ -1165,8 +1269,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       selectedCoord,
       selectedTargets,
       visibleStudents,
-      visibleColumns,
-      canTypeInline,
+      slotIdsInOrder,
+      displaySlots,
+      canTypeInlineTarget,
       applyCellsBatch,
       showCopyToast,
     ]
@@ -1180,13 +1285,21 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       applyToSelection = false
     ) => {
       if (!activeBook) return;
-      const col = visibleColumns.find((c) => c.id === columnId);
-      if (!col || !canTypeInline(col)) return;
+      const targetInfo = resolveEditableTarget(columnId);
+      if (!targetInfo || !canTypeInline(targetInfo.col)) return;
+      const { col, isFolder, folder, childCols } = targetInfo;
 
       const existing = activeBook.cells[cellKey(studentId, columnId)];
-      const initialGrade = existing?.grade ?? null;
+      const calculatedFolderGrade =
+        isFolder && folder && childCols
+          ? computeFolderSummary(folder, childCols, studentId, activeBook)
+          : null;
+      const initialGrade = isFolder
+        ? (existing?.manualOverride ? existing.grade : calculatedFolderGrade)
+        : (existing?.grade ?? null);
       const initialComment = existing?.comment ?? null;
-      const isRubricAuto = col.type === 'RUBRIC' && !existing?.manualOverride;
+      const isRubricAuto = !isFolder && col.type === 'RUBRIC' && !existing?.manualOverride;
+      const isFolderAuto = isFolder && !existing?.manualOverride;
 
       let baseDraft = '';
       let mode: 'TYPE_OVER' | 'FULL_EDIT' = 'TYPE_OVER';
@@ -1195,9 +1308,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
       if (initialChar !== null) {
         const isNumericKey = /^[0-9.,+\-]$/.test(initialChar);
-        if (!applyToSelection && isRubricAuto) {
+        if (!applyToSelection && (isRubricAuto || isFolderAuto)) {
           if (!isNumericKey) {
-            // Typing comment text on a rubric-graded cell: append to existing comment and preserve rubric grade
+            // Typing comment text on a calculated rubric/folder cell: preserve live formula grade!
             preserveRubricGrade = true;
             mode = 'FULL_EDIT';
             const prevComment = existing?.comment ?? '';
@@ -1209,7 +1322,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               baseDraft = initialChar === ' ' ? '' : initialChar;
             }
           } else if (existing?.comment) {
-            // Typing numeric grade override when a comment already exists: keep comment visible after cursor
             mode = 'FULL_EDIT';
             baseDraft = `${initialChar} ${existing.comment}`;
             cursorPos = initialChar.length;
@@ -1220,7 +1332,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           }
         } else if (!applyToSelection && existing && (existing.comment || existing.grade !== null)) {
           if (!isNumericKey) {
-            // Appending text to an existing cell NEVER replaces existing text!
             mode = 'FULL_EDIT';
             const numPart =
               existing.grade !== null && existing.grade !== undefined
@@ -1238,7 +1349,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               baseDraft = numPart ? (charPart ? `${numPart} ${charPart}` : `${numPart} `) : charPart;
             }
           } else if (existing.comment) {
-            // Typing a new grade on a cell with existing text: keep existing comment editable right after!
             mode = 'FULL_EDIT';
             baseDraft = `${initialChar} ${existing.comment}`;
             cursorPos = initialChar.length;
@@ -1251,17 +1361,17 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           baseDraft = initialChar === ' ' ? '' : initialChar;
           mode = 'TYPE_OVER';
         }
-      } else if (!applyToSelection && existing) {
+      } else if (!applyToSelection && (existing || (isFolder && calculatedFolderGrade !== null))) {
         mode = 'FULL_EDIT';
         if (isRubricAuto) {
           preserveRubricGrade = true;
-          baseDraft = existing.comment ?? '';
+          baseDraft = existing?.comment ?? '';
         } else {
           const numPart =
-            existing.grade !== null && existing.grade !== undefined
-              ? String(existing.grade)
+            initialGrade !== null && initialGrade !== undefined
+              ? String(initialGrade)
               : '';
-          baseDraft = [numPart, existing.comment].filter(Boolean).join(' ');
+          baseDraft = [numPart, existing?.comment].filter(Boolean).join(' ');
         }
       }
 
@@ -1290,7 +1400,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         preserveRubricGrade,
       });
     },
-    [activeBook, visibleColumns, canTypeInline, selectSingleCell, ensureCellVisible]
+    [activeBook, resolveEditableTarget, canTypeInline, selectSingleCell, ensureCellVisible]
   );
 
   const moveSelection = useCallback(
@@ -1326,8 +1436,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       }
 
       selectSingleCell(nextSt.id, nextSlotId);
-      if (startInlineAfter && nextSlot.kind === 'COL' && canTypeInline(nextSlot.col)) {
-        startInlineEditForCell(nextSt.id, nextSlot.col.id, null, false);
+      if (startInlineAfter && canTypeInlineTarget(nextSlotId)) {
+        startInlineEditForCell(nextSt.id, nextSlotId, null, false);
       } else {
         focusCell(nextSt.id, nextSlotId);
       }
@@ -1340,7 +1450,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       anchorCoord,
       selectRangeToCell,
       selectSingleCell,
-      canTypeInline,
+      canTypeInlineTarget,
       startInlineEditForCell,
       focusCell,
       ensureCellVisible,
@@ -1361,7 +1471,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         mode,
         preserveRubricGrade,
       } = inlineEdit;
-      const col = visibleColumns.find((c) => c.id === columnId);
+      const targetInfo = resolveEditableTarget(columnId);
+      const col = targetInfo?.col;
 
       const parsed = parseMixedInput(draft);
 
@@ -1383,7 +1494,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         return;
       }
 
-      if (preserveRubricGrade && col?.type === 'RUBRIC' && parsed.grade === null) {
+      if (preserveRubricGrade && (col?.type === 'RUBRIC' || targetInfo?.isFolder) && parsed.grade === null) {
         setCellData(studentId, columnId, null, draft.trim(), { preserveExistingGrade: true });
         setInlineEdit(null);
         if (advanceDir === 'DOWN') {
@@ -1424,7 +1535,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     },
     [
       inlineEdit,
-      visibleColumns,
+      resolveEditableTarget,
       editableNumericTargets,
       setMultipleCellsData,
       setCellData,
@@ -1585,8 +1696,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           e.preventDefault();
           clearCell(clearableTargets[0].studentId, clearableTargets[0].columnId);
         } else {
-          const col = visibleColumns.find((c) => c.id === columnId);
-          if (col && canTypeInline(col)) {
+          if (canTypeInlineTarget(columnId)) {
             e.preventDefault();
             clearCell(studentId, columnId);
           }
@@ -1612,8 +1722,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           }
           return;
         }
-        const col = visibleColumns.find((c) => c.id === columnId);
-        if (col && canTypeInline(col)) {
+        if (canTypeInlineTarget(columnId)) {
           e.preventDefault();
           startInlineEditForCell(studentId, columnId, e.key, false);
         }
@@ -1630,9 +1739,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     editableNumericTargets,
     clearableTargets,
     visibleStudents,
-    visibleColumns,
     slotIdsInOrder,
-    canTypeInline,
+    canTypeInlineTarget,
     selectSingleCell,
     focusCell,
     moveSelection,
@@ -1670,7 +1778,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     return () => window.removeEventListener('paste', onPaste);
   }, [inlineEdit, selectedCoord, selectedTargets.length, pasteTextIntoGrid]);
 
-  const baseGradeFs = workspace.settings.gradeFontSize ?? 15;
+  const baseGradeFs = workspace.settings.gradeFontSize ?? 12.5;
   const baseTextFs = workspace.settings.textFontSize ?? 13.5;
   const baseIconSz = workspace.settings.iconSize ?? 15;
 
@@ -3671,6 +3779,13 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         activeBook
                       );
                       const fCellKey = cellKey(student.id, slot.key);
+                      const fCell = activeBook.cells[fCellKey];
+                      const fComment = fCell?.comment ?? '';
+                      const isFolderInline =
+                        inlineEdit?.studentId === student.id &&
+                        inlineEdit?.columnId === slot.key;
+                      const isFolderManual = Boolean(fCell?.manualOverride);
+                      const isFolderAutoRecalc = Boolean(fCell?.autoRecalcNotice);
                       const isFocusedFolderCell =
                         selectedCoord?.studentId === student.id &&
                         selectedCoord?.columnId === slot.key;
@@ -3685,6 +3800,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         slot.folder.color,
                         rIdx % 2 === 0 ? 0.34 : 0.46
                       );
+                      const formulaValForTooltip =
+                        isFolderManual || isFolderAutoRecalc
+                          ? computeFolderFormulaValue(
+                              slot.folder,
+                              slot.childCols,
+                              student.id,
+                              activeBook
+                            )
+                          : null;
                       return (
                         <td
                           key={`${student.id}-${slot.key}`}
@@ -3693,9 +3817,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           tabIndex={isFocusedFolderCell ? 0 : -1}
                           style={{
                             height: rowH,
-                            backgroundColor: folderColors.bgColor ?? defaultFolderBg,
+                            backgroundColor: isFolderInline
+                              ? '#FFFFFF'
+                              : (folderColors.bgColor ?? defaultFolderBg),
                             color: folderColors.textColor ?? '#0F172A',
-                            fontSize: `${scaledGradeFs}px`,
                           }}
                           onMouseDown={(e) => {
                             if (e.shiftKey || e.metaKey || e.ctrlKey) {
@@ -3703,16 +3828,23 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             }
                           }}
                           onPointerDown={(e) => {
+                            if (isFolderInline) return;
                             longPress.start(e, () => {
+                              clearCellTooltip();
                               selectSingleCell(student.id, slot.key);
-                              onEditFolder(activeTab.id, slot.folder);
+                              ensureCellVisible(student.id, slot.key, 'auto');
+                              onOpenCellModal(
+                                student,
+                                makeVirtualFolderCol(slot.folder, slot.childCols)
+                              );
                             });
                           }}
                           onPointerMove={longPress.move}
                           onPointerUp={longPress.cancel}
                           onPointerCancel={longPress.cancel}
                           onClick={(e) => {
-                            if (longPress.wasJustTriggered()) return;
+                            if (isFolderInline || longPress.wasJustTriggered()) return;
+                            clearCellTooltip();
                             const clicked = { studentId: student.id, columnId: slot.key };
                             const isMod = e.metaKey || e.ctrlKey;
                             if (e.shiftKey) {
@@ -3733,34 +3865,139 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                                 setAnchorCoord(clicked);
                               }
                             } else {
-                              // Select ONLY this single folder cell (like any normal cell in the grid)
                               selectSingleCell(student.id, slot.key);
                               ensureCellVisible(student.id, slot.key, 'auto');
                             }
                           }}
                           onDoubleClick={(e) => {
-                            if (e.shiftKey || e.metaKey || e.ctrlKey) return;
-                            onEditFolder(activeTab.id, slot.folder);
+                            if (isFolderInline || e.shiftKey || e.metaKey || e.ctrlKey) return;
+                            clearCellTooltip();
+                            selectSingleCell(student.id, slot.key);
+                            ensureCellVisible(student.id, slot.key, 'auto');
+                            onOpenCellModal(
+                              student,
+                              makeVirtualFolderCol(slot.folder, slot.childCols)
+                            );
                           }}
                           onContextMenu={(e) => {
+                            if (isFolderInline) return;
                             e.preventDefault();
                             e.stopPropagation();
+                            clearCellTooltip();
                             selectSingleCell(student.id, slot.key);
-                            onEditFolder(activeTab.id, slot.folder);
+                            ensureCellVisible(student.id, slot.key, 'auto');
+                            onOpenCellModal(
+                              student,
+                              makeVirtualFolderCol(slot.folder, slot.childCols)
+                            );
                           }}
-                          className={`border-r border-b border-slate-200 px-1 py-0.5 text-center font-bold tabular-nums cursor-pointer relative ${
-                            isFocusedFolderCell
+                          onMouseEnter={(e) => {
+                            if (isFolderInline) return;
+                            const parts: string[] = [];
+                            if (isFolderAutoRecalc) {
+                              parts.push(
+                                'Recalculada automáticamente tras modificar una nota de la carpeta'
+                              );
+                            } else if (isFolderManual && formulaValForTooltip !== null) {
+                              parts.push(
+                                `Editada manualmente (calculada: ${formatGrade(formulaValForTooltip, 2)})`
+                              );
+                            }
+                            if (fComment.trim()) parts.push(fComment.trim());
+                            if (parts.length === 0) return;
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            if (cellTooltipTimerRef.current !== null) {
+                              window.clearTimeout(cellTooltipTimerRef.current);
+                            }
+                            const snapshot = {
+                              top: rect.top,
+                              bottom: rect.bottom,
+                              left: rect.left,
+                              width: rect.width,
+                            };
+                            const txt = parts.join('\n');
+                            cellTooltipTimerRef.current = window.setTimeout(() => {
+                              cellTooltipTimerRef.current = null;
+                              setCellTooltip({ text: txt, rect: snapshot });
+                            }, 600);
+                          }}
+                          onMouseLeave={() => {
+                            clearCellTooltip();
+                          }}
+                          className={`border-r border-b border-slate-200 px-1 py-0.5 text-center align-middle relative cursor-pointer overflow-hidden ${
+                            isFocusedFolderCell || isFolderInline
                               ? 'cell-selected z-10'
                               : isFolderCellInMulti
                                 ? 'cell-multi-selected z-10'
-                                : isStudentRowSelected
-                                  ? 'student-row-cell-tint'
-                                  : isSlotColumnSelected(slot)
-                                    ? 'col-cell-tint'
-                                    : 'hover:brightness-98'
+                                : isFolderAutoRecalc
+                                  ? `${
+                                      isStudentRowSelected
+                                        ? 'student-row-cell-tint'
+                                        : isSlotColumnSelected(slot)
+                                          ? 'col-cell-tint'
+                                          : 'hover:brightness-98'
+                                    } ring-1 ring-inset ring-indigo-500/85`
+                                  : isStudentRowSelected
+                                    ? 'student-row-cell-tint'
+                                    : isSlotColumnSelected(slot)
+                                      ? 'col-cell-tint'
+                                      : 'hover:brightness-98'
                           }`}
                         >
-                          {val !== null ? formatGrade(val, 2) : ''}
+                          {/* Auto-recalculated notice indicator (when upstream note changed after a manual override) */}
+                          {isFolderAutoRecalc && !isFolderInline && (
+                            <span
+                              aria-label="Nota de carpeta recalculada automáticamente tras editar una tarea"
+                              title="Recalculada automáticamente tras cambiar una nota de la carpeta"
+                              className="absolute top-0 left-0 w-0 h-0 border-t-[9px] border-r-[9px] border-t-indigo-600 border-r-transparent pointer-events-none"
+                            />
+                          )}
+                          {/* Manual override corner indicator for folder cells */}
+                          {isFolderManual && !isFolderInline && (
+                            <span
+                              aria-label="Nota de carpeta editada manualmente"
+                              title={
+                                formulaValForTooltip !== null
+                                  ? `Nota editada manualmente (calculada: ${formatGrade(formulaValForTooltip, 2)})`
+                                  : 'Nota editada manualmente'
+                              }
+                              className="absolute top-0 right-0 w-0 h-0 border-t-[7px] border-l-[7px] border-t-amber-500/85 border-l-transparent pointer-events-none"
+                            />
+                          )}
+
+                          <div className="flex flex-col items-center justify-center gap-0 h-full w-full overflow-hidden leading-tight px-0">
+                            {val !== null && (
+                              <span
+                                style={{ fontSize: `${scaledGradeFs}px` }}
+                                className="font-bold tabular-nums leading-[1.08] shrink-0"
+                              >
+                                {formatGrade(val, 2)}
+                              </span>
+                            )}
+                            {fComment && (
+                              <span
+                                className={`w-full overflow-hidden text-ellipsis break-words [overflow-wrap:break-word] ${
+                                  val !== null
+                                    ? `${
+                                        rowH >= 60
+                                          ? 'line-clamp-3'
+                                          : rowH >= 42
+                                            ? 'line-clamp-2'
+                                            : 'line-clamp-1'
+                                      } text-[0.76em] font-normal text-slate-600 leading-[1.12]`
+                                    : `${
+                                        rowH >= 60
+                                          ? 'line-clamp-4'
+                                          : rowH >= 42
+                                            ? 'line-clamp-3'
+                                            : 'line-clamp-2'
+                                      } text-[0.82em] font-medium text-slate-700 leading-[1.14]`
+                                }`}
+                              >
+                                {fComment}
+                              </span>
+                            )}
+                          </div>
                         </td>
                       );
                     }
@@ -3962,7 +4199,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           {grade !== null && (
                             <span
                               style={{ fontSize: `${scaledGradeFs}px` }}
-                              className="font-bold tabular-nums leading-[1.05] shrink-0"
+                              className="font-normal tabular-nums leading-[1.08] shrink-0"
                             >
                               {formatCellDisplayGrade(
                                 grade,
@@ -5053,6 +5290,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         if (selectedColumnTarget) {
           if (selectedColumnTarget.kind === 'COL') {
             const col = selectedColumnTarget.col;
+            const canFillNP =
+              col.type !== 'AVERAGE' && !col.isLocked && !activeTab.isLocked;
+            const emptyNpCount = canFillNP
+              ? countEmptyGradesInColumns(activeBook, [col.id])
+              : 0;
             return (
               <div
                 data-touch-action-bar="column"
@@ -5080,6 +5322,18 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   <Copy className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>Copiar</span>
                 </button>
+                {canFillNP && (
+                  <button
+                    type="button"
+                    disabled={emptyNpCount === 0}
+                    onClick={() => triggerFillEmptyWithNP([col.id], col.title)}
+                    title="Rellenar celdas sin nota con 0 y NP"
+                    className="min-h-[38px] px-2.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-900 disabled:opacity-40 flex items-center gap-1 shrink-0"
+                  >
+                    <FileX2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>0 NP ({emptyNpCount})</span>
+                  </button>
+                )}
                 {!activeTab.isLocked && (
                   <>
                     <button
@@ -5121,6 +5375,16 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           }
 
           const { folder, childCols } = selectedColumnTarget;
+          const editableFolderColIds = activeTab.isLocked
+            ? []
+            : childCols
+                .filter((c) => c.type !== 'AVERAGE' && !c.isLocked)
+                .map((c) => c.id);
+          const emptyFolderNpCount =
+            editableFolderColIds.length > 0
+              ? countEmptyGradesInColumns(activeBook, editableFolderColIds)
+              : 0;
+          const folderOverrideStats = countFolderOverridesAndNotices(activeBook, folder.id);
           return (
             <div
               data-touch-action-bar="folder"
@@ -5155,6 +5419,34 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 <Copy className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Copiar</span>
               </button>
+              {editableFolderColIds.length > 0 && (
+                <button
+                  type="button"
+                  disabled={emptyFolderNpCount === 0}
+                  onClick={() => triggerFillEmptyWithNP(editableFolderColIds, folder.title)}
+                  title="Rellenar celdas sin nota de las tareas de esta carpeta con 0 y NP"
+                  className="min-h-[38px] px-2.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-900 disabled:opacity-40 flex items-center gap-1 shrink-0"
+                >
+                  <FileX2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>0 NP ({emptyFolderNpCount})</span>
+                </button>
+              )}
+              {!activeTab.isLocked && folderOverrideStats.totalCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const count = restoreFolderCalculation(folder.id);
+                    if (count > 0) {
+                      showCopyToast(`Cálculo restituido en ${count} celda(s) de «${folder.title}»`);
+                    }
+                  }}
+                  title="Restituir el cálculo automático en todas las celdas modificadas de esta carpeta"
+                  className="min-h-[38px] px-2.5 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 flex items-center gap-1 shrink-0"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Restituir ({folderOverrideStats.totalCount})</span>
+                </button>
+              )}
               {!activeTab.isLocked && (
                 <>
                   <button
@@ -5353,11 +5645,77 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           );
         }
 
-        // 3. Selected Cell
+        // 3. Selected Cell (Column or Folder Summary)
         if (selectedCoord) {
           const st = visibleStudents.find((s) => s.id === selectedCoord.studentId);
+          if (!st) return null;
+          const folderEntry = folderSlotById.get(selectedCoord.columnId);
+          if (folderEntry) {
+            const fCell = activeBook.cells[cellKey(st.id, folderEntry.folder.id)];
+            const fCommentTxt = fCell?.comment?.trim() ?? '';
+            const vCol = makeVirtualFolderCol(folderEntry.folder, folderEntry.childCols);
+            return (
+              <div
+                data-touch-action-bar="cell"
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{
+                  bottom: 'calc(0.75rem + var(--safe-bottom))',
+                  left: 'max(0.75rem, var(--safe-left))',
+                  maxWidth: 'calc(100dvw - 170px)',
+                }}
+                className="absolute z-30 flex items-center gap-1 px-1.5 py-1 rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-xs shadow-lg overflow-x-auto no-scrollbar text-xs font-semibold text-slate-700"
+              >
+                <button
+                  type="button"
+                  onClick={() => onOpenCellModal(st, vCol)}
+                  className="min-h-[38px] px-3 rounded-xl bg-blue-600 text-white flex items-center gap-1.5 shrink-0"
+                >
+                  <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Editar nota</span>
+                </button>
+
+                {(fCell?.manualOverride || fCell?.autoRecalcNotice) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      restoreFolderCellCalculation(st.id, folderEntry.folder.id);
+                      showCopyToast(
+                        fCell.manualOverride
+                          ? 'Cálculo automático restituido'
+                          : 'Aviso de recálculo ocultado'
+                      );
+                    }}
+                    className="min-h-[38px] px-2.5 rounded-xl border border-amber-300 bg-amber-50 text-amber-900 flex items-center gap-1 shrink-0"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>{fCell.manualOverride ? 'Restituir cálculo' : 'Quitar aviso'}</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => onEditFolder(activeTab.id, folderEntry.folder)}
+                  className="min-h-[38px] px-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-700 shrink-0"
+                >
+                  Carpeta
+                </button>
+
+                {!activeTab.isLocked && (fCell?.manualOverride || fCommentTxt || fCell?.autoRecalcNotice) && (
+                  <button
+                    type="button"
+                    onClick={() => clearCell(st.id, folderEntry.folder.id)}
+                    aria-label="Restituir y vaciar comentario"
+                    className="w-9 h-9 rounded-xl border border-rose-200 bg-rose-50 text-rose-600 flex items-center justify-center shrink-0"
+                  >
+                    <Eraser className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+            );
+          }
+
           const col = activeTab.columns.find((c) => c.id === selectedCoord.columnId);
-          if (!st || !col) return null;
+          if (!col) return null;
           const cell = activeBook.cells[cellKey(st.id, col.id)];
           const commentTxt = cell?.comment?.trim() ?? '';
           const edMode = col.editorMode ?? 'STANDARD';
@@ -5477,6 +5835,203 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         }
 
         return null;
+      })()}
+
+      {/* Desktop quick action pill when a column/task or folder header is selected */}
+      {!device.isTouch && !inlineEdit && selectedColumnTarget && (() => {
+        if (selectedColumnTarget.kind === 'COL') {
+          const col = selectedColumnTarget.col;
+          const canFillNP =
+            col.type !== 'AVERAGE' && !col.isLocked && !activeTab.isLocked;
+          const emptyNpCount = canFillNP
+            ? countEmptyGradesInColumns(activeBook, [col.id])
+            : 0;
+          return (
+            <div
+              data-desktop-column-bar="column"
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                bottom: 'calc(0.75rem + var(--safe-bottom))',
+                left: 'max(0.75rem, var(--safe-left))',
+              }}
+              className="absolute z-30 flex items-center gap-1.5 pl-3 pr-1.5 py-1.5 rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-xs shadow-lg text-xs font-semibold text-slate-700"
+            >
+              <span className="font-bold text-slate-900 truncate max-w-[180px] pr-1">
+                {col.title}
+              </span>
+              <button
+                type="button"
+                onClick={() => onEditColumn(col)}
+                className="px-2.5 py-1 rounded-xl bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1 shrink-0 transition-colors"
+              >
+                <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Editar</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => copyColumnAlphabetical({ kind: 'COL', col })}
+                className="px-2.5 py-1 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 flex items-center gap-1 shrink-0 transition-colors"
+              >
+                <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Copiar</span>
+              </button>
+              {canFillNP && (
+                <button
+                  type="button"
+                  disabled={emptyNpCount === 0}
+                  onClick={() => triggerFillEmptyWithNP([col.id], col.title)}
+                  title="Rellena las celdas sin nota con 0 y el texto NP (las celdas que ya tienen nota no se modifican)"
+                  className="px-2.5 py-1 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-40 text-indigo-900 flex items-center gap-1 shrink-0 transition-colors"
+                >
+                  <FileX2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Rellenar vacías: 0 NP ({emptyNpCount})</span>
+                </button>
+              )}
+            </div>
+          );
+        }
+
+        const { folder, childCols } = selectedColumnTarget;
+        const editableFolderColIds = activeTab.isLocked
+          ? []
+          : childCols
+              .filter((c) => c.type !== 'AVERAGE' && !c.isLocked)
+              .map((c) => c.id);
+        const emptyFolderNpCount =
+          editableFolderColIds.length > 0
+            ? countEmptyGradesInColumns(activeBook, editableFolderColIds)
+            : 0;
+        const folderOverrideStats = countFolderOverridesAndNotices(activeBook, folder.id);
+        return (
+          <div
+            data-desktop-column-bar="folder"
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              bottom: 'calc(0.75rem + var(--safe-bottom))',
+              left: 'max(0.75rem, var(--safe-left))',
+            }}
+            className="absolute z-30 flex items-center gap-1.5 pl-3 pr-1.5 py-1.5 rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-xs shadow-lg text-xs font-semibold text-slate-700"
+          >
+            <span className="font-bold text-slate-900 truncate max-w-[180px] pr-1">
+              {folder.title}
+            </span>
+            <button
+              type="button"
+              onClick={() => onEditFolder(activeTab.id, folder)}
+              className="px-2.5 py-1 rounded-xl bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1 shrink-0 transition-colors"
+            >
+              <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Carpeta</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleFolderCollapse(activeTab.id, folder.id)}
+              className="px-2.5 py-1 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 shrink-0 transition-colors"
+            >
+              {folder.isCollapsed ? 'Desplegar' : 'Plegar'}
+            </button>
+            <button
+              type="button"
+              onClick={() => copyColumnAlphabetical({ kind: 'FOLDER', folder, childCols })}
+              className="px-2.5 py-1 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 flex items-center gap-1 shrink-0 transition-colors"
+            >
+              <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Copiar</span>
+            </button>
+            {editableFolderColIds.length > 0 && (
+              <button
+                type="button"
+                disabled={emptyFolderNpCount === 0}
+                onClick={() => triggerFillEmptyWithNP(editableFolderColIds, folder.title)}
+                title="Rellena con 0 y NP las celdas sin nota de las tareas de esta carpeta"
+                className="px-2.5 py-1 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-40 text-indigo-900 flex items-center gap-1 shrink-0 transition-colors"
+              >
+                <FileX2 className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Rellenar vacías: 0 NP ({emptyFolderNpCount})</span>
+              </button>
+            )}
+            {!activeTab.isLocked && (
+              <button
+                type="button"
+                disabled={folderOverrideStats.totalCount === 0}
+                onClick={() => {
+                  const count = restoreFolderCalculation(folder.id);
+                  if (count > 0) {
+                    showCopyToast(
+                      `Cálculo restituido en ${count} ${count === 1 ? 'celda' : 'celdas'} de «${folder.title}»`
+                    );
+                  }
+                }}
+                title="Restituye el cálculo automático en todas las celdas de esta carpeta editadas manualmente o con aviso"
+                className="px-2.5 py-1 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 disabled:opacity-40 text-amber-900 flex items-center gap-1 shrink-0 transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Restituir cálculo ({folderOverrideStats.totalCount})</span>
+              </button>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Desktop quick action pill when a single folder cell has manual override or auto-recalc notice */}
+      {!device.isTouch && !inlineEdit && selectedCoord && selectedKeys.size <= 1 && (() => {
+        const st = visibleStudents.find((s) => s.id === selectedCoord.studentId);
+        const folderEntry = folderSlotById.get(selectedCoord.columnId);
+        if (!st || !folderEntry) return null;
+        const fCell = activeBook.cells[cellKey(st.id, folderEntry.folder.id)];
+        if (!fCell?.manualOverride && !fCell?.autoRecalcNotice) return null;
+        const formulaVal = computeFolderFormulaValue(
+          folderEntry.folder,
+          folderEntry.childCols,
+          st.id,
+          activeBook
+        );
+        const formulaLabel = formulaVal !== null ? formatGrade(formulaVal, 2) : '—';
+        return (
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              bottom: 'calc(0.75rem + var(--safe-bottom))',
+              left: 'max(0.75rem, var(--safe-left))',
+            }}
+            className={`absolute z-30 flex items-center gap-2 pl-3 pr-1.5 py-1.5 rounded-2xl border backdrop-blur-xs shadow-lg text-xs ${
+              fCell.manualOverride
+                ? 'border-amber-200 bg-amber-50/95 text-amber-950'
+                : 'border-indigo-200 bg-indigo-50/95 text-indigo-950'
+            }`}
+          >
+            <span className="font-medium truncate max-w-[260px]">
+              <strong className="font-semibold">{st.lastName}:</strong>{' '}
+              {fCell.manualOverride ? (
+                <>
+                  nota manual · calculada:{' '}
+                  <span className="font-bold tabular-nums">{formulaLabel}</span>
+                </>
+              ) : (
+                <>recalculada automáticamente ({formulaLabel})</>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                restoreFolderCellCalculation(st.id, folderEntry.folder.id);
+                showCopyToast(
+                  fCell.manualOverride
+                    ? 'Cálculo automático restituido en la celda'
+                    : 'Aviso de recálculo ocultado'
+                );
+              }}
+              className={`px-2.5 py-1 rounded-xl text-white font-semibold flex items-center gap-1 shrink-0 transition-colors ${
+                fCell.manualOverride
+                  ? 'bg-amber-600 hover:bg-amber-700'
+                  : 'bg-indigo-600 hover:bg-indigo-700'
+              }`}
+            >
+              <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>{fCell.manualOverride ? 'Restituir cálculo' : 'Quitar aviso'}</span>
+            </button>
+          </div>
+        );
       })()}
 
       {/* Desktop quick Educamos action pill when a single outdated cell is selected */}
@@ -5741,8 +6296,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
       {/* Expanded Inline Cell Editor Portal (shows 100% of text + real cursor navigation across all text) */}
       {inlineEdit && inlineEditRect && (() => {
-        const col = visibleColumns.find((c) => c.id === inlineEdit.columnId);
-        if (!col) return null;
+        const targetInfo = resolveEditableTarget(inlineEdit.columnId);
+        if (!targetInfo) return null;
+        const col = targetInfo.col;
         const liveSplit = parseLiveMixedInput(inlineEdit.draft);
         const editorWidth = Math.max(
           inlineEditRect.width + 6,
@@ -5760,7 +6316,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         const badgeGrade =
           inlineEdit.preserveRubricGrade && !liveSplit.gradeText
             ? inlineEdit.initialGrade !== null && inlineEdit.initialGrade !== undefined
-              ? `${formatGrade(inlineEdit.initialGrade, col.decimals)} (rúbrica)`
+              ? `${formatGrade(inlineEdit.initialGrade, col.decimals)} (${
+                  targetInfo.isFolder ? 'carpeta' : 'rúbrica'
+                })`
               : ''
             : liveSplit.gradeText ||
               (inlineEdit.mode === 'TYPE_OVER' &&

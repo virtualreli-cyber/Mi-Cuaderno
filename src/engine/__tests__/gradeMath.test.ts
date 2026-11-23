@@ -4,11 +4,16 @@ import {
   applyCounterDelta,
   buildAlphabeticalColumnCopyText,
   computeColumnSummaryMetric,
+  computeFolderFormulaValue,
+  computeFolderSourceSignature,
   computeFolderSummary,
   computeRubricPercentage,
   computeRubricScore,
+  countEmptyGradesInColumns,
+  countFolderOverridesAndNotices,
   ensureGroupCategories,
   exportStudentList,
+  fillColumnsEmptyWithNP,
   formatCellCopyValue,
   formatCellDisplayGrade,
   getEffectiveBookGroups,
@@ -21,6 +26,7 @@ import {
   parseStudentList,
   recalculateBook,
   resolveCellColors,
+  restoreFolderCellsCalculation,
   shouldRenderVerticalHeader,
 } from '../gradeMath';
 import { cellKey, type ColumnEntity, type FolderEntity } from '../../types/gradebook';
@@ -575,5 +581,181 @@ describe('Weighted Averages, Cross-Tab Chaining, Rubrics & Folders', () => {
     expect(applyCounterDelta(9.75, 0.5, col)).toBe(10);
     expect(applyCounterDelta(null, -0.5, col)).toBe(-0.5);
     expect(applyCounterDelta(-4.75, -0.5, col)).toBe(-5);
+  });
+
+  it('fills ungraded active cells (including text-only cells) with 0 and NP without modifying already graded cells', () => {
+    const ws = createSeedWorkspace();
+    const book = structuredClone(ws.classes[0]);
+    const tab = book.tabs[0];
+    const numCol = tab.columns.find((c) => c.type === 'NUMERIC')!;
+    const rubCol = tab.columns.find((c) => c.type === 'RUBRIC')!;
+    const avgCol = tab.columns.find((c) => c.type === 'AVERAGE')!;
+
+    const st0 = book.students[0];
+    const st1 = book.students[1];
+    const st2 = book.students[2];
+    const hiddenSt = { ...book.students[3], isHidden: true };
+    book.students[3] = hiddenSt;
+
+    // Reset test cells cleanly
+    for (const st of book.students) {
+      delete book.cells[cellKey(st.id, numCol.id)];
+      delete book.cells[cellKey(st.id, rubCol.id)];
+    }
+
+    // st0 already has a numeric grade and comment -> must NOT be modified
+    book.cells[cellKey(st0.id, numCol.id)] = { grade: 7.5, comment: 'Bien hecho' };
+    // st1 has text only (grade: null) -> MUST be treated as ungraded and set to 0 + NP
+    book.cells[cellKey(st1.id, numCol.id)] = { grade: null, comment: 'Falta revisar' };
+    // st2 is completely missing/empty -> MUST be set to 0 + NP
+    // st1 in rubric has existing graded rubric selection -> untouched by fillColumnsEmptyWithNP & preserved by recalculateBook
+    const rub = DEFAULT_RUBRICS.find((r) => r.id === rubCol.rubricId) ?? DEFAULT_RUBRICS[0];
+    const crit = rub.criteria[0];
+    const lvl = rub.levels[0];
+    book.cells[cellKey(st1.id, rubCol.id)] = {
+      grade: 8,
+      comment: 'Rubrica OK',
+      rubricEval: {
+        rubricId: rub.id,
+        selections: crit && lvl ? { [crit.id]: { levelId: lvl.id } } : {},
+      },
+      manualOverride: true,
+    };
+
+    const emptyCount = countEmptyGradesInColumns(book, [numCol.id, rubCol.id, avgCol.id]);
+    const activeNonHiddenCount = book.students.filter((s) => !s.isHidden).length;
+    // All active non-hidden students except st0 in numCol and st1 in rubCol
+    expect(emptyCount).toBe((activeNonHiddenCount - 1) + (activeNonHiddenCount - 1));
+
+    const { book: filled, filledCount, affectedColumnCount } = fillColumnsEmptyWithNP(
+      book,
+      [numCol.id, rubCol.id, avgCol.id],
+      ws.rubrics
+    );
+
+    expect(affectedColumnCount).toBe(2);
+    expect(filledCount).toBe(emptyCount);
+
+    // Existing graded cells untouched
+    expect(filled.cells[cellKey(st0.id, numCol.id)]).toEqual({ grade: 7.5, comment: 'Bien hecho' });
+    expect(filled.cells[cellKey(st1.id, rubCol.id)]?.grade).toBe(8);
+    expect(filled.cells[cellKey(st1.id, rubCol.id)]?.comment).toBe('Rubrica OK');
+
+    // Text-only cell and empty cell filled with 0 and NP
+    expect(filled.cells[cellKey(st1.id, numCol.id)]).toEqual({ grade: 0, comment: 'NP' });
+    expect(filled.cells[cellKey(st2.id, numCol.id)]).toEqual({ grade: 0, comment: 'NP' });
+
+    // Rubric empty cell gets 0 + NP + manualOverride: true
+    expect(filled.cells[cellKey(st2.id, rubCol.id)]).toEqual({
+      grade: 0,
+      comment: 'NP',
+      rubricEval: undefined,
+      manualOverride: true,
+    });
+
+    // Hidden student skipped
+    expect(filled.cells[cellKey(hiddenSt.id, numCol.id)]).toBeUndefined();
+    expect(filled.cells[cellKey(hiddenSt.id, rubCol.id)]).toBeUndefined();
+  });
+
+  it('supports manual override on folder cells, restores calculation automatically with notice on upstream change, and supports single-cell or whole-folder restoration', () => {
+    const ws = createSeedWorkspace();
+    const book = structuredClone(ws.classes[0]);
+    const tab = book.tabs[0];
+    const folder = tab.folders.find((f) => f.id === 'c1-fld-diario')!;
+    const childCols = tab.columns
+      .filter((c) => c.folderId === folder.id)
+      .sort((a, b) => a.orderIndex - b.orderIndex);
+    const st0 = book.students[0];
+    const st1 = book.students[1];
+
+    // Add a downstream AVERAGE column referencing only this folder
+    tab.columns.push({
+      id: 'col-avg-folder-test',
+      folderId: null,
+      title: 'Media Test',
+      color: '#DCFCE7',
+      width: 90,
+      orderIndex: 99,
+      type: 'AVERAGE',
+      minValue: 0,
+      maxValue: 10,
+      decimals: 2,
+      passThreshold: 5,
+      colorMode: 'NONE',
+      averageConfig: {
+        sourceColumnIds: [folder.id],
+        weights: { [folder.id]: 100 },
+        ignoreEmpty: true,
+      },
+    });
+
+    const formula0 = computeFolderFormulaValue(folder, childCols, st0.id, book)!;
+    const formula1 = computeFolderFormulaValue(folder, childCols, st1.id, book)!;
+    expect(formula0).not.toBeNull();
+
+    // Manually override folder grade for both st0 and st1
+    book.cells[cellKey(st0.id, folder.id)] = {
+      grade: 4.5,
+      comment: 'Ajuste carpeta',
+      manualOverride: true,
+      manualSourceSignature: computeFolderSourceSignature(folder, childCols, st0.id, book),
+    };
+    book.cells[cellKey(st1.id, folder.id)] = {
+      grade: 9.9,
+      comment: '',
+      manualOverride: true,
+      manualSourceSignature: computeFolderSourceSignature(folder, childCols, st1.id, book),
+    };
+
+    // Unrelated recalculation preserves manual folder overrides and feeds downstream AVERAGE
+    const afterManual = recalculateBook(book, ws.rubrics);
+    expect(computeFolderSummary(folder, childCols, st0.id, afterManual)).toBe(4.5);
+    expect(afterManual.cells[cellKey(st0.id, 'col-avg-folder-test')]?.grade).toBe(4.5);
+    expect(afterManual.cells[cellKey(st0.id, folder.id)]?.autoRecalcNotice).toBeUndefined();
+
+    // Now modify a child column grade for st0 ONLY -> st0 MUST auto-recalculate + flag notice, st1 stays manual!
+    const mutated = structuredClone(afterManual);
+    mutated.cells[cellKey(st0.id, childCols[0].id)] = { grade: 10, comment: '' };
+    const expectedFormula0 = computeFolderFormulaValue(folder, childCols, st0.id, mutated)!;
+    const afterChildEdit = recalculateBook(mutated, ws.rubrics);
+
+    expect(computeFolderSummary(folder, childCols, st0.id, afterChildEdit)).toBe(expectedFormula0);
+    expect(afterChildEdit.cells[cellKey(st0.id, folder.id)]?.manualOverride).toBeUndefined();
+    expect(afterChildEdit.cells[cellKey(st0.id, folder.id)]?.autoRecalcNotice).toBe(true);
+    expect(afterChildEdit.cells[cellKey(st0.id, folder.id)]?.comment).toBe('Ajuste carpeta');
+    expect(afterChildEdit.cells[cellKey(st0.id, 'col-avg-folder-test')]?.grade).toBe(expectedFormula0);
+
+    // st1 was untouched upstream -> manual override preserved
+    expect(computeFolderSummary(folder, childCols, st1.id, afterChildEdit)).toBe(9.9);
+    expect(countFolderOverridesAndNotices(afterChildEdit, folder.id)).toEqual({
+      manualCount: 1,
+      noticeCount: 1,
+      totalCount: 2,
+    });
+
+    // Restore st1 cell individually -> st1 reverts to formula1 cleanly
+    const { book: afterSingleRestore, restoredCount: r1 } = restoreFolderCellsCalculation(
+      afterChildEdit,
+      folder.id,
+      ws.rubrics,
+      [st1.id]
+    );
+    expect(r1).toBe(1);
+    expect(computeFolderSummary(folder, childCols, st1.id, afterSingleRestore)).toBe(formula1);
+    expect(afterSingleRestore.cells[cellKey(st1.id, folder.id)]).toBeUndefined();
+
+    // Restore whole folder -> clears remaining notice on st0 while keeping comment!
+    const { book: afterFullRestore, restoredCount: rAll } = restoreFolderCellsCalculation(
+      afterSingleRestore,
+      folder.id,
+      ws.rubrics
+    );
+    expect(rAll).toBe(1);
+    expect(afterFullRestore.cells[cellKey(st0.id, folder.id)]).toEqual({
+      grade: null,
+      comment: 'Ajuste carpeta',
+    });
+    expect(countFolderOverridesAndNotices(afterFullRestore, folder.id).totalCount).toBe(0);
   });
 });

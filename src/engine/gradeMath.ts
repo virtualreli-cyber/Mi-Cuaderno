@@ -315,6 +315,37 @@ export function recalculateBook(book: ClassBook, rubrics: RubricEntity[]): Class
     }
   }
 
+  // 1b. Reconcile manual overrides on folder summary cells:
+  // If any upstream grade/formula changed AFTER a manual override, restore the calculated grade
+  // automatically and flag `autoRecalcNotice: true` so the cell visually notifies the teacher.
+  const liveAfterRubrics: ClassBook = { ...book, cells: nextCells };
+  for (const tab of book.tabs ?? []) {
+    const tabCols = tab.columns ?? [];
+    for (const folder of tab.folders ?? []) {
+      const childCols = tabCols
+        .filter((c) => c.folderId === folder.id)
+        .sort((a, b) => a.orderIndex - b.orderIndex);
+      for (const st of book.students) {
+        const fk = cellKey(st.id, folder.id);
+        const fCell = nextCells[fk];
+        if (!fCell?.manualOverride) continue;
+        const currentSig = computeFolderSourceSignature(folder, childCols, st.id, liveAfterRubrics);
+        if (fCell.manualSourceSignature === undefined) {
+          nextCells[fk] = {
+            ...fCell,
+            manualSourceSignature: currentSig,
+          };
+        } else if (fCell.manualSourceSignature !== currentSig) {
+          nextCells[fk] = {
+            grade: null,
+            comment: fCell.comment ?? '',
+            autoRecalcNotice: true,
+          };
+        }
+      }
+    }
+  }
+
   // 2. Topological order for AVERAGE columns (supports both column IDs & folder IDs, with cycle protection)
   const avgCols = allCols.filter((c) => c.type === 'AVERAGE');
   const visited = new Set<string>();
@@ -568,7 +599,31 @@ export function migrateRedundantFolderAverageColumns(book: ClassBook): {
   };
 }
 
-export function computeFolderSummary(
+/**
+ * Deterministic fingerprint of every child-column grade & folder configuration affecting
+ * a student's calculated folder summary. Used to detect upstream changes after a manual override.
+ */
+export function computeFolderSourceSignature(
+  folder: FolderEntity,
+  childCols: ColumnEntity[],
+  studentId: string,
+  book: ClassBook
+): string {
+  const mode = folder.summaryMode ?? 'ARITHMETIC_MEAN';
+  const ignoreEmpty = folder.ignoreEmpty ?? true;
+  const colParts = childCols.map((c) => {
+    const cell = book.cells[cellKey(studentId, c.id)];
+    const g = hasCellNumericGrade(cell) ? cell!.grade : '';
+    const w = folder.columnWeights?.[c.id] ?? '';
+    return `${c.id}:${c.minValue}-${c.maxValue}:${w}:${g}`;
+  });
+  return `${mode}|${ignoreEmpty ? 1 : 0}|${colParts.join('|')}`;
+}
+
+/**
+ * Pure formula calculation for a folder summary column (ignoring any manual override).
+ */
+export function computeFolderFormulaValue(
   folder: FolderEntity,
   childCols: ColumnEntity[],
   studentId: string,
@@ -621,6 +676,76 @@ export function computeFolderSummary(
     default:
       return roundTo(entries.reduce((acc, e) => acc + e.val, 0) / entries.length, 2);
   }
+}
+
+export function computeFolderSummary(
+  folder: FolderEntity,
+  childCols: ColumnEntity[],
+  studentId: string,
+  book: ClassBook
+): number | null {
+  const overrideCell = book.cells[cellKey(studentId, folder.id)];
+  if (overrideCell?.manualOverride && hasCellNumericGrade(overrideCell)) {
+    return overrideCell.grade;
+  }
+  return computeFolderFormulaValue(folder, childCols, studentId, book);
+}
+
+export function countFolderOverridesAndNotices(
+  book: ClassBook,
+  folderId: string
+): { manualCount: number; noticeCount: number; totalCount: number } {
+  let manualCount = 0;
+  let noticeCount = 0;
+  for (const st of book.students) {
+    if (st.isHidden) continue;
+    const cell = book.cells[cellKey(st.id, folderId)];
+    if (!cell) continue;
+    if (cell.manualOverride) manualCount += 1;
+    else if (cell.autoRecalcNotice) noticeCount += 1;
+  }
+  return { manualCount, noticeCount, totalCount: manualCount + noticeCount };
+}
+
+/**
+ * Restores calculated folder values (clearing `manualOverride`, `manualSourceSignature`, and
+ * `autoRecalcNotice`) for either specific student(s) or all students in `folderId`, while
+ * preserving any existing text comments. Recomputes downstream AVERAGE columns.
+ */
+export function restoreFolderCellsCalculation(
+  book: ClassBook,
+  folderId: string,
+  rubrics: RubricEntity[],
+  studentIds?: string[]
+): { book: ClassBook; restoredCount: number } {
+  const targetStudentIds = studentIds ?? book.students.map((s) => s.id);
+  const nextCells: Record<string, CellEntity> = { ...book.cells };
+  let restoredCount = 0;
+
+  for (const sid of targetStudentIds) {
+    const k = cellKey(sid, folderId);
+    const prev = nextCells[k];
+    if (!prev || (!prev.manualOverride && !prev.autoRecalcNotice)) continue;
+    restoredCount += 1;
+    const cleanComment = (prev.comment ?? '').trim();
+    if (cleanComment) {
+      nextCells[k] = {
+        grade: null,
+        comment: cleanComment,
+      };
+    } else {
+      delete nextCells[k];
+    }
+  }
+
+  if (restoredCount === 0) {
+    return { book, restoredCount: 0 };
+  }
+
+  return {
+    book: recalculateBook({ ...book, cells: nextCells }, rubrics),
+    restoredCount,
+  };
 }
 
 export interface ColumnStats {
@@ -1248,6 +1373,122 @@ export function buildAlphabeticalColumnCopyText(
     text: lines.join('\n'),
     studentCount: alphaStudents.length,
     nonEmptyCount,
+  };
+}
+
+export function hasCellNumericGrade(cell: CellEntity | undefined): boolean {
+  return cell?.grade !== null && cell?.grade !== undefined && !Number.isNaN(cell.grade);
+}
+
+/**
+ * Returns every (activeStudent, editableColumn) coordinate without a numeric grade.
+ * Text-only comments (with grade === null) are treated as ungraded.
+ * Skips hidden students, AVERAGE columns, locked columns, and locked tabs.
+ */
+export function getEmptyGradeTargetsForColumns(
+  book: ClassBook,
+  columnIds: string[]
+): Array<{ studentId: string; columnId: string }> {
+  const uniqueIds = Array.from(new Set(columnIds.filter(Boolean)));
+  if (uniqueIds.length === 0) return [];
+
+  const editableCols = new Map<string, ColumnEntity>();
+  for (const tab of book.tabs ?? []) {
+    if (tab.isLocked) continue;
+    for (const col of tab.columns ?? []) {
+      if (!col.isLocked && col.type !== 'AVERAGE') {
+        editableCols.set(col.id, col);
+      }
+    }
+  }
+
+  const activeStudents = book.students.filter((s) => !s.isHidden);
+  const targets: Array<{ studentId: string; columnId: string }> = [];
+
+  for (const colId of uniqueIds) {
+    if (!editableCols.has(colId)) continue;
+    for (const st of activeStudents) {
+      const cell = book.cells[cellKey(st.id, colId)];
+      if (!hasCellNumericGrade(cell)) {
+        targets.push({ studentId: st.id, columnId: colId });
+      }
+    }
+  }
+
+  return targets;
+}
+
+export function countEmptyGradesInColumns(book: ClassBook, columnIds: string[]): number {
+  return getEmptyGradeTargetsForColumns(book, columnIds).length;
+}
+
+/**
+ * Fills every ungraded active-student cell in the specified editable columns with
+ * grade `0` (clamped to column bounds) and comment `"NP"` ("No presentado").
+ * Cells that already have a numeric grade are left untouched; cells with text
+ * only (`grade === null`) ARE filled.
+ */
+export function fillColumnsEmptyWithNP(
+  book: ClassBook,
+  columnIds: string[],
+  rubrics: RubricEntity[]
+): {
+  book: ClassBook;
+  filledCount: number;
+  affectedColumnCount: number;
+  firstTarget: { studentId: string; columnId: string } | null;
+} {
+  const targets = getEmptyGradeTargetsForColumns(book, columnIds);
+  if (targets.length === 0) {
+    return { book, filledCount: 0, affectedColumnCount: 0, firstTarget: null };
+  }
+
+  const colMap = new Map<string, ColumnEntity>();
+  for (const tab of book.tabs ?? []) {
+    for (const col of tab.columns ?? []) {
+      colMap.set(col.id, col);
+    }
+  }
+
+  const nextCells: Record<string, CellEntity> = { ...book.cells };
+  const affectedCols = new Set<string>();
+  let filledCount = 0;
+
+  for (const { studentId, columnId } of targets) {
+    const col = colMap.get(columnId);
+    if (!col) continue;
+    const k = cellKey(studentId, columnId);
+    const prev = nextCells[k];
+    const zeroGrade = clampGradeForColumn(0, col) ?? 0;
+
+    if (col.type === 'RUBRIC') {
+      nextCells[k] = {
+        grade: zeroGrade,
+        comment: 'NP',
+        rubricEval: prev?.rubricEval,
+        manualOverride: true,
+      };
+    } else {
+      nextCells[k] = {
+        ...prev,
+        grade: zeroGrade,
+        comment: 'NP',
+      };
+    }
+
+    affectedCols.add(columnId);
+    filledCount += 1;
+  }
+
+  if (filledCount === 0) {
+    return { book, filledCount: 0, affectedColumnCount: 0, firstTarget: null };
+  }
+
+  return {
+    book: recalculateBook({ ...book, cells: nextCells }, rubrics),
+    filledCount,
+    affectedColumnCount: affectedCols.size,
+    firstTarget: targets[0] ?? null,
   };
 }
 

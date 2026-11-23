@@ -1,8 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, Delete, Eraser, Keyboard, Minus, Plus } from 'lucide-react';
+import { Check, Delete, Eraser, Keyboard, Minus, Plus, RotateCcw } from 'lucide-react';
 import { useGradebook } from '../../context/GradebookContext';
 import { getEducamosSnappedGrade, isCellOutdatedForEducamos } from '../../engine/educamos';
-import { applyCounterDelta, clampGradeForColumn, formatGrade } from '../../engine/gradeMath';
+import {
+  applyCounterDelta,
+  clampGradeForColumn,
+  computeFolderFormulaValue,
+  formatGrade,
+} from '../../engine/gradeMath';
 import { useDeviceProfile } from '../../hooks/useDeviceProfile';
 import { cellKey, type ColumnEntity, type StudentEntity } from '../../types/gradebook';
 import { Modal } from '../common/Modal';
@@ -21,7 +26,13 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
   column,
 }) => {
   const device = useDeviceProfile();
-  const { activeBook, setCellData, clearCell, markCellEducamosUpdated } = useGradebook();
+  const {
+    activeBook,
+    setCellData,
+    clearCell,
+    markCellEducamosUpdated,
+    restoreFolderCellCalculation,
+  } = useGradebook();
   const [gradeStr, setGradeStr] = useState('');
   const [comment, setComment] = useState('');
   const [replaceOnFirstKey, setReplaceOnFirstKey] = useState(false);
@@ -517,6 +528,58 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
             className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
           />
         </div>
+
+        {(() => {
+          const folderEntry = activeBook?.tabs
+            .map((t) => ({
+              tab: t,
+              folder: t.folders.find((f) => f.id === column.id),
+            }))
+            .find((x) => Boolean(x.folder));
+          if (!folderEntry?.folder || !activeBook) return null;
+          const childCols = folderEntry.tab.columns
+            .filter((c) => c.folderId === folderEntry.folder!.id)
+            .sort((a, b) => a.orderIndex - b.orderIndex);
+          const formulaVal = computeFolderFormulaValue(
+            folderEntry.folder,
+            childCols,
+            student.id,
+            activeBook
+          );
+          const formulaLabel = formulaVal !== null ? formatGrade(formulaVal, 2) : '—';
+          if (!currentCell?.manualOverride && !currentCell?.autoRecalcNotice) {
+            return (
+              <div className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-[11px] text-slate-600">
+                Carpeta calculada automáticamente (valor actual: <strong className="tabular-nums text-slate-800">{formulaLabel}</strong>). Si escribes una nota, sustituirá el cálculo hasta que cambie una tarea de la carpeta o lo restituyas.
+              </div>
+            );
+          }
+          return (
+            <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-950">
+              <div className="min-w-0">
+                <div className="font-bold text-[11px]">
+                  {currentCell.manualOverride
+                    ? 'Nota de carpeta editada manualmente'
+                    : 'Recalculada automáticamente tras cambiar una tarea'}
+                </div>
+                <div className="text-[11px] text-amber-800 tabular-nums">
+                  Cálculo automático de la carpeta: <span className="font-semibold">{formulaLabel}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  restoreFolderCellCalculation(student.id, column.id);
+                  onClose();
+                }}
+                className="shrink-0 px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold flex items-center gap-1 transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>{currentCell.manualOverride ? 'Restituir cálculo' : 'Quitar aviso'}</span>
+              </button>
+            </div>
+          );
+        })()}
 
         {(() => {
           const educamosCell = activeBook ? activeBook.cells[cellKey(student.id, column.id)] : undefined;

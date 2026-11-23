@@ -139,8 +139,12 @@ export interface CellEntity {
   grade: number | null;
   comment: string;
   rubricEval?: RubricCellEval;
-  /** True when a RUBRIC cell's numeric grade was manually edited via keyboard/paste, overriding computed rubric score */
+  /** True when a RUBRIC or FOLDER summary cell's numeric grade was manually edited, overriding computed score */
   manualOverride?: boolean;
+  /** Snapshot signature of upstream child grades/formula when a folder cell was manually overridden */
+  manualSourceSignature?: string;
+  /** True when a manually overridden folder cell was automatically recalculated after an upstream change */
+  autoRecalcNotice?: boolean;
 }
 
 export interface AverageConfig {

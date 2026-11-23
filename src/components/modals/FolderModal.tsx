@@ -1,16 +1,23 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeft,
   ArrowRight,
   Check,
+  FileX2,
   FolderClosed,
   FolderOpen,
+  RotateCcw,
   Scale,
   Trash2,
 } from 'lucide-react';
 import { PASTEL_SWATCHES } from '../../constants/colors';
 import { useGradebook } from '../../context/GradebookContext';
 import { findCopyConflicts } from '../../engine/copyConflictEngine';
+import {
+  countEmptyGradesInColumns,
+  countFolderOverridesAndNotices,
+} from '../../engine/gradeMath';
 import { getCanonicalItemOrder } from '../../engine/tabLayout';
 import type { ColorMode, FolderEntity, FolderSummaryMode } from '../../types/gradebook';
 import { Modal } from '../common/Modal';
@@ -40,6 +47,8 @@ export const FolderModal: React.FC<FolderModalProps> = ({ open, onClose, tabId, 
     deleteFolder,
     stepFolder,
     copyFolderToTarget,
+    fillEmptyGradesWithNP,
+    restoreFolderCalculation,
   } = useGradebook();
 
   const [title, setTitle] = useState('');
@@ -54,7 +63,21 @@ export const FolderModal: React.FC<FolderModalProps> = ({ open, onClose, tabId, 
   const [copyClassId, setCopyClassId] = useState('');
   const [copyTabId, setCopyTabId] = useState('');
   const [copyDoneMsg, setCopyDoneMsg] = useState<string | null>(null);
+  const [actionPopupMsg, setActionPopupMsg] = useState<string | null>(null);
+  const actionPopupTimerRef = useRef<number | null>(null);
   const [pendingConflict, setPendingConflict] = useState<PendingCopyConflict | null>(null);
+
+  const flashPopup = (msg: string) => {
+    setActionPopupMsg(msg);
+    if (actionPopupTimerRef.current) window.clearTimeout(actionPopupTimerRef.current);
+    actionPopupTimerRef.current = window.setTimeout(() => setActionPopupMsg(null), 3000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (actionPopupTimerRef.current) window.clearTimeout(actionPopupTimerRef.current);
+    };
+  }, []);
 
   const currentTab = useMemo(
     () => activeBook?.tabs.find((t) => t.id === tabId) ?? null,
@@ -74,8 +97,29 @@ export const FolderModal: React.FC<FolderModalProps> = ({ open, onClose, tabId, 
   );
   const folderPos = folder ? itemOrder.indexOf(folder.id) : -1;
 
+  const editableChildColIds = useMemo(() => {
+    if (!currentTab || currentTab.isLocked) return [];
+    return childCols
+      .filter((c) => c.type !== 'AVERAGE' && !c.isLocked)
+      .map((c) => c.id);
+  }, [currentTab, childCols]);
+
+  const emptyFolderGradeCount = useMemo(() => {
+    if (!activeBook || editableChildColIds.length === 0) return 0;
+    return countEmptyGradesInColumns(activeBook, editableChildColIds);
+  }, [activeBook, editableChildColIds]);
+
+  const folderOverrideStats = useMemo(() => {
+    if (!activeBook || !folder) return { manualCount: 0, noticeCount: 0, totalCount: 0 };
+    return countFolderOverridesAndNotices(activeBook, folder.id);
+  }, [activeBook, folder]);
+
   useEffect(() => {
-    if (!open || !folder) return;
+    if (!open) {
+      setActionPopupMsg(null);
+      return;
+    }
+    if (!folder) return;
     setTitle(folder.title);
     setColor(folder.color);
     setWidth(folder.width ?? 64);
@@ -83,6 +127,7 @@ export const FolderModal: React.FC<FolderModalProps> = ({ open, onClose, tabId, 
     setColorMode(folder.colorMode ?? 'NONE');
     setIgnoreEmpty(folder.ignoreEmpty ?? true);
     setCopyDoneMsg(null);
+    setActionPopupMsg(null);
     setPendingConflict(null);
 
     const w: Record<string, number> = {};
@@ -434,18 +479,66 @@ export const FolderModal: React.FC<FolderModalProps> = ({ open, onClose, tabId, 
             </div>
           </div>
 
-          <div className="sticky bottom-0 -mx-5 -mb-5 px-5 py-3 bg-white/95 backdrop-blur-xs border-t border-slate-200 flex items-center justify-between z-20">
-            <button
-              type="button"
-              onClick={() => {
-                deleteFolder(tabId, folder.id);
-                onClose();
-              }}
-              className="px-3 py-2 rounded-xl text-rose-600 hover:bg-rose-50 font-semibold flex items-center gap-1.5"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>Deshacer carpeta</span>
-            </button>
+          <div className="sticky bottom-0 -mx-5 -mb-5 px-5 py-3 bg-white/95 backdrop-blur-xs border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 z-20">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {!currentTab?.isLocked && editableChildColIds.length > 0 && (
+                <button
+                  type="button"
+                  disabled={emptyFolderGradeCount === 0}
+                  onClick={() => {
+                    const res = fillEmptyGradesWithNP(editableChildColIds);
+                    if (res.filledCount > 0) {
+                      flashPopup(
+                        `${res.filledCount} ${
+                          res.filledCount === 1 ? 'celda sin nota rellenada' : 'celdas sin nota rellenadas'
+                        } con 0 (NP) en ${res.affectedColumnCount} ${
+                          res.affectedColumnCount === 1 ? 'tarea' : 'tareas'
+                        }. Ctrl/Cmd + Z para deshacer.`
+                      );
+                    }
+                  }}
+                  title="Rellena con 0 y NP las celdas sin nota en todas las tareas editables de esta carpeta (no toca celdas con nota)"
+                  className="px-3 py-2 rounded-xl border border-indigo-200 bg-indigo-50/75 hover:bg-indigo-100 disabled:opacity-40 text-indigo-900 font-semibold flex items-center gap-1.5 transition-colors"
+                >
+                  <FileX2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Rellenar vacías: 0 NP ({emptyFolderGradeCount})</span>
+                </button>
+              )}
+
+              {!currentTab?.isLocked && (
+                <button
+                  type="button"
+                  disabled={folderOverrideStats.totalCount === 0}
+                  onClick={() => {
+                    const count = restoreFolderCalculation(folder.id);
+                    if (count > 0) {
+                      flashPopup(
+                        `Cálculo restituido en ${count} ${
+                          count === 1 ? 'celda de esta carpeta' : 'celdas de esta carpeta'
+                        }.`
+                      );
+                    }
+                  }}
+                  title="Restituye el cálculo automático en todas las celdas de esta carpeta editadas manualmente o con aviso"
+                  className="px-3 py-2 rounded-xl border border-amber-200 bg-amber-50/80 hover:bg-amber-100 disabled:opacity-40 text-amber-900 font-semibold flex items-center gap-1.5 transition-colors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Restituir cálculo ({folderOverrideStats.totalCount})</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  deleteFolder(tabId, folder.id);
+                  onClose();
+                }}
+                className="px-3 py-2 rounded-xl text-rose-600 hover:bg-rose-50 font-semibold flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Deshacer carpeta</span>
+              </button>
+            </div>
 
             <div className="flex items-center gap-2">
               <button
@@ -473,6 +566,19 @@ export const FolderModal: React.FC<FolderModalProps> = ({ open, onClose, tabId, 
         onAddBoth={() => executeCopyFolder('ADD')}
         onReplace={(existingId) => executeCopyFolder('REPLACE', existingId)}
       />
+
+      {actionPopupMsg &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            role="status"
+            aria-live="polite"
+            className="fixed bottom-5 right-5 z-[95] px-4 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-semibold shadow-2xl border border-slate-700/70 pointer-events-none"
+          >
+            {actionPopupMsg}
+          </div>,
+          document.body
+        )}
     </>
   );
 };

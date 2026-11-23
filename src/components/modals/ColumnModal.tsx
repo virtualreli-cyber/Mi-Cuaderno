@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeft,
   ArrowRight,
@@ -6,6 +7,7 @@ import {
   Check,
   Copy,
   Eraser,
+  FileX2,
   FolderOutput,
   GraduationCap,
   LayoutGrid,
@@ -17,6 +19,7 @@ import { PASTEL_SWATCHES } from '../../constants/colors';
 import { DEFAULT_LOMLOE_KEY_COMPETENCES } from '../../data/lomloeReligion';
 import { useGradebook } from '../../context/GradebookContext';
 import { findCopyConflicts } from '../../engine/copyConflictEngine';
+import { countEmptyGradesInColumns } from '../../engine/gradeMath';
 import { compareLomloeCodes, resolveBookCurriculum } from '../../engine/lomloe';
 import { getCanonicalItemOrder } from '../../engine/tabLayout';
 import type {
@@ -54,6 +57,7 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
     updateColumn,
     deleteColumn,
     clearColumnCells,
+    fillEmptyGradesWithNP,
     duplicateColumn,
     stepColumn,
     moveColumnToFolder,
@@ -96,8 +100,35 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
   const [copyClassId, setCopyClassId] = useState('');
   const [copyTabId, setCopyTabId] = useState('');
   const [copyDoneMsg, setCopyDoneMsg] = useState<string | null>(null);
-  const [clearedMsg, setClearedMsg] = useState<string | null>(null);
+  const [actionPopupMsg, setActionPopupMsg] = useState<string | null>(null);
+  const actionPopupTimerRef = useRef<number | null>(null);
   const [pendingConflict, setPendingConflict] = useState<PendingCopyConflict | null>(null);
+
+  const flashPopup = (msg: string) => {
+    setActionPopupMsg(msg);
+    if (actionPopupTimerRef.current) window.clearTimeout(actionPopupTimerRef.current);
+    actionPopupTimerRef.current = window.setTimeout(() => setActionPopupMsg(null), 3000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (actionPopupTimerRef.current) window.clearTimeout(actionPopupTimerRef.current);
+    };
+  }, []);
+
+  const emptyGradeCount = useMemo(() => {
+    if (
+      !editingColumn ||
+      !activeBook ||
+      !activeTab ||
+      activeTab.isLocked ||
+      editingColumn.isLocked ||
+      editingColumn.type === 'AVERAGE'
+    ) {
+      return 0;
+    }
+    return countEmptyGradesInColumns(activeBook, [editingColumn.id]);
+  }, [editingColumn, activeBook, activeTab]);
 
   const storedDataCount = useMemo(() => {
     if (!editingColumn || !activeBook) return 0;
@@ -141,9 +172,12 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
   }, [activeBook, editingColumn?.id]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setActionPopupMsg(null);
+      return;
+    }
     setCopyDoneMsg(null);
-    setClearedMsg(null);
+    setActionPopupMsg(null);
     setPendingConflict(null);
     if (editingColumn) {
       setTitle(editingColumn.title);
@@ -1064,22 +1098,38 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
         )}
 
         {/* Sticky Footer Actions (always visible & clickable without clipping at modal bottom edge) */}
-        <div className="sticky bottom-0 -mx-5 -mb-5 px-5 py-3 bg-white/95 backdrop-blur-xs border-t border-slate-200 space-y-2 z-20">
-          {clearedMsg && (
-            <div className="px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 font-semibold">
-              {clearedMsg}
-            </div>
-          )}
-
+        <div className="sticky bottom-0 -mx-5 -mb-5 px-5 py-3 bg-white/95 backdrop-blur-xs border-t border-slate-200 z-20">
           <div className="flex flex-wrap items-center justify-between gap-2">
             {editingColumn ? (
               <div className="flex flex-wrap items-center gap-1.5">
+                {editingColumn.type !== 'AVERAGE' && !editingColumn.isLocked && !activeTab.isLocked && (
+                  <button
+                    type="button"
+                    disabled={emptyGradeCount === 0}
+                    onClick={() => {
+                      const res = fillEmptyGradesWithNP([editingColumn.id]);
+                      if (res.filledCount > 0) {
+                        flashPopup(
+                          `${res.filledCount} ${
+                            res.filledCount === 1 ? 'celda sin nota rellenada' : 'celdas sin nota rellenadas'
+                          } con 0 (NP). Ctrl/Cmd + Z para deshacer.`
+                        );
+                      }
+                    }}
+                    title="Rellena con 0 y el texto NP todas las celdas sin nota (ignora comentarios previos; no toca celdas que ya tienen nota)"
+                    className="px-3 py-2 rounded-xl border border-indigo-200 bg-indigo-50/75 hover:bg-indigo-100 disabled:opacity-40 text-indigo-900 font-semibold flex items-center gap-1.5 transition-colors"
+                  >
+                    <FileX2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Rellenar vacías: 0 NP ({emptyGradeCount})</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   disabled={storedDataCount === 0}
                   onClick={() => {
                     clearColumnCells(editingColumn.id);
-                    setClearedMsg(
+                    flashPopup(
                       `Borrados todos los datos (${storedDataCount}) de la columna. Puedes revertir con Ctrl/Cmd + Z.`
                     );
                   }}
@@ -1135,6 +1185,19 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
       onAddBoth={() => executeCopyToClass('ADD')}
       onReplace={(existingId) => executeCopyToClass('REPLACE', existingId)}
     />
+
+    {actionPopupMsg &&
+      typeof document !== 'undefined' &&
+      createPortal(
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-5 right-5 z-[95] px-4 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-semibold shadow-2xl border border-slate-700/70 pointer-events-none"
+        >
+          {actionPopupMsg}
+        </div>,
+        document.body
+      )}
     </>
   );
 };

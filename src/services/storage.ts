@@ -111,6 +111,11 @@ function hydrateCells(rawCells: Record<string, CellEntity> | undefined): Record<
           }
         : undefined,
       manualOverride: cell.manualOverride ? true : undefined,
+      manualSourceSignature:
+        cell.manualOverride && typeof cell.manualSourceSignature === 'string'
+          ? cell.manualSourceSignature
+          : undefined,
+      autoRecalcNotice: cell.autoRecalcNotice ? true : undefined,
     };
   }
   return out;
@@ -305,7 +310,7 @@ export function hydrateWorkspace(raw: Partial<GradebookWorkspace>): GradebookWor
       gridZoom: typeof raw.settings?.gridZoom === 'number' ? raw.settings.gridZoom : 1,
       rubricZoom: typeof raw.settings?.rubricZoom === 'number' ? raw.settings.rubricZoom : 1,
       gradeFontSize:
-        typeof raw.settings?.gradeFontSize === 'number' ? raw.settings.gradeFontSize : 15,
+        typeof raw.settings?.gradeFontSize === 'number' ? raw.settings.gradeFontSize : 12.5,
       textFontSize:
         typeof raw.settings?.textFontSize === 'number' ? raw.settings.textFontSize : 13.5,
       iconSize: typeof raw.settings?.iconSize === 'number' ? raw.settings.iconSize : 15,

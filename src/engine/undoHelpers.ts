@@ -203,7 +203,11 @@ export function resolveBookIdAndTabIdForColumn(
   const allBooks = [...ws.classes, ...ws.templates];
   const activeBook = allBooks.find((b) => b.id === activeId);
   if (activeBook) {
-    const tab = activeBook.tabs.find((t) => t.columns.some((c) => c.id === columnId));
+    const tab = activeBook.tabs.find(
+      (t) =>
+        t.columns.some((c) => c.id === columnId) ||
+        t.folders.some((f) => f.id === columnId)
+    );
     if (tab) return { bookId: activeBook.id, tabId: tab.id };
     return { bookId: activeBook.id, tabId: ws.activeTabByBook[activeBook.id] };
   }
@@ -241,13 +245,18 @@ export function findFirstChangedCellTarget(
         (a?.grade ?? null) !== (b?.grade ?? null) ||
         (a?.comment ?? '') !== (b?.comment ?? '') ||
         (a?.manualOverride ?? null) !== (b?.manualOverride ?? null) ||
+        (a?.autoRecalcNotice ?? null) !== (b?.autoRecalcNotice ?? null) ||
         JSON.stringify(a?.rubricEval ?? null) !== JSON.stringify(b?.rubricEval ?? null)
       ) {
         const sepIdx = key.indexOf('::');
         if (sepIdx <= 0) continue;
         const studentId = key.slice(0, sepIdx);
         const columnId = key.slice(sepIdx + 2);
-        const tab = resBook.tabs.find((t) => t.columns.some((c) => c.id === columnId));
+        const tab = resBook.tabs.find(
+          (t) =>
+            t.columns.some((c) => c.id === columnId) ||
+            t.folders.some((f) => f.id === columnId)
+        );
         return {
           bookId: resBook.id,
           tabId: tab?.id ?? restoredWs.activeTabByBook[resBook.id],
