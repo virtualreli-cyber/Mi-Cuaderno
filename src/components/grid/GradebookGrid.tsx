@@ -236,6 +236,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     width: number;
     height: number;
   } | null>(null);
+  const inlineCursorInitKeyRef = useRef<string | null>(null);
 
   const [showAddColMenu, setShowAddColMenu] = useState(false);
   const [addMenuPos, setAddMenuPos] = useState<{ top: number; left: number }>({ top: 120, left: 200 });
@@ -408,20 +409,40 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     selectedStudentRowId,
   ]);
 
-  // Synchronous focus, cursor placement & floating anchor rect on inline edit start
+  // Update floating anchor rect whenever inline-edited cell changes (or closes)
   useLayoutEffect(() => {
     if (!inlineEdit) {
+      inlineCursorInitKeyRef.current = null;
       setInlineEditRect(null);
       return;
     }
     const cellEl = getCellNode(inlineEdit.studentId, inlineEdit.columnId);
     if (cellEl) {
       const r = cellEl.getBoundingClientRect();
-      setInlineEditRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+      setInlineEditRect((prev) =>
+        prev &&
+        prev.top === r.top &&
+        prev.left === r.left &&
+        prev.width === r.width &&
+        prev.height === r.height
+          ? prev
+          : { top: r.top, left: r.left, width: r.width, height: r.height }
+      );
     }
+  }, [inlineEdit?.studentId, inlineEdit?.columnId]);
+
+  // Synchronous focus & cursor placement once the portal <textarea> actually mounts
+  useLayoutEffect(() => {
+    if (!inlineEdit || !inlineEditRect) return;
     const el = inlineInputRef.current;
     if (!el) return;
-    el.focus();
+    const editKey = `${inlineEdit.studentId}::${inlineEdit.columnId}`;
+    if (inlineCursorInitKeyRef.current === editKey) return;
+    inlineCursorInitKeyRef.current = editKey;
+
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(200, Math.max(38, el.scrollHeight))}px`;
+    el.focus({ preventScroll: true });
     const pos =
       typeof inlineEdit.cursorPos === 'number'
         ? Math.max(0, Math.min(el.value.length, inlineEdit.cursorPos))
@@ -431,9 +452,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     } catch {
       // ignore
     }
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(200, Math.max(38, el.scrollHeight))}px`;
-  }, [inlineEdit?.studentId, inlineEdit?.columnId]);
+    el.scrollTop = el.scrollHeight;
+  }, [inlineEdit?.studentId, inlineEdit?.columnId, inlineEditRect]);
 
   // Keep textarea auto-grown as user types so 100% of text stays visible while editing
   useLayoutEffect(() => {
@@ -1246,10 +1266,17 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       }
 
       skipNextBlurRef.current = false;
+      inlineCursorInitKeyRef.current = null;
       if (!applyToSelection) {
         selectSingleCell(studentId, columnId);
       } else {
         setSelectedCoord({ studentId, columnId });
+      }
+      ensureCellVisible(studentId, columnId, 'auto');
+      const cellElNow = getCellNode(studentId, columnId);
+      if (cellElNow) {
+        const r = cellElNow.getBoundingClientRect();
+        setInlineEditRect({ top: r.top, left: r.left, width: r.width, height: r.height });
       }
       setInlineEdit({
         studentId,
@@ -1262,7 +1289,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         cursorPos,
         preserveRubricGrade,
       });
-      ensureCellVisible(studentId, columnId, 'auto');
     },
     [activeBook, visibleColumns, canTypeInline, selectSingleCell, ensureCellVisible]
   );
@@ -5776,7 +5802,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             <textarea
               ref={inlineInputRef}
               rows={1}
-              autoFocus
               aria-label={
                 inlineEdit.applyToSelection
                   ? `Editar nota para ${editableNumericTargets.length} celdas`
