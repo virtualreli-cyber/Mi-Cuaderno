@@ -57,37 +57,6 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
     }
   };
 
-  if (!student || !column) return null;
-
-  const currentCell = activeBook?.cells[cellKey(student.id, column.id)];
-  const currentNumericGrade =
-    currentCell?.grade !== null && currentCell?.grade !== undefined && !Number.isNaN(currentCell.grade)
-      ? currentCell.grade
-      : null;
-
-  const editorMode = column.editorMode ?? 'STANDARD';
-  const counterStep = Math.abs(column.counterStep ?? 1) || 1;
-  const formattedStep = String(counterStep).replace('.', ',');
-  const maxStr = String(column.maxValue).replace('.', ',');
-
-  const parseGradeInput = (raw: string): number | null => {
-    const trimmed = raw.trim().toUpperCase();
-    if (!trimmed || trimmed === 'NP') return null;
-    const cleaned = trimmed.replace(',', '.');
-    const parsedNum = Number(cleaned);
-    if (Number.isNaN(parsedNum)) return null;
-    return clampGradeForColumn(parsedNum, column);
-  };
-
-  const handleSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    const validGrade = parseGradeInput(gradeStr);
-    setCellData(student.id, column.id, validGrade, comment);
-    onClose();
-  };
-
-  // Keyboard-always-commands inside CellEditModal: route digits to Nota and text to Comentario
-  // even when neither field is explicitly focused (or when switching from Nota to Comentario mid-typing)
   const latestKeyboardHandlersRef = useRef({
     digit: (_d: string) => {},
     decimal: () => {},
@@ -95,18 +64,6 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
     toggleSign: () => {},
     save: () => {},
   });
-
-  latestKeyboardHandlersRef.current = {
-    digit: (d: string) => handleKeypadDigit(d),
-    decimal: () => handleKeypadDecimal(),
-    backspace: () => handleKeypadBackspace(),
-    toggleSign: () => handleKeypadToggleSign(),
-    save: () => {
-      const validGrade = parseGradeInput(gradeStr);
-      setCellData(student.id, column.id, validGrade, comment);
-      onClose();
-    },
-  };
 
   useEffect(() => {
     if (!open || !student || !column) return;
@@ -184,6 +141,47 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [open, student, column, device.isTouch, showTouchKeyboard]);
+
+  if (!student || !column) return null;
+
+  const currentCell = activeBook?.cells[cellKey(student.id, column.id)];
+  const currentNumericGrade =
+    currentCell?.grade !== null && currentCell?.grade !== undefined && !Number.isNaN(currentCell.grade)
+      ? currentCell.grade
+      : null;
+
+  const editorMode = column.editorMode ?? 'STANDARD';
+  const counterStep = Math.abs(column.counterStep ?? 1) || 1;
+  const formattedStep = String(counterStep).replace('.', ',');
+  const maxStr = String(column.maxValue).replace('.', ',');
+
+  const parseGradeInput = (raw: string): number | null => {
+    const trimmed = raw.trim().toUpperCase();
+    if (!trimmed || trimmed === 'NP') return null;
+    const cleaned = trimmed.replace(',', '.');
+    const parsedNum = Number(cleaned);
+    if (Number.isNaN(parsedNum)) return null;
+    return clampGradeForColumn(parsedNum, column);
+  };
+
+  const handleSave = (e: React.FormEvent) => {
+    e.preventDefault();
+    const validGrade = parseGradeInput(gradeStr);
+    setCellData(student.id, column.id, validGrade, comment);
+    onClose();
+  };
+
+  latestKeyboardHandlersRef.current = {
+    digit: (d: string) => handleKeypadDigit(d),
+    decimal: () => handleKeypadDecimal(),
+    backspace: () => handleKeypadBackspace(),
+    toggleSign: () => handleKeypadToggleSign(),
+    save: () => {
+      const validGrade = parseGradeInput(gradeStr);
+      setCellData(student.id, column.id, validGrade, comment);
+      onClose();
+    },
+  };
 
   const applyOneClickDelta = (delta: number) => {
     const base = parseGradeInput(gradeStr) ?? currentNumericGrade;

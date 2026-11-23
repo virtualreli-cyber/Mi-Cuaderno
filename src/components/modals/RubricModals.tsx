@@ -310,6 +310,21 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
               </button>
             )}
 
+            {hasActiveManualOverride && !column.isLocked && (
+              <button
+                type="button"
+                onClick={() => {
+                  commitCurrent(true);
+                  setSelectionModified(false);
+                }}
+                title="Restituir el cálculo automático según los criterios de la rúbrica"
+                className="px-2 py-1 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 text-[11px] font-semibold flex items-center gap-1 transition-colors"
+              >
+                <RotateCcw className="w-3 h-3 text-amber-700" aria-hidden="true" />
+                <span>Restituir cálculo</span>
+              </button>
+            )}
+
             {isCellOutdatedForEducamos(liveCol, studentId, currentCell) && (
               <button
                 type="button"

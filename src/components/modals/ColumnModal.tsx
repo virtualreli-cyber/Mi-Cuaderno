@@ -265,6 +265,20 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editingColumn?.id, presetType, presetFolderId]);
 
+  const itemOrder = activeTab ? getCanonicalItemOrder(activeTab) : [];
+  const canMoveLeft = useMemo(() => {
+    if (!editingColumn) return false;
+    if (editingColumn.folderId) return true; // inside folder -> can always step left or out to the left
+    return itemOrder.indexOf(editingColumn.id) > 0;
+  }, [editingColumn, itemOrder]);
+
+  const canMoveRight = useMemo(() => {
+    if (!editingColumn) return false;
+    if (editingColumn.folderId) return true; // inside folder -> can always step right or out to the right
+    const idx = itemOrder.indexOf(editingColumn.id);
+    return idx >= 0 && idx < itemOrder.length - 1;
+  }, [editingColumn, itemOrder]);
+
   if (!activeBook || !activeTab) return null;
 
   const toggleSourceCol = (colId: string) => {
@@ -297,20 +311,6 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
   };
 
   const weightSum = selectedSrcIds.reduce((s, id) => s + (weights[id] ?? 0), 0);
-
-  const itemOrder = getCanonicalItemOrder(activeTab);
-  const canMoveLeft = useMemo(() => {
-    if (!editingColumn) return false;
-    if (editingColumn.folderId) return true; // inside folder -> can always step left or out to the left
-    return itemOrder.indexOf(editingColumn.id) > 0;
-  }, [editingColumn, itemOrder]);
-
-  const canMoveRight = useMemo(() => {
-    if (!editingColumn) return false;
-    if (editingColumn.folderId) return true; // inside folder -> can always step right or out to the right
-    const idx = itemOrder.indexOf(editingColumn.id);
-    return idx >= 0 && idx < itemOrder.length - 1;
-  }, [editingColumn, itemOrder]);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();

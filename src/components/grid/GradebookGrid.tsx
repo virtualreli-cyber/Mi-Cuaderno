@@ -3810,7 +3810,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         activeBook
                       );
                       const fCellKey = cellKey(student.id, slot.key);
-                      const fCell = activeBook.cells[fCellKey];
+                      const fCell = activeBook.cells[cellKey(student.id, slot.folder.id)];
                       const fComment = fCell?.comment ?? '';
                       const isFolderInline =
                         inlineEdit?.studentId === student.id &&
@@ -3960,40 +3960,47 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                               ? 'cell-selected z-10'
                               : isFolderCellInMulti
                                 ? 'cell-multi-selected z-10'
-                                : isFolderAutoRecalc
-                                  ? `${
-                                      isStudentRowSelected
+                                  : isFolderAutoRecalc
+                                    ? `${
+                                        isStudentRowSelected
+                                          ? 'student-row-cell-tint'
+                                          : isSlotColumnSelected(slot)
+                                            ? 'col-cell-tint'
+                                            : 'hover:brightness-98'
+                                      } ring-1 ring-inset ring-indigo-500/85`
+                                    : isFolderManual
+                                      ? `${
+                                          isStudentRowSelected
+                                            ? 'student-row-cell-tint'
+                                            : isSlotColumnSelected(slot)
+                                              ? 'col-cell-tint'
+                                              : 'hover:brightness-98'
+                                        } ring-1 ring-inset ring-amber-500/85`
+                                      : isStudentRowSelected
                                         ? 'student-row-cell-tint'
                                         : isSlotColumnSelected(slot)
                                           ? 'col-cell-tint'
                                           : 'hover:brightness-98'
-                                    } ring-1 ring-inset ring-indigo-500/85`
-                                  : isStudentRowSelected
-                                    ? 'student-row-cell-tint'
-                                    : isSlotColumnSelected(slot)
-                                      ? 'col-cell-tint'
-                                      : 'hover:brightness-98'
                           }`}
                         >
-                          {/* Auto-recalculated notice indicator (when upstream note changed after a manual override) */}
+                          {/* Permanent visual indicator inside cell for auto-recalculated folder notes */}
                           {isFolderAutoRecalc && !isFolderInline && (
                             <span
                               aria-label="Nota de carpeta recalculada automáticamente tras editar una tarea"
                               title="Recalculada automáticamente tras cambiar una nota de la carpeta"
-                              className="absolute top-0 left-0 w-0 h-0 border-t-[9px] border-r-[9px] border-t-indigo-600 border-r-transparent pointer-events-none"
-                            />
+                              className="absolute top-0.5 left-0.5 px-1 py-0 rounded bg-indigo-100/95 border border-indigo-300/90 text-[9px] font-bold leading-[12px] text-indigo-800 pointer-events-none select-none"
+                            >
+                              ↻
+                            </span>
                           )}
-                          {/* Manual override corner indicator for folder cells */}
+                          {/* Permanent visual indicator inside cell for manually modified folder notes */}
                           {isFolderManual && !isFolderInline && (
                             <span
-                              aria-label="Nota de carpeta editada manualmente"
-                              title={
-                                formulaValForTooltip !== null
-                                  ? `Nota editada manualmente (calculada: ${formatGrade(formulaValForTooltip, 2)})`
-                                  : 'Nota editada manualmente'
-                              }
-                              className="absolute top-0 right-0 w-0 h-0 border-t-[7px] border-l-[7px] border-t-amber-500/85 border-l-transparent pointer-events-none"
-                            />
+                              aria-label="Nota calculada modificada manualmente"
+                              className="absolute top-0.5 right-0.5 px-1 py-0 rounded bg-amber-100/95 border border-amber-300/90 text-[9px] font-bold leading-[12px] text-amber-800 pointer-events-none select-none"
+                            >
+                              ✎
+                            </span>
                           )}
 
                           <div className="flex flex-col items-center justify-center gap-0 h-full w-full overflow-hidden leading-tight px-0">
@@ -4203,11 +4210,19 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                                         ? 'col-cell-tint'
                                         : 'hover:brightness-98'
                                   } ring-1 ring-inset ring-orange-500/80`
-                                : isStudentRowSelected
-                                  ? 'student-row-cell-tint'
-                                  : isColCellSelected
-                                    ? 'col-cell-tint'
-                                    : 'hover:brightness-98'
+                                : isManualRubricEdit
+                                  ? `${
+                                      isStudentRowSelected
+                                        ? 'student-row-cell-tint'
+                                        : isColCellSelected
+                                          ? 'col-cell-tint'
+                                          : 'hover:brightness-98'
+                                    } ring-1 ring-inset ring-amber-500/80`
+                                  : isStudentRowSelected
+                                    ? 'student-row-cell-tint'
+                                    : isColCellSelected
+                                      ? 'col-cell-tint'
+                                      : 'hover:brightness-98'
                         }`}
                       >
                         {/* Discreet corner indicator for cells changed after passing to Educamos */}
@@ -4218,12 +4233,14 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             className="absolute top-0 left-0 w-0 h-0 border-t-[9px] border-r-[9px] border-t-orange-500 border-r-transparent pointer-events-none"
                           />
                         )}
-                        {/* Discreet corner indicator for manually-edited rubric cells */}
+                        {/* Permanent in-cell indicator for manually-edited rubric cells (zero hover tooltip) */}
                         {isManualRubricEdit && !isInline && (
                           <span
                             aria-label="Nota editada manualmente"
-                            className="absolute top-0 right-0 w-0 h-0 border-t-[7px] border-l-[7px] border-t-amber-500/85 border-l-transparent pointer-events-none"
-                          />
+                            className="absolute top-0.5 right-0.5 px-1 py-0 rounded bg-amber-100/95 border border-amber-300/90 text-[9px] font-bold leading-[12px] text-amber-800 pointer-events-none select-none"
+                          >
+                            ✎
+                          </span>
                         )}
 
                         <div className="flex flex-col items-center justify-center gap-0 h-full w-full overflow-hidden leading-tight px-0">
