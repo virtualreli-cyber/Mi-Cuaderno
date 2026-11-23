@@ -1244,11 +1244,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           if (!targetSlot) break;
           const targetId =
             targetSlot.kind === 'FOLDER_SUMMARY' ? targetSlot.key : targetSlot.col.id;
-          if (!canTypeInlineTarget(targetId)) continue;
+          const targetInfo = resolveEditableTarget(targetId);
+          if (!targetInfo || !canTypeInline(targetInfo.col)) continue;
           const parsed = parseMixedInput(matrix[dr][dc]);
           entries.push({
             studentId: st.id,
-            columnId: targetId,
+            columnId: targetInfo.col.id,
             grade: parsed.grade,
             comment: parsed.comment,
           });
@@ -1271,7 +1272,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       visibleStudents,
       slotIdsInOrder,
       displaySlots,
-      canTypeInlineTarget,
+      resolveEditableTarget,
+      canTypeInline,
       applyCellsBatch,
       showCopyToast,
     ]
@@ -1289,7 +1291,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       if (!targetInfo || !canTypeInline(targetInfo.col)) return;
       const { col, isFolder, folder, childCols } = targetInfo;
 
-      const existing = activeBook.cells[cellKey(studentId, columnId)];
+      const existing = activeBook.cells[cellKey(studentId, col.id)];
       const calculatedFolderGrade =
         isFolder && folder && childCols
           ? computeFolderSummary(folder, childCols, studentId, activeBook)
@@ -1473,6 +1475,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       } = inlineEdit;
       const targetInfo = resolveEditableTarget(columnId);
       const col = targetInfo?.col;
+      const persistColumnId = col?.id ?? columnId;
 
       const parsed = parseMixedInput(draft);
 
@@ -1495,7 +1498,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       }
 
       if (preserveRubricGrade && (col?.type === 'RUBRIC' || targetInfo?.isFolder) && parsed.grade === null) {
-        setCellData(studentId, columnId, null, draft.trim(), { preserveExistingGrade: true });
+        setCellData(studentId, persistColumnId, null, draft.trim(), { preserveExistingGrade: true });
         setInlineEdit(null);
         if (advanceDir === 'DOWN') {
           moveSelection(studentId, columnId, 'DOWN', true);
@@ -1522,7 +1525,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       }
 
       const clamped = col ? clampGradeForColumn(finalGrade, col) : finalGrade;
-      setCellData(studentId, columnId, clamped, finalComment);
+      setCellData(studentId, persistColumnId, clamped, finalComment);
       setInlineEdit(null);
 
       if (advanceDir === 'DOWN') {
@@ -1696,9 +1699,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           e.preventDefault();
           clearCell(clearableTargets[0].studentId, clearableTargets[0].columnId);
         } else {
-          if (canTypeInlineTarget(columnId)) {
+          const targetInfo = resolveEditableTarget(columnId);
+          if (targetInfo && canTypeInline(targetInfo.col)) {
             e.preventDefault();
-            clearCell(studentId, columnId);
+            clearCell(studentId, targetInfo.col.id);
           }
         }
       } else if (e.key === 'Escape') {
@@ -1996,6 +2000,33 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     window.addEventListener('pointerup', onUp);
   };
 
+  // Summary / Stats / Averages row height resize (applies globally to all classes & templates via workspace.settings)
+  const startSummaryRowHeightResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    justResizedRef.current = true;
+    beginAspectChange();
+    const startY = e.clientY;
+    const startH = workspace.settings.summaryRowHeight ?? 32;
+
+    const onMove = (ev: PointerEvent) => {
+      const clamped = Math.max(
+        20,
+        Math.min(64, Math.round(startH + (ev.clientY - startY) / gridZoom))
+      );
+      updateSettings({ summaryRowHeight: clamped });
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.setTimeout(() => {
+        justResizedRef.current = false;
+      }, 200);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
   const toggleAutoFitHeaderHeight = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -2103,7 +2134,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   const groupRowH = Math.max(28, Math.round(34 * gridZoom));
   const groupSpacerRows = activeBook.groupSpacerRows ?? 1;
   const groupSpacerH = Math.max(10, Math.round((workspace.settings.groupSpacerHeight ?? 24) * gridZoom));
-  const summaryRowH = Math.max(24, Math.round((workspace.settings.summaryRowHeight ?? 32) * gridZoom));
+  const summaryRowH = Math.max(18, Math.round((workspace.settings.summaryRowHeight ?? 32) * gridZoom));
   const summaryRows: ColumnSummaryMetric[] = activeBook.summaryRows ?? ['MEAN', 'PASS_PCT'];
   const groupSummaryRows: ColumnSummaryMetric[] = activeBook.groupSummaryRows ?? ['MEAN'];
   const scaledSlotsWidth = displaySlots.reduce(
@@ -4611,7 +4642,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         });
                       }}
                       title="Doble clic para cambiar resumen de esta fila (extensible a todas las columnas)"
-                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white/90 hover:bg-white border border-slate-200 text-[0.84em] font-bold text-slate-700 hover:text-blue-700 truncate max-w-[165px]"
+                      className="inline-flex items-center gap-1 px-1.5 py-0 rounded-md bg-white/90 hover:bg-white border border-slate-200 text-[0.84em] font-bold text-slate-700 hover:text-blue-700 truncate max-w-[165px]"
                     >
                       <Sigma style={smallIconStyle} className="text-blue-600 shrink-0" />
                       <span className="truncate">{globalOpt.label}</span>
@@ -4630,6 +4661,21 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       <X style={smallIconStyle} />
                     </button>
                   </div>
+                  <div
+                    role="separator"
+                    aria-orientation="horizontal"
+                    aria-label="Cambiar altura de filas de estadísticas y medias en toda la app"
+                    title="Arrastra verticalmente para ajustar la altura de las filas de medias/resumen en toda la app"
+                    style={device.isTouch ? { touchAction: 'none' } : undefined}
+                    onClick={(e) => e.stopPropagation()}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      beginAspectChange();
+                      updateSettings({ summaryRowHeight: 32 });
+                    }}
+                    onPointerDown={startSummaryRowHeightResize}
+                    className="absolute left-0 bottom-0 w-full h-1.5 cursor-row-resize hover:bg-indigo-500/50 transition-colors z-20"
+                  />
                 </th>
 
                 {displaySlots.map((slot) => {
@@ -4751,12 +4797,17 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           })}
 
           {/* Last row below last student: Global Summary Rows Menu (all summary options supported) */}
-          <tr data-summary-controls="true" className="h-8 bg-slate-100/80">
+          <tr
+            data-summary-controls="true"
+            style={{ height: summaryRowH }}
+            className="bg-slate-100/80"
+          >
             <th
               scope="row"
+              style={{ height: summaryRowH }}
               className={`sticky left-0 z-20 bg-slate-100 border-r-2 border-b border-slate-300 ${
                 summaryRows.length === 0 ? 'border-t-2 border-t-slate-300' : ''
-              } px-2 py-1 text-left font-normal`}
+              } px-2 py-0 text-left font-normal`}
             >
               <div className="relative flex items-center justify-between gap-1" onMouseDown={(e) => e.stopPropagation()}>
                 <button

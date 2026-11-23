@@ -2888,17 +2888,21 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   // =====================================================================
   // Cells CRUD
   // =====================================================================
+  const normalizeCellTargetId = (rawId: string): string =>
+    rawId.startsWith('fld-sum-') ? rawId.slice(8) : rawId;
+
   const applySingleCellInput = (
     bookSnapshot: ClassBook,
     nextCells: Record<string, ClassBook['cells'][string]>,
     colMap: Map<string, ColumnEntity>,
     folderMap: Map<string, { folder: FolderEntity; childCols: ColumnEntity[]; tabLocked: boolean }>,
     studentId: string,
-    targetId: string,
+    rawTargetId: string,
     grade: number | null,
     comment: string,
     options?: { preserveExistingGrade?: boolean; preserveExistingComment?: boolean }
   ) => {
+    const targetId = normalizeCellTargetId(rawTargetId);
     const k = cellKey(studentId, targetId);
     const prev = nextCells[k];
 
@@ -3079,7 +3083,8 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   );
 
   const clearCell = useCallback<GradebookContextValue['clearCell']>(
-    (studentId, columnId) => {
+    (studentId, rawColumnId) => {
+      const columnId = normalizeCellTargetId(rawColumnId);
       mutateActiveBook(
         (book, ws) => {
           const k = cellKey(studentId, columnId);
@@ -3162,7 +3167,8 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         (book, ws) => {
           const { colMap, folderMap } = buildBookColumnAndFolderMaps(book);
           const nextCells = { ...book.cells };
-          for (const { studentId, columnId } of targets) {
+          for (const { studentId, columnId: rawColumnId } of targets) {
+            const columnId = normalizeCellTargetId(rawColumnId);
             const col = colMap.get(columnId);
             if (col) {
               if (col.isLocked || col.type === 'AVERAGE') continue;
@@ -3233,7 +3239,8 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const restoreFolderCellCalculation = useCallback<
     GradebookContextValue['restoreFolderCellCalculation']
   >(
-    (studentId, folderId) => {
+    (studentId, rawFolderId) => {
+      const folderId = normalizeCellTargetId(rawFolderId);
       const ws = workspaceRef.current;
       const currentBook =
         ws.activeMode === 'TEMPLATE'

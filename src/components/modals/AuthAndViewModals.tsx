@@ -809,19 +809,22 @@ export const ViewSettingsModal: React.FC<{
 
             <div>
               <div className="flex justify-between font-semibold text-slate-700 mb-1">
-                <span>Altura filas de estadísticas / resumen</span>
+                <span>Altura filas de medias y resumen (toda la app)</span>
                 <span className="tabular-nums">{summaryRowH} px</span>
               </div>
               <input
                 type="range"
-                min={24}
-                max={56}
+                min={20}
+                max={64}
                 step={2}
                 value={summaryRowH}
                 onPointerDown={beginAspectChange}
                 onChange={(e) => updateSettings({ summaryRowHeight: Number(e.target.value) })}
                 className="w-full accent-indigo-600"
               />
+              <div className="text-[10.5px] text-slate-500 mt-0.5">
+                Se aplica siempre a todas las clases y plantillas en este dispositivo.
+              </div>
             </div>
           </div>
         </div>
