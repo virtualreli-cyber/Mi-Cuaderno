@@ -341,6 +341,7 @@ interface GradebookContextValue {
   };
   restoreFolderCellCalculation: (studentId: string, folderId: string) => void;
   restoreFolderCalculation: (folderId: string) => number;
+  recalculateActiveBook: () => void;
 
   // Rubrics CRUD
   saveRubric: (rubric: RubricEntity) => RubricEntity;
@@ -3502,6 +3503,10 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [mutateActiveBook]
   );
 
+  const recalculateActiveBook = useCallback(() => {
+    mutateActiveBook((book, ws) => recalculateBook(book, ws.rubrics), false);
+  }, [mutateActiveBook]);
+
   // =====================================================================
   // Rubrics CRUD
   // =====================================================================
@@ -4032,6 +4037,7 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     fillEmptyGradesWithNP,
     restoreFolderCellCalculation,
     restoreFolderCalculation,
+    recalculateActiveBook,
     saveRubric,
     deleteRubric,
     setColumnLomloeCriteria,
