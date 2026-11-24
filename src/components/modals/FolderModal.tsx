@@ -122,7 +122,7 @@ export const FolderModal: React.FC<FolderModalProps> = ({ open, onClose, tabId, 
     if (!folder) return;
     setTitle(folder.title);
     setColor(folder.color);
-    setWidth(folder.width ?? 64);
+    setWidth(folder.width ?? 80);
     setSummaryMode(folder.summaryMode ?? 'ARITHMETIC_MEAN');
     setColorMode(folder.colorMode ?? 'NONE');
     setIgnoreEmpty(folder.ignoreEmpty ?? true);

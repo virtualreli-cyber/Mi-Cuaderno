@@ -345,7 +345,9 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
       title={rubric.title}
       subtitle={
         isGroupMode && groupBatch
-          ? `Columna: ${column.title} · Evaluación grupal (${groupBatch.groupName})`
+          ? groupBatch.groupName.endsWith('alumnos seleccionados')
+            ? `Columna: ${column.title} · Selección múltiple (${groupBatch.groupName})`
+            : `Columna: ${column.title} · Evaluación grupal (${groupBatch.groupName})`
           : `Columna: ${column.title}`
       }
       maxWidthClass="w-[min(980px,96vw)]"
@@ -369,10 +371,14 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
               <Users className="w-4 h-4 text-indigo-700 shrink-0" />
               <div className="min-w-0">
                 <div className="text-sm font-bold text-indigo-950 truncate">
-                  Grupo: {groupBatch.groupName} ({groupBatch.studentIds.length} alumnos)
+                  {groupBatch.groupName.endsWith('alumnos seleccionados')
+                    ? `Selección múltiple: ${groupBatch.groupName}`
+                    : `Grupo: ${groupBatch.groupName} (${groupBatch.studentIds.length} alumnos)`}
                 </div>
                 <div className="text-[11px] text-indigo-800">
-                  Los criterios que selecciones se aplicarán a todos los alumnos de este grupo a la vez.
+                  {groupBatch.groupName.endsWith('alumnos seleccionados')
+                    ? 'Los criterios que selecciones se aplicarán a todos los alumnos seleccionados a la vez.'
+                    : 'Los criterios que selecciones se aplicarán a todos los alumnos de este grupo a la vez.'}
                 </div>
               </div>
             </div>

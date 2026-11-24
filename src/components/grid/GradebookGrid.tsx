@@ -409,6 +409,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     rect: { top: number; bottom: number; left: number; width: number };
   } | null>(null);
   const [cellQuickAction, setCellQuickAction] = useState<CellQuickActionTarget | null>(null);
+  const [touchMultiSelect, setTouchMultiSelect] = useState(false);
   const cellTooltipTimerRef = useRef<number | null>(null);
   const clearCellTooltip = useCallback(() => {
     if (cellTooltipTimerRef.current !== null) {
@@ -740,6 +741,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setLomloePicker(null);
     setEducamosMenu(null);
     setCellQuickAction(null);
+    setTouchMultiSelect(false);
   }, [activeBook?.id, activeTab?.id]);
 
   // Clear stale selectedColumnTarget if that column/folder was deleted
@@ -1248,6 +1250,50 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             .map(({ studentId, columnId }) => ({ studentId, columnId })),
     [activeTab?.isLocked, selectedTargets]
   );
+
+  // Batch rubric selection: multiple selected cells belonging to the SAME RUBRIC column
+  const sameRubricColSelection = useMemo(() => {
+    if (activeTab?.isLocked || selectedKeys.size <= 1) return null;
+    if (selectedTargets.length !== selectedKeys.size) return null;
+    const first = selectedTargets[0];
+    if (!first || first.isFolder || first.col.type !== 'RUBRIC' || first.col.isLocked) {
+      return null;
+    }
+    const allSame = selectedTargets.every((t) => !t.isFolder && t.col.id === first.col.id);
+    if (!allSame) return null;
+    return {
+      col: first.col,
+      studentIds: selectedTargets.map((t) => t.studentId),
+    };
+  }, [activeTab?.isLocked, selectedKeys.size, selectedTargets]);
+
+  // Batch rubric criterion selection: multiple selected cells belonging to the SAME expanded criterion slot
+  const sameCriterionSelection = useMemo(() => {
+    if (activeTab?.isLocked || selectedKeys.size <= 1) return null;
+    const visStSet = new Set(visibleStudents.map((s) => s.id));
+    let matchedCritKey: string | null = null;
+    const studentIds: string[] = [];
+    for (const k of selectedKeys) {
+      const sep = k.indexOf('::');
+      if (sep < 0) return null;
+      const studentId = k.slice(0, sep);
+      const slotKey = k.slice(sep + 2);
+      if (!visStSet.has(studentId) || !slotKey.includes(RUBRIC_CRIT_SEP)) return null;
+      if (matchedCritKey === null) matchedCritKey = slotKey;
+      else if (matchedCritKey !== slotKey) return null;
+      studentIds.push(studentId);
+    }
+    if (!matchedCritKey || studentIds.length <= 1) return null;
+    const critSlot = displaySlots.find(
+      (s): s is Extract<DisplaySlot, { kind: 'RUBRIC_CRITERION' }> =>
+        s.kind === 'RUBRIC_CRITERION' && s.key === matchedCritKey
+    );
+    if (!critSlot || critSlot.col.isLocked) return null;
+    return {
+      critSlot,
+      studentIds,
+    };
+  }, [activeTab?.isLocked, selectedKeys, visibleStudents, displaySlots]);
 
   const slotIdsInOrder = useMemo(
     () => displaySlots.map(getDisplaySlotId),
@@ -2142,6 +2188,32 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         if (e.isComposing || e.keyCode === 229) return;
         if (target?.tagName === 'BUTTON') return;
         e.preventDefault();
+        if (sameRubricColSelection) {
+          onOpenRubricGrader(null, sameRubricColSelection.col, {
+            groupName: `${sameRubricColSelection.studentIds.length} alumnos seleccionados`,
+            studentIds: sameRubricColSelection.studentIds,
+          });
+          return;
+        }
+        if (sameCriterionSelection) {
+          const cellNode = getCellNode(studentId, columnId);
+          const rect = cellNode?.getBoundingClientRect();
+          if (rect) {
+            const { col, rubric, criterion, criterionIndex } = sameCriterionSelection.critSlot;
+            setCriterionPicker({
+              studentIds: sameCriterionSelection.studentIds,
+              studentLabel: `${sameCriterionSelection.studentIds.length} alumnos seleccionados`,
+              col,
+              rubric,
+              criterion,
+              criterionIndex,
+              currentLevelId: null,
+              top: Math.max(12, Math.min(window.innerHeight - 430, rect.bottom + 6)),
+              left: Math.max(12, Math.min(window.innerWidth - 320, rect.left)),
+            });
+          }
+          return;
+        }
         if (selectedTargets.length > 1) {
           const anchorTarget =
             editableNumericTargets.find(
@@ -4438,13 +4510,19 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             setAddGroupSummaryMenu(null);
                             setCriterionPicker(null);
                             setSelectedGroupColCell({ bucketKey: bucket.key, slotKey: slot.key });
-                            if (device.isTouch) {
-                              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                              setGroupColGradeDraft('');
-                              setGroupColAction(buildGroupActionPayload(rect));
-                            } else {
-                              setGroupColAction(null);
-                            }
+                            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                            setGroupColGradeDraft('');
+                            setGroupColAction((prev) =>
+                              prev?.bucketKey === bucket.key &&
+                              ((prev.slot.kind === 'COL' && slot.kind === 'COL' && prev.slot.col.id === slot.col.id) ||
+                                (prev.slot.kind === 'FOLDER' && slot.kind === 'FOLDER_SUMMARY' && prev.slot.folder.id === slot.folder.id) ||
+                                (prev.slot.kind === 'RUBRIC_CRITERION' &&
+                                  slot.kind === 'RUBRIC_CRITERION' &&
+                                  prev.slot.col.id === slot.col.id &&
+                                  prev.slot.criterion.id === slot.criterion.id))
+                                ? null
+                                : buildGroupActionPayload(rect)
+                            );
                           }}
                           onDoubleClick={(e) => {
                             if (touchDoubleTap.wasDoubleTapJustHandled()) return;
@@ -4967,8 +5045,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           criterionIndex,
                           currentLevelId:
                             targetStudentIds.length === 1 ? (critRes?.level.id ?? null) : null,
-                          top: Math.max(12, Math.min(window.innerHeight - 360, rect.bottom + 6)),
-                          left: Math.max(12, Math.min(window.innerWidth - 310, rect.left)),
+                          top: Math.max(12, Math.min(window.innerHeight - 430, rect.bottom + 6)),
+                          left: Math.max(12, Math.min(window.innerWidth - 320, rect.left)),
                         });
                       };
 
@@ -5015,8 +5093,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                               e,
                               critCellKey,
                               () => {
-                                selectSingleCell(student.id, critSlotKey);
-                                ensureCellVisible(student.id, critSlotKey, 'auto');
+                                const keepMulti =
+                                  selectedKeys.size > 1 && selectedKeys.has(critCellKey);
+                                if (!keepMulti) {
+                                  selectSingleCell(student.id, critSlotKey);
+                                  ensureCellVisible(student.id, critSlotKey, 'auto');
+                                }
                                 openCritEditor(rect);
                               },
                               longPress.wasJustTriggered()
@@ -5035,7 +5117,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             }
                             clearCellTooltip();
                             const clicked = { studentId: student.id, columnId: critSlotKey };
-                            const isMod = e.metaKey || e.ctrlKey;
+                            const isMod =
+                              e.metaKey || e.ctrlKey || (device.isTouch && touchMultiSelect);
                             if (e.shiftKey) {
                               const anchor = anchorCoord ?? selectedCoord ?? clicked;
                               selectRangeToCell(anchor, clicked, isMod);
@@ -5067,8 +5150,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                               return;
                             }
                             const rect = e.currentTarget.getBoundingClientRect();
-                            selectSingleCell(student.id, critSlotKey);
-                            ensureCellVisible(student.id, critSlotKey, 'auto');
+                            const keepMulti =
+                              selectedKeys.size > 1 && selectedKeys.has(critCellKey);
+                            if (!keepMulti) {
+                              selectSingleCell(student.id, critSlotKey);
+                              ensureCellVisible(student.id, critSlotKey, 'auto');
+                            }
                             openCritEditor(rect);
                           }}
                           onContextMenu={(e) => {
@@ -5159,6 +5246,18 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
                     const triggerPrimaryColEdit = () => {
                       clearCellTooltip();
+                      if (
+                        col.type === 'RUBRIC' &&
+                        sameRubricColSelection &&
+                        sameRubricColSelection.col.id === col.id &&
+                        selectedKeys.has(key)
+                      ) {
+                        onOpenRubricGrader(null, col, {
+                          groupName: `${sameRubricColSelection.studentIds.length} alumnos seleccionados`,
+                          studentIds: sameRubricColSelection.studentIds,
+                        });
+                        return;
+                      }
                       selectSingleCell(student.id, col.id);
                       ensureCellVisible(student.id, col.id, 'auto');
                       if (col.type === 'RUBRIC') {
@@ -5235,7 +5334,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           }
                           clearCellTooltip();
                           const clicked = { studentId: student.id, columnId: col.id };
-                          const isMod = e.metaKey || e.ctrlKey;
+                          const isMod =
+                            e.metaKey || e.ctrlKey || (device.isTouch && touchMultiSelect);
                           if (e.shiftKey) {
                             const anchor = anchorCoord ?? selectedCoord ?? clicked;
                             selectRangeToCell(anchor, clicked, isMod);
@@ -6358,10 +6458,14 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           <div
             onMouseDown={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
-            style={{ top: groupColAction.top, left: groupColAction.left }}
+            style={{
+              top: groupColAction.top,
+              left: groupColAction.left,
+              maxHeight: `calc(100dvh - ${groupColAction.top + 12}px)`,
+            }}
             role="dialog"
             aria-label={`Acciones del grupo ${groupColAction.bucketName} en ${title}`}
-            className="fixed w-76 rounded-2xl border border-slate-200 bg-white shadow-2xl p-3 z-50 text-xs space-y-2.5"
+            className="fixed w-[min(304px,calc(100dvw-24px))] overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white shadow-2xl p-3 z-50 text-xs space-y-2.5"
           >
             <div className="flex items-start justify-between gap-2 pb-2 border-b border-slate-100">
               <div className="min-w-0">
@@ -6626,31 +6730,38 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         <div
           onMouseDown={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
-          style={{ top: criterionPicker.top, left: criterionPicker.left }}
+          style={{
+            top: criterionPicker.top,
+            left: criterionPicker.left,
+            maxHeight: `calc(100dvh - ${criterionPicker.top + 12}px)`,
+          }}
           role="dialog"
           aria-label={`Valorar criterio ${criterionPicker.criterion.title}`}
-          className="fixed w-76 rounded-2xl border border-purple-200 bg-white shadow-2xl p-3 z-50 text-xs space-y-2"
+          className="fixed w-[min(320px,calc(100dvw-24px))] flex flex-col rounded-2xl border border-purple-200 bg-white shadow-2xl overflow-hidden z-50 text-xs"
         >
-          <div className="flex items-start justify-between gap-2 pb-1.5 border-b border-slate-100">
+          <div className="bg-slate-100/90 px-3.5 py-2.5 border-b border-slate-200 flex items-start justify-between gap-2 shrink-0">
             <div className="min-w-0">
-              <div className="font-bold text-slate-900 truncate">
+              <div className="font-extrabold text-slate-900 uppercase tracking-tight truncate">
                 {criterionPicker.studentLabel}
               </div>
-              <div className="text-[11px] text-purple-900 font-semibold truncate">
-                C{criterionPicker.criterionIndex + 1}: {criterionPicker.criterion.title} (
-                {criterionPicker.criterion.weight}%)
+              <div className="text-[11px] text-slate-600 truncate mt-0.5">
+                {criterionPicker.col.title}
+              </div>
+              <div className="text-xs text-purple-950 font-bold leading-snug mt-0.5">
+                {criterionPicker.criterion.title} ({criterionPicker.criterion.weight}%)
               </div>
             </div>
             <button
               type="button"
               onClick={() => setCriterionPicker(null)}
-              className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+              aria-label="Cerrar selector de criterio"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 shrink-0"
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-4 h-4" />
             </button>
           </div>
 
-          <div className="space-y-1 max-h-64 overflow-y-auto pr-0.5">
+          <div className="p-2 space-y-1.5 overflow-y-auto overscroll-contain flex-1 min-h-0">
             {criterionPicker.rubric.levels.map((lvl) => {
               const isSelectedLvl = criterionPicker.currentLevelId === lvl.id;
               const converted =
@@ -6685,24 +6796,35 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     setCriterionPicker(null);
                   }}
                   style={{ backgroundColor: lvl.color }}
-                  className={`w-full px-2.5 py-2 rounded-xl border text-left flex items-start justify-between gap-2 transition-colors disabled:opacity-50 ${
+                  className={`w-full px-3 py-2.5 rounded-xl border text-left flex items-center justify-between gap-2.5 transition-all disabled:opacity-50 ${
                     isSelectedLvl
-                      ? 'border-slate-800 ring-2 ring-inset ring-slate-800/70'
-                      : 'border-slate-200 hover:border-purple-400'
+                      ? 'border-blue-600 ring-2 ring-inset ring-blue-600/80 shadow-xs'
+                      : 'border-slate-300/70 hover:brightness-97'
                   }`}
                 >
-                  <div className="min-w-0">
-                    <div className="font-bold text-slate-900 flex items-center gap-1">
-                      {isSelectedLvl && <Check className="w-3 h-3 text-slate-900 shrink-0" />}
-                      <span className="truncate">{lvl.title}</span>
-                    </div>
-                    {desc && (
-                      <div className="text-[10.5px] text-slate-700 leading-snug mt-0.5">
-                        {desc}
+                  <div className="min-w-0 flex-1">
+                    {desc ? (
+                      <>
+                        <div className="text-[11.5px] font-medium text-slate-900 leading-snug flex items-start gap-1.5">
+                          {isSelectedLvl && (
+                            <Check className="w-3.5 h-3.5 text-blue-700 shrink-0 mt-0.5" />
+                          )}
+                          <span>{desc}</span>
+                        </div>
+                        <div className="text-[10px] font-bold text-slate-700/80 mt-0.5">
+                          {lvl.title}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                        {isSelectedLvl && (
+                          <Check className="w-3.5 h-3.5 text-blue-700 shrink-0" />
+                        )}
+                        <span>{lvl.title}</span>
                       </div>
                     )}
                   </div>
-                  <span className="font-bold text-slate-900 tabular-nums shrink-0">
+                  <span className="font-extrabold text-sm text-slate-900 tabular-nums shrink-0">
                     {scoreStr}
                   </span>
                 </button>
@@ -6710,7 +6832,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             })}
           </div>
 
-          <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
+          <div className="p-2 border-t border-slate-200 bg-slate-50/90 flex items-center gap-1.5 shrink-0">
             <button
               type="button"
               disabled={activeTab.isLocked || Boolean(criterionPicker.col.isLocked)}
@@ -6724,10 +6846,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 );
                 setCriterionPicker(null);
               }}
-              className="px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50/70 hover:bg-rose-100 text-rose-700 font-semibold flex items-center gap-1 text-[11px] disabled:opacity-40"
+              title="Quitar valoración"
+              aria-label="Quitar valoración de este criterio"
+              className="px-2.5 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold flex items-center gap-1 text-[11px] disabled:opacity-40 shrink-0"
             >
-              <Eraser className="w-3 h-3" />
-              <span>Quitar nivel</span>
+              <Eraser className="w-3.5 h-3.5" />
             </button>
             <button
               type="button"
@@ -6735,12 +6858,27 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 const targetSt =
                   visibleStudents.find((s) => s.id === criterionPicker.studentIds[0]) ?? null;
                 const col = criterionPicker.col;
+                const ids = criterionPicker.studentIds;
                 setCriterionPicker(null);
-                onOpenRubricGrader(targetSt, col);
+                if (ids.length > 1) {
+                  onOpenRubricGrader(null, col, {
+                    groupName: `${ids.length} alumnos seleccionados`,
+                    studentIds: ids,
+                  });
+                } else {
+                  onOpenRubricGrader(targetSt, col);
+                }
               }}
-              className="px-2.5 py-1 rounded-lg border border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-800 font-semibold text-[11px]"
+              className="px-2.5 py-2 rounded-xl border border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-800 font-semibold text-[11px] shrink-0"
             >
-              Abrir rúbrica completa
+              Rúbrica
+            </button>
+            <button
+              type="button"
+              onClick={() => setCriterionPicker(null)}
+              className="flex-1 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs text-center shadow-2xs"
+            >
+              Ok
             </button>
           </div>
         </div>
@@ -7142,10 +7280,186 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           );
         }
 
-        // 3. Selected Cell (Column or Folder Summary)
+        // 3. Multi-cell Selection Bar on Touch (e.g., evaluate multiple rubric cells at once!)
+        if (selectedKeys.size > 1) {
+          return (
+            <div
+              data-touch-action-bar="multi"
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              style={{
+                bottom: 'calc(0.75rem + var(--safe-bottom))',
+                left: 'max(0.75rem, var(--safe-left))',
+                maxWidth: 'calc(100dvw - 170px)',
+              }}
+              className="absolute z-30 flex items-center gap-1 px-1.5 py-1 rounded-2xl border border-purple-200 bg-white/95 backdrop-blur-xs shadow-lg overflow-x-auto no-scrollbar text-xs font-semibold text-slate-700"
+            >
+              <span className="px-2 text-[11px] font-bold text-slate-900 shrink-0">
+                {selectedKeys.size} sel.
+              </span>
+
+              {sameRubricColSelection && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenRubricGrader(null, sameRubricColSelection.col, {
+                      groupName: `${sameRubricColSelection.studentIds.length} alumnos seleccionados`,
+                      studentIds: sameRubricColSelection.studentIds,
+                    })
+                  }
+                  className="min-h-[38px] px-3 rounded-xl bg-purple-600 text-white flex items-center gap-1.5 shrink-0"
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Evaluar rúbrica ({sameRubricColSelection.studentIds.length})</span>
+                </button>
+              )}
+
+              {sameCriterionSelection && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const { critSlot, studentIds } = sameCriterionSelection;
+                    const firstSid = studentIds[0];
+                    const cellEl = getCellNode(firstSid, critSlot.key);
+                    const rect = cellEl?.getBoundingClientRect() ?? {
+                      bottom: 180,
+                      left: 60,
+                    };
+                    setCriterionPicker({
+                      studentIds,
+                      studentLabel: `${studentIds.length} alumnos seleccionados`,
+                      col: critSlot.col,
+                      rubric: critSlot.rubric,
+                      criterion: critSlot.criterion,
+                      criterionIndex: critSlot.criterionIndex,
+                      currentLevelId: null,
+                      top: Math.max(12, Math.min(window.innerHeight - 430, rect.bottom + 6)),
+                      left: Math.max(12, Math.min(window.innerWidth - 320, rect.left)),
+                    });
+                  }}
+                  className="min-h-[38px] px-3 rounded-xl bg-purple-600 text-white flex items-center gap-1.5 shrink-0"
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>
+                    Valorar C{sameCriterionSelection.critSlot.criterionIndex + 1} (
+                    {sameCriterionSelection.studentIds.length})
+                  </span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setTouchMultiSelect((v) => !v)}
+                aria-pressed={touchMultiSelect}
+                className={`min-h-[38px] px-2.5 rounded-xl border shrink-0 ${
+                  touchMultiSelect
+                    ? 'bg-blue-600 border-blue-700 text-white'
+                    : 'border-slate-200 bg-slate-50 text-slate-700'
+                }`}
+              >
+                {touchMultiSelect ? 'Añadiendo ✓' : '+ Varias'}
+              </button>
+
+              {clearableTargets.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearMultipleCells(clearableTargets);
+                    showCopyToast(`${clearableTargets.length} celdas borradas`);
+                  }}
+                  aria-label="Vaciar celdas seleccionadas"
+                  className="w-9 h-9 rounded-xl border border-rose-200 bg-rose-50 text-rose-600 flex items-center justify-center shrink-0"
+                >
+                  <Eraser className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setTouchMultiSelect(false);
+                  setSelectedKeys(new Set());
+                  setSelectedCoord(null);
+                  setAnchorCoord(null);
+                }}
+                aria-label="Quitar selección múltiple"
+                className="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 text-slate-600 flex items-center justify-center shrink-0"
+              >
+                <X className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          );
+        }
+
+        // 4. Selected Cell (Column, Folder Summary, or Rubric Criterion)
         if (selectedCoord) {
           const st = visibleStudents.find((s) => s.id === selectedCoord.studentId);
           if (!st) return null;
+          const critSlotSelected = displaySlots.find(
+            (s): s is Extract<DisplaySlot, { kind: 'RUBRIC_CRITERION' }> =>
+              s.kind === 'RUBRIC_CRITERION' && s.key === selectedCoord.columnId
+          );
+          if (critSlotSelected) {
+            return (
+              <div
+                data-touch-action-bar="cell"
+                onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+                style={{
+                  bottom: 'calc(0.75rem + var(--safe-bottom))',
+                  left: 'max(0.75rem, var(--safe-left))',
+                  maxWidth: 'calc(100dvw - 170px)',
+                }}
+                className="absolute z-30 flex items-center gap-1 px-1.5 py-1 rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-xs shadow-lg overflow-x-auto no-scrollbar text-xs font-semibold text-slate-700"
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cellEl = getCellNode(st.id, critSlotSelected.key);
+                    const rect = cellEl?.getBoundingClientRect() ?? { bottom: 180, left: 60 };
+                    const pCell = activeBook.cells[cellKey(st.id, critSlotSelected.col.id)];
+                    const curLvlId =
+                      pCell?.rubricEval?.selections?.[critSlotSelected.criterion.id]?.levelId ??
+                      null;
+                    setCriterionPicker({
+                      studentIds: [st.id],
+                      studentLabel: `${st.lastName}, ${st.firstName}`,
+                      col: critSlotSelected.col,
+                      rubric: critSlotSelected.rubric,
+                      criterion: critSlotSelected.criterion,
+                      criterionIndex: critSlotSelected.criterionIndex,
+                      currentLevelId: curLvlId,
+                      top: Math.max(12, Math.min(window.innerHeight - 430, rect.bottom + 6)),
+                      left: Math.max(12, Math.min(window.innerWidth - 320, rect.left)),
+                    });
+                  }}
+                  className="min-h-[38px] px-3 rounded-xl bg-purple-600 text-white flex items-center gap-1.5 shrink-0"
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Valorar C{critSlotSelected.criterionIndex + 1}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTouchMultiSelect((v) => !v)}
+                  aria-pressed={touchMultiSelect}
+                  className={`min-h-[38px] px-2.5 rounded-xl border shrink-0 ${
+                    touchMultiSelect
+                      ? 'bg-blue-600 border-blue-700 text-white'
+                      : 'border-slate-200 bg-slate-50 text-slate-700'
+                  }`}
+                >
+                  {touchMultiSelect ? 'Añadiendo ✓' : '+ Varias'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenRubricGrader(st, critSlotSelected.col)}
+                  className="min-h-[38px] px-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-700 shrink-0"
+                >
+                  Rúbrica
+                </button>
+              </div>
+            );
+          }
           const folderEntry = folderSlotById.get(selectedCoord.columnId);
           if (folderEntry) {
             const fCell = activeBook.cells[cellKey(st.id, folderEntry.folder.id)];
@@ -7243,6 +7557,22 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 <span>{col.type === 'RUBRIC' ? 'Rúbrica' : 'Editar'}</span>
               </button>
 
+              {!activeTab.isLocked && !col.isLocked && col.type !== 'AVERAGE' && (
+                <button
+                  type="button"
+                  onClick={() => setTouchMultiSelect((v) => !v)}
+                  aria-pressed={touchMultiSelect}
+                  title="Activa para seleccionar varios alumnos tocando sus celdas"
+                  className={`min-h-[38px] px-2.5 rounded-xl border shrink-0 ${
+                    touchMultiSelect
+                      ? 'bg-blue-600 border-blue-700 text-white'
+                      : 'border-slate-200 bg-slate-50 text-slate-700'
+                  }`}
+                >
+                  {touchMultiSelect ? 'Añadiendo ✓' : '+ Varias'}
+                </button>
+              )}
+
               {col.type === 'RUBRIC' && !col.isLocked && !activeTab.isLocked && (
                 <button
                   type="button"
@@ -7333,6 +7663,100 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
         return null;
       })()}
+
+      {/* Desktop quick action pill when multiple cells in same Rubric or Criterion column are selected */}
+      {!device.isTouch && !inlineEdit && selectedKeys.size > 1 && (sameRubricColSelection || sameCriterionSelection) && (
+        <div
+          data-desktop-multi-rubric-bar="true"
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{
+            bottom: 'calc(0.75rem + var(--safe-bottom))',
+            left: 'max(0.75rem, var(--safe-left))',
+          }}
+          className="absolute z-30 flex items-center gap-1.5 pl-3 pr-1.5 py-1.5 rounded-2xl border border-purple-200 bg-white/95 backdrop-blur-xs shadow-lg text-xs font-semibold text-slate-700"
+        >
+          {sameRubricColSelection ? (
+            <>
+              <span className="font-bold text-slate-900 pr-1">
+                {sameRubricColSelection.col.title} · {sameRubricColSelection.studentIds.length} alumnos
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  onOpenRubricGrader(null, sameRubricColSelection.col, {
+                    groupName: `${sameRubricColSelection.studentIds.length} alumnos seleccionados`,
+                    studentIds: sameRubricColSelection.studentIds,
+                  })
+                }
+                className="px-3 py-1 rounded-xl bg-purple-600 hover:bg-purple-700 text-white flex items-center gap-1.5 shrink-0 transition-colors"
+              >
+                <LayoutGrid className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Evaluar rúbrica ({sameRubricColSelection.studentIds.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  clearMultipleCells(
+                    sameRubricColSelection.studentIds.map((studentId) => ({
+                      studentId,
+                      columnId: sameRubricColSelection.col.id,
+                    }))
+                  );
+                  showCopyToast(
+                    `${sameRubricColSelection.studentIds.length} celdas de rúbrica borradas`
+                  );
+                }}
+                className="px-2.5 py-1 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 flex items-center gap-1 shrink-0 transition-colors"
+              >
+                <Eraser className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Borrar</span>
+              </button>
+            </>
+          ) : sameCriterionSelection ? (
+            <>
+              <span className="font-bold text-slate-900 pr-1">
+                C{sameCriterionSelection.critSlot.criterionIndex + 1} ·{' '}
+                {sameCriterionSelection.studentIds.length} alumnos
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const { critSlot, studentIds } = sameCriterionSelection;
+                  const cellEl = getCellNode(studentIds[0], critSlot.key);
+                  const rect = cellEl?.getBoundingClientRect() ?? { bottom: 200, left: 100 };
+                  setCriterionPicker({
+                    studentIds,
+                    studentLabel: `${studentIds.length} alumnos seleccionados`,
+                    col: critSlot.col,
+                    rubric: critSlot.rubric,
+                    criterion: critSlot.criterion,
+                    criterionIndex: critSlot.criterionIndex,
+                    currentLevelId: null,
+                    top: Math.max(12, Math.min(window.innerHeight - 430, rect.bottom + 6)),
+                    left: Math.max(12, Math.min(window.innerWidth - 320, rect.left)),
+                  });
+                }}
+                className="px-3 py-1 rounded-xl bg-purple-600 hover:bg-purple-700 text-white flex items-center gap-1.5 shrink-0 transition-colors"
+              >
+                <LayoutGrid className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Valorar criterio ({sameCriterionSelection.studentIds.length})</span>
+              </button>
+            </>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedKeys(new Set());
+              setSelectedCoord(null);
+              setAnchorCoord(null);
+            }}
+            aria-label="Quitar selección"
+            className="p-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600"
+          >
+            <X className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
+        </div>
+      )}
 
       {/* Desktop quick action pill when a column/task or folder header is selected */}
       {!device.isTouch && !inlineEdit && selectedColumnTarget && (() => {

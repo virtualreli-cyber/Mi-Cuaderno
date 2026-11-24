@@ -195,11 +195,14 @@ const TOPBAR_HEIGHT = 56;
 
 function clampFloatingRect(rect: FloatingRect): FloatingRect {
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
-  const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
-  const maxW = Math.max(MIN_FLOAT_W, vw - 16);
+  const vh =
+    typeof window !== 'undefined'
+      ? Math.min(window.innerHeight, window.visualViewport?.height ?? window.innerHeight)
+      : 800;
+  const maxW = Math.max(280, vw - 16);
   const maxH = Math.max(MIN_FLOAT_H, vh - 16);
-  const width = Math.max(MIN_FLOAT_W, Math.min(maxW, Math.round(rect.width)));
-  const height = Math.max(MIN_FLOAT_H, Math.min(maxH, Math.round(rect.height)));
+  const width = Math.max(Math.min(MIN_FLOAT_W, maxW), Math.min(maxW, Math.round(rect.width)));
+  const height = Math.max(Math.min(MIN_FLOAT_H, maxH), Math.min(maxH, Math.round(rect.height)));
   const x = Math.max(8, Math.min(vw - width - 8, Math.round(rect.x)));
   const y = Math.max(8, Math.min(vh - height - 8, Math.round(rect.y)));
   return { x, y, width, height };
@@ -558,6 +561,12 @@ export const Modal: React.FC<ModalProps> = ({
 
   if (!open) return null;
 
+  const maxVisibleFloatingH = Math.max(
+    260,
+    Math.min(Math.round(device.viewportHeight * 0.9), device.visualViewportHeight - 16)
+  );
+  const maxVisibleFloatingW = Math.max(280, device.viewportWidth - 16);
+
   const dialogStyle: React.CSSProperties = dockedRight
     ? {
         position: 'fixed',
@@ -565,10 +574,10 @@ export const Modal: React.FC<ModalProps> = ({
         right: 0,
         bottom: 0,
         left: 'auto',
-        width: dockWidth,
+        width: Math.min(dockWidth, maxVisibleFloatingW),
         height: `calc(100dvh - ${TOPBAR_HEIGHT}px)`,
-        maxWidth: 'none',
-        maxHeight: 'none',
+        maxWidth: '100dvw',
+        maxHeight: `calc(100dvh - ${TOPBAR_HEIGHT}px)`,
         margin: 0,
         zIndex: 35,
       }
@@ -581,12 +590,14 @@ export const Modal: React.FC<ModalProps> = ({
           top: 'auto',
           width: '100dvw',
           maxWidth: '100dvw',
-          maxHeight: `${Math.max(320, Math.min(Math.round(device.viewportHeight * 0.92), device.visualViewportHeight - 12))}px`,
+          maxHeight: `${Math.max(300, Math.min(Math.round(device.viewportHeight * 0.92), device.visualViewportHeight - 12))}px`,
           margin: 0,
         }
       : isTabletPortraitSheet
         ? {
-            maxHeight: `${Math.max(360, Math.min(Math.round(device.viewportHeight * 0.88), device.visualViewportHeight - 24))}px`,
+            maxWidth: `${maxVisibleFloatingW}px`,
+            maxHeight: `${Math.max(320, Math.min(Math.round(device.viewportHeight * 0.88), device.visualViewportHeight - 16))}px`,
+            margin: 'auto',
           }
         : floatingRect
           ? {
@@ -595,11 +606,15 @@ export const Modal: React.FC<ModalProps> = ({
               top: floatingRect.y,
               width: floatingRect.width,
               height: floatingRect.height,
-              maxWidth: 'none',
-              maxHeight: 'none',
+              maxWidth: `${maxVisibleFloatingW}px`,
+              maxHeight: `${maxVisibleFloatingH}px`,
               margin: 0,
             }
-          : {};
+          : {
+              maxWidth: `${maxVisibleFloatingW}px`,
+              maxHeight: `${maxVisibleFloatingH}px`,
+              margin: 'auto',
+            };
 
   return (
     <dialog
@@ -643,7 +658,7 @@ export const Modal: React.FC<ModalProps> = ({
             ? 'bg-white text-slate-900 border-t border-slate-200 shadow-2xl p-0 rounded-t-2xl rounded-b-none overflow-hidden'
             : isTabletPortraitSheet
               ? 'w-[min(92dvw,640px)] m-auto rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 overflow-hidden'
-              : `${floatingRect ? '' : `${maxWidthClass} m-auto max-h-[90vh]`} rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 overflow-visible`
+              : `${floatingRect ? '' : `${maxWidthClass} m-auto`} rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 overflow-hidden`
       }
     >
       {/* Accessibility live status region */}
@@ -712,12 +727,12 @@ export const Modal: React.FC<ModalProps> = ({
         }
         className={`flex flex-col ${
           dockedRight || floatingRect
-            ? 'h-full'
+            ? 'h-full min-h-0'
             : isMobileSheet
-              ? 'max-h-[92dvh]'
+              ? 'max-h-[92dvh] min-h-0'
               : isTabletPortraitSheet
-                ? 'max-h-[86dvh]'
-                : 'max-h-[90vh]'
+                ? 'max-h-[86dvh] min-h-0'
+                : 'max-h-[90dvh] min-h-0'
         } ${dockedRight ? 'rounded-none' : isMobileSheet ? 'rounded-t-2xl' : 'rounded-2xl'} overflow-hidden bg-white`}
       >
         <header
@@ -881,7 +896,7 @@ export const Modal: React.FC<ModalProps> = ({
           </div>
         </header>
 
-        <div className="overflow-y-auto flex-1 bg-white">{children}</div>
+        <div className="overflow-y-auto overscroll-contain flex-1 min-h-0 bg-white">{children}</div>
 
         {notice && (
           <div

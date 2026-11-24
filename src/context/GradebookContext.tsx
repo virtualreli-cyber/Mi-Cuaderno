@@ -1713,6 +1713,7 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         id: makeId('fld'),
         title: title.trim() || 'Nueva Carpeta',
         color: color || '#DCFCE7',
+        width: 80,
         orderIndex: activeTab.folders.length,
         isCollapsed: false,
         summaryMode: 'ARITHMETIC_MEAN',

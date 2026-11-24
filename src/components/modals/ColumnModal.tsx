@@ -70,7 +70,7 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
   const [date, setDate] = useState('');
   const [color, setColor] = useState('#DBEAFE');
   const [type, setType] = useState<ColumnType>('NUMERIC');
-  const [width, setWidth] = useState(120);
+  const [width, setWidth] = useState(80);
   const [folderId, setFolderId] = useState<string>('');
   const [orientation, setOrientation] = useState<'HORIZONTAL' | 'VERTICAL'>('HORIZONTAL');
   const [isLocked, setIsLocked] = useState(false);
@@ -219,7 +219,7 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
       setDate('');
       setColor(PASTEL_SWATCHES[(idx + 5) % PASTEL_SWATCHES.length].hex);
       setType(presetType);
-      setWidth(120);
+      setWidth(80);
       setFolderId(presetFolderId ?? '');
       setOrientation('HORIZONTAL');
       setIsLocked(false);
@@ -412,7 +412,7 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
       onClose={onClose}
       title={editingColumn ? `Configurar columna: ${editingColumn.title}` : 'Nueva Columna'}
       subtitle={`Pestaña actual: ${activeTab.title}`}
-      maxWidthClass="w-[min(700px,95vw)]"
+      maxWidthClass="w-[min(680px,calc(100dvw-16px))]"
     >
       <form onSubmit={handleSave} className="p-5 space-y-4 text-xs">
         {/* Column Type Selector */}
