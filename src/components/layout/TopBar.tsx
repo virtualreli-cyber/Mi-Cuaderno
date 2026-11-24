@@ -4,6 +4,7 @@ import {
   Building2,
   Check,
   ChevronDown,
+  ChevronRight,
   Cloud,
   CloudOff,
   Download,
@@ -28,6 +29,23 @@ import { useDeviceProfile } from '../../hooks/useDeviceProfile';
 import { usePwaInstall } from '../../hooks/usePwaInstall';
 import { usePwaUpdateStatus } from '../../services/pwaUpdater';
 import type { ClassBook } from '../../types/gradebook';
+
+const CLASS_MENU_COLLAPSED_STORAGE_KEY = 'cuaderno_topbar_collapsed_sections_v1';
+
+function loadCollapsedMenuSections(): Set<string> {
+  try {
+    const raw = localStorage.getItem(CLASS_MENU_COLLAPSED_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return new Set(parsed.filter((item): item is string => typeof item === 'string'));
+      }
+    }
+  } catch {
+    // ignore storage read errors
+  }
+  return new Set();
+}
 
 interface TopBarProps {
   searchQuery: string;
@@ -76,6 +94,22 @@ export const TopBar: React.FC<TopBarProps> = ({
   const pwaUpdate = usePwaUpdateStatus();
   const sidebarOpen = device.isOverlaySidebar ? drawerOpen : workspace.settings.sidebarVisible;
   const [classMenuOpen, setClassMenuOpen] = useState(false);
+  const [collapsedMenuSections, setCollapsedMenuSections] = useState<Set<string>>(() =>
+    loadCollapsedMenuSections()
+  );
+  const toggleMenuSection = (sectionKey: string) => {
+    setCollapsedMenuSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(sectionKey)) next.delete(sectionKey);
+      else next.add(sectionKey);
+      try {
+        localStorage.setItem(CLASS_MENU_COLLAPSED_STORAGE_KEY, JSON.stringify([...next]));
+      } catch {
+        // ignore storage write errors
+      }
+      return next;
+    });
+  };
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number }>({ top: 56, left: 60 });
@@ -305,110 +339,146 @@ export const TopBar: React.FC<TopBarProps> = ({
                 >
                   {groupedClasses.map((grp) => {
                     const accentHex = SCHOOL_DEFAULT_COLORS[grp.key] ?? '#CBD5E1';
+                    const isSectionCollapsed = collapsedMenuSections.has(grp.key);
                     return (
                       <div key={grp.key} className="space-y-1">
-                        <div
+                        <button
+                          type="button"
+                          aria-expanded={!isSectionCollapsed}
+                          data-topbar-section-toggle={grp.key}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleMenuSection(grp.key);
+                          }}
                           style={{
                             backgroundColor: blendWithWhite(accentHex, 0.72),
                             borderColor: blendWithWhite(accentHex, 0.35),
                           }}
-                          className="px-2.5 py-1 rounded-lg border flex items-center justify-between text-[10.5px] font-bold uppercase tracking-wider text-slate-700"
+                          className="w-full px-2.5 py-1.5 rounded-lg border flex items-center justify-between text-[10.5px] font-bold uppercase tracking-wider text-slate-700 hover:brightness-97 transition-all"
                         >
-                          <span className="flex items-center gap-1.5">
-                            <Building2 className="w-3 h-3 opacity-75" />
-                            <span>{grp.label}</span>
+                          <span className="flex items-center gap-1.5 min-w-0">
+                            {isSectionCollapsed ? (
+                              <ChevronRight className="w-3.5 h-3.5 shrink-0 opacity-75" />
+                            ) : (
+                              <ChevronDown className="w-3.5 h-3.5 shrink-0 opacity-75" />
+                            )}
+                            <Building2 className="w-3 h-3 opacity-75 shrink-0" />
+                            <span className="truncate">{grp.label}</span>
                           </span>
-                          <span className="text-[10px] tabular-nums opacity-75">
+                          <span className="text-[10px] tabular-nums opacity-75 shrink-0">
                             {grp.classes.length}
                           </span>
-                        </div>
-                        <div className="space-y-0.5">
-                          {grp.classes.map((cls) => {
-                            const isCurrent = !isTemplateMode && activeBook.id === cls.id;
-                            return (
-                              <button
-                                key={cls.id}
-                                type="button"
-                                role="menuitem"
-                                onClick={() => {
-                                  selectClass(cls.id);
-                                  setClassMenuOpen(false);
-                                  triggerRef.current?.focus({ preventScroll: true });
-                                }}
-                                style={{
-                                  backgroundColor: isCurrent
-                                    ? blendWithWhite(cls.color, 0.55)
-                                    : undefined,
-                                }}
-                                className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between gap-2 text-left transition-colors ${
-                                  isCurrent
-                                    ? 'font-bold text-slate-900 ring-1 ring-blue-300'
-                                    : 'text-slate-700 hover:bg-slate-100 font-medium'
-                                }`}
-                              >
-                                <span className="flex items-center gap-2 min-w-0">
-                                  <span
-                                    className="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10"
-                                    style={{ backgroundColor: cls.color }}
-                                  />
-                                  <span className="truncate">{cls.name}</span>
-                                </span>
-                                <span className="flex items-center gap-1.5 shrink-0">
-                                  <span className="text-[10px] text-slate-400 tabular-nums">
-                                    {cls.students.length} al.
+                        </button>
+                        {!isSectionCollapsed && (
+                          <div className="space-y-0.5">
+                            {grp.classes.map((cls) => {
+                              const isCurrent = !isTemplateMode && activeBook.id === cls.id;
+                              return (
+                                <button
+                                  key={cls.id}
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => {
+                                    selectClass(cls.id);
+                                    setClassMenuOpen(false);
+                                    triggerRef.current?.focus({ preventScroll: true });
+                                  }}
+                                  style={{
+                                    backgroundColor: isCurrent
+                                      ? blendWithWhite(cls.color, 0.55)
+                                      : undefined,
+                                  }}
+                                  className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between gap-2 text-left transition-colors ${
+                                    isCurrent
+                                      ? 'font-bold text-slate-900 ring-1 ring-blue-300'
+                                      : 'text-slate-700 hover:bg-slate-100 font-medium'
+                                  }`}
+                                >
+                                  <span className="flex items-center gap-2 min-w-0">
+                                    <span
+                                      className="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10"
+                                      style={{ backgroundColor: cls.color }}
+                                    />
+                                    <span className="truncate">{cls.name}</span>
                                   </span>
-                                  {isCurrent && <Check className="w-3.5 h-3.5 text-blue-600" />}
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
+                                  <span className="flex items-center gap-1.5 shrink-0">
+                                    <span className="text-[10px] text-slate-400 tabular-nums">
+                                      {cls.students.length} al.
+                                    </span>
+                                    {isCurrent && <Check className="w-3.5 h-3.5 text-blue-600" />}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
 
-                  {workspace.templates.length > 0 && (
-                    <div className="pt-1.5 border-t border-slate-200 space-y-1">
-                      <div className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-between text-[10.5px] font-bold uppercase tracking-wider text-emerald-800">
-                        <span className="flex items-center gap-1.5">
-                          <FileSpreadsheet className="w-3 h-3" />
-                          <span>Plantillas</span>
-                        </span>
-                        <span className="text-[10px] tabular-nums">{workspace.templates.length}</span>
+                  {workspace.templates.length > 0 && (() => {
+                    const isTemplatesCollapsed = collapsedMenuSections.has('__TEMPLATES__');
+                    return (
+                      <div className="pt-1.5 border-t border-slate-200 space-y-1">
+                        <button
+                          type="button"
+                          aria-expanded={!isTemplatesCollapsed}
+                          data-topbar-section-toggle="__TEMPLATES__"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleMenuSection('__TEMPLATES__');
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 hover:bg-emerald-100/70 flex items-center justify-between text-[10.5px] font-bold uppercase tracking-wider text-emerald-800 transition-colors"
+                        >
+                          <span className="flex items-center gap-1.5 min-w-0">
+                            {isTemplatesCollapsed ? (
+                              <ChevronRight className="w-3.5 h-3.5 shrink-0 opacity-75" />
+                            ) : (
+                              <ChevronDown className="w-3.5 h-3.5 shrink-0 opacity-75" />
+                            )}
+                            <FileSpreadsheet className="w-3 h-3 shrink-0" />
+                            <span>Plantillas</span>
+                          </span>
+                          <span className="text-[10px] tabular-nums shrink-0">
+                            {workspace.templates.length}
+                          </span>
+                        </button>
+                        {!isTemplatesCollapsed && (
+                          <div className="space-y-0.5">
+                            {workspace.templates.map((tpl) => {
+                              const isCurrent = isTemplateMode && activeBook.id === tpl.id;
+                              return (
+                                <button
+                                  key={tpl.id}
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => {
+                                    selectTemplate(tpl.id);
+                                    setClassMenuOpen(false);
+                                    triggerRef.current?.focus({ preventScroll: true });
+                                  }}
+                                  className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between gap-2 text-left transition-colors ${
+                                    isCurrent
+                                      ? 'bg-emerald-50 font-bold text-emerald-950 ring-1 ring-emerald-300'
+                                      : 'text-slate-700 hover:bg-slate-100 font-medium'
+                                  }`}
+                                >
+                                  <span className="flex items-center gap-2 min-w-0">
+                                    <span
+                                      className="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10"
+                                      style={{ backgroundColor: tpl.color }}
+                                    />
+                                    <span className="truncate">{tpl.name}</span>
+                                  </span>
+                                  {isCurrent && <Check className="w-3.5 h-3.5 text-emerald-600" />}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
-                      <div className="space-y-0.5">
-                        {workspace.templates.map((tpl) => {
-                          const isCurrent = isTemplateMode && activeBook.id === tpl.id;
-                          return (
-                            <button
-                              key={tpl.id}
-                              type="button"
-                              role="menuitem"
-                              onClick={() => {
-                                selectTemplate(tpl.id);
-                                setClassMenuOpen(false);
-                                triggerRef.current?.focus({ preventScroll: true });
-                              }}
-                              className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between gap-2 text-left transition-colors ${
-                                isCurrent
-                                  ? 'bg-emerald-50 font-bold text-emerald-950 ring-1 ring-emerald-300'
-                                  : 'text-slate-700 hover:bg-slate-100 font-medium'
-                              }`}
-                            >
-                              <span className="flex items-center gap-2 min-w-0">
-                                <span
-                                  className="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10"
-                                  style={{ backgroundColor: tpl.color }}
-                                />
-                                <span className="truncate">{tpl.name}</span>
-                              </span>
-                              {isCurrent && <Check className="w-3.5 h-3.5 text-emerald-600" />}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>,
                 document.body
               )}

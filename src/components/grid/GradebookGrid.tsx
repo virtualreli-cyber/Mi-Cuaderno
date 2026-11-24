@@ -3215,7 +3215,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         }}
         className="flex-1 min-h-0 overflow-auto bg-slate-50 focus:outline-none relative gradebook-touch-surface"
       >
-      <div style={{ width: totalTableWidth, minWidth: '100%', overflow: 'clip' }}>
+      <div
+        data-grid-scroll-canvas="true"
+        style={{
+          width: totalTableWidth + 200,
+          minWidth: '100%',
+          paddingBottom: '82dvh',
+          overflow: 'clip',
+        }}
+      >
       <table
         ref={tableRef}
         style={{
