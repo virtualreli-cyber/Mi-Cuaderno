@@ -55,7 +55,7 @@ export const FolderModal: React.FC<FolderModalProps> = ({ open, onClose, tabId, 
   const [color, setColor] = useState('#DCFCE7');
   const [width, setWidth] = useState(64);
   const [summaryMode, setSummaryMode] = useState<FolderSummaryMode>('ARITHMETIC_MEAN');
-  const [colorMode, setColorMode] = useState<ColorMode>('NONE');
+  const [colorMode, setColorMode] = useState<ColorMode>('CELL_BG');
   const [ignoreEmpty, setIgnoreEmpty] = useState(true);
   const [weights, setWeights] = useState<Record<string, number>>({});
 

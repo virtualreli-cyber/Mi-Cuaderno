@@ -82,7 +82,7 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
   const [maxValue, setMaxValue] = useState(10);
   const [decimals, setDecimals] = useState(2);
   const [passThreshold, setPassThreshold] = useState(5);
-  const [colorMode, setColorMode] = useState<ColorMode>('NONE');
+  const [colorMode, setColorMode] = useState<ColorMode>('CELL_BG');
 
   // Average settings
   const [selectedSrcIds, setSelectedSrcIds] = useState<string[]>([]);
@@ -229,7 +229,7 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
       setMaxValue(10);
       setDecimals(2);
       setPassThreshold(activeBook?.passThreshold ?? 5);
-      setColorMode('NONE');
+      setColorMode('CELL_BG');
 
       // For a new AVERAGE column, pre-select existing NUMERIC/RUBRIC columns in current tab
       if (presetType === 'AVERAGE' && activeTab) {
