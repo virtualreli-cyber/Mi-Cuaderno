@@ -897,13 +897,20 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   );
 
   // Build iDoceo-style continuous horizontal slots + Row 1/Row 2 header topology
-  const { visibleColumns, displaySlots, row1Headers, row2Slots } = useMemo(() => {
+  const {
+    visibleColumns,
+    displaySlots,
+    row1Headers,
+    row2Slots,
+    hasExpandedChildRubric,
+  } = useMemo(() => {
     if (!activeTab) {
       return {
         visibleColumns: [] as ColumnEntity[],
         displaySlots: [] as DisplaySlot[],
         row1Headers: [] as Row1HeaderItem[],
         row2Slots: [] as DisplaySlot[],
+        hasExpandedChildRubric: false,
       };
     }
 
@@ -912,8 +919,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     const slots: DisplaySlot[] = [];
     const r1: Row1HeaderItem[] = [];
     const r2: DisplaySlot[] = [];
-    const getCritWidth = (col: ColumnEntity) =>
-      Math.max(76, Math.min(112, Math.round(col.width * 0.82)));
+    const CRIT_SUBCOL_WIDTH = 75;
+    let expandedChildRubric = false;
 
     const buildExpandedCriterionSlots = (
       col: ColumnEntity,
@@ -921,7 +928,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       isChild: boolean,
       parentFolder?: FolderEntity
     ): DisplaySlot[] => {
-      const cw = getCritWidth(col);
       return rubric.criteria.map((criterion, criterionIndex) => ({
         kind: 'RUBRIC_CRITERION' as const,
         key: `${col.id}${RUBRIC_CRIT_SEP}${criterion.id}`,
@@ -929,7 +935,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         rubric,
         criterion,
         criterionIndex,
-        width: cw,
+        width: CRIT_SUBCOL_WIDTH,
         isChild,
         parentFolder,
       }));
@@ -940,7 +946,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         visCols.push(item.col);
         const rubric = item.col.rubricExpanded ? resolveColumnRubric(item.col) : null;
         if (rubric && rubric.criteria.length > 0) {
-          const critWidth = getCritWidth(item.col);
+          const critWidth = CRIT_SUBCOL_WIDTH;
           const colSlot: DisplaySlot = {
             kind: 'COL',
             key: item.col.id,
@@ -1018,6 +1024,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
           const childRubric = c.rubricExpanded ? resolveColumnRubric(c) : null;
           if (childRubric && childRubric.criteria.length > 0) {
+            expandedChildRubric = true;
             const critSlots = buildExpandedCriterionSlots(c, childRubric, true, folder);
             slots.push(...critSlots);
             r2.push(...critSlots);
@@ -1035,7 +1042,13 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       }
     }
 
-    return { visibleColumns: visCols, displaySlots: slots, row1Headers: r1, row2Slots: r2 };
+    return {
+      visibleColumns: visCols,
+      displaySlots: slots,
+      row1Headers: r1,
+      row2Slots: r2,
+      hasExpandedChildRubric: expandedChildRubric,
+    };
   }, [activeTab, resolveColumnRubric]);
 
   // Helper to resolve drag payload safely from state or dataTransfer
@@ -2796,20 +2809,31 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       slot.kind === 'FOLDER_SUMMARY' &&
       selectedColumnTarget.folder.id === slot.folder.id);
 
-  // Shared renderer for standalone columns (rowSpan=2 in Row 1) and child / expanded-rubric columns (in Row 2)
+  const subCanopyBaseH = hasExpandedChildRubric ? Math.min(24, Math.max(20, Math.round(baseHeaderH * 0.28))) : 0;
+  const subCanopyH = subCanopyBaseH * gridZoom;
+  const mainHeaderRowSpan = hasExpandedChildRubric ? 3 : 2;
+  const totalHeaderRows = mainHeaderRowSpan + (showLomloeBar ? 1 : 0);
+
+  // Shared renderer for standalone columns (rowSpan=mainHeaderRowSpan in Row 1) and child / expanded-rubric columns
   const renderColumnHeaderCell = (
     col: ColumnEntity,
     isStandalone: boolean,
-    inExpandedRubricRow2 = false
+    inExpandedRubricFolder = false,
+    rowSpanOverride?: number,
+    heightOverride?: number,
+    unzoomedHeightOverride?: number
   ) => {
     const hint = dropHint?.key === col.id ? dropHint.mode : null;
     const isDraggingThis = dragItem?.kind === 'COL' && dragItem.id === col.id;
     const isColSelected =
       selectedColumnTarget?.kind === 'COL' && selectedColumnTarget.col.id === col.id;
-    const isVertical = shouldRenderVerticalHeader(col.title, col.width, col.headerOrientation);
-    const hasTopCanopy = isStandalone && !inExpandedRubricRow2;
-    const cellHeight = hasTopCanopy ? canopyH + headerH : headerH;
-    const unzoomedCellH = hasTopCanopy ? baseCanopyH + baseHeaderH : baseHeaderH;
+    const isVertical =
+      !inExpandedRubricFolder && shouldRenderVerticalHeader(col.title, col.width, col.headerOrientation);
+    const hasTopCanopy = isStandalone && !inExpandedRubricFolder;
+    const cellHeight = heightOverride ?? (hasTopCanopy ? canopyH + headerH : headerH);
+    const unzoomedCellH =
+      unzoomedHeightOverride ?? (hasTopCanopy ? baseCanopyH + baseHeaderH : baseHeaderH);
+    const effectiveRowSpan = rowSpanOverride ?? (hasTopCanopy ? mainHeaderRowSpan : undefined);
     const educamosSummary = getColumnEducamosSummary(col, activeBook.students, activeBook.cells);
     const isEducamosMenuOpen = educamosMenu?.colId === col.id;
     const colRubric = resolveColumnRubric(col);
@@ -2820,7 +2844,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       <th
         key={col.id}
         data-col-header={col.id}
-        rowSpan={hasTopCanopy ? 2 : undefined}
+        rowSpan={effectiveRowSpan}
         draggable={!activeTab.isLocked && !device.isTouch}
         onPointerDown={(e) => {
           touchDoubleTap.start(e, `hdr-col:${col.id}`);
@@ -2938,7 +2962,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         }}
         title={`${col.title} — 1 clic: seleccionar columna · Doble clic o clic derecho: editar · Arrastra borde derecho para ancho`}
         className={`border-r border-b border-slate-300 ${
-          !isStandalone ? 'border-t border-t-slate-300/80' : ''
+          inExpandedRubricFolder
+            ? 'border-t-0'
+            : !isStandalone
+              ? 'border-t border-t-slate-300/80'
+              : ''
         } p-0 relative group cursor-pointer transition-[background-color,border-color,color,filter,opacity,box-shadow] align-middle overflow-hidden hover:brightness-97 ${
           isDraggingThis ? 'opacity-60' : ''
         } ${isColSelected ? 'col-header-selected' : ''}`}
@@ -3038,66 +3066,84 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             }}
             className="flex flex-col items-center justify-between gap-0.5 overflow-hidden"
           >
-            <div className="flex-1 flex items-center justify-center w-full min-h-0 overflow-hidden px-0.5">
-              <span
-                style={isVertical ? { maxHeight: Math.max(20, unzoomedCellH - 28) } : undefined}
-                className={`text-[0.88em] font-bold text-slate-900 leading-tight whitespace-normal break-normal [overflow-wrap:normal] [word-break:normal] ${
-                  isVertical
-                    ? '[writing-mode:vertical-rl] rotate-180 overflow-hidden text-left'
-                    : 'text-center w-full'
-                }`}
-              >
-                {col.title}
-              </span>
-            </div>
-
-            <div className="w-full flex items-center justify-center gap-0.5 text-[0.76em] text-slate-600 shrink-0 min-h-[14px]">
-              {col.date && !isVertical && <span className="truncate">{col.date}</span>}
-              {col.isLocked && <Lock style={baseSmallIconStyle} className="text-slate-600 shrink-0" />}
-              {col.type === 'AVERAGE' && (
-                <Calculator style={baseSmallIconStyle} className="text-amber-700 shrink-0" />
-              )}
-              {col.type === 'RUBRIC' && !canExpandRubric && (
-                <LayoutGrid style={baseSmallIconStyle} className="text-purple-700 shrink-0" />
-              )}
-              {col.type === 'RUBRIC' && canExpandRubric && colRubric && (
-                <button
-                  type="button"
-                  data-rubric-expand-btn={col.id}
-                  aria-expanded={isRubricExpanded}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onDoubleClick={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleColumnRubricExpanded(col.id);
-                  }}
-                  title={
-                    isRubricExpanded
-                      ? `Plegar subcolumnas de criterios (${colRubric.criteria.length})`
-                      : `Abrir rúbrica en ${colRubric.criteria.length} subcolumnas de criterios`
-                  }
-                  aria-label={
-                    isRubricExpanded
-                      ? `Plegar criterios de ${col.title}`
-                      : `Abrir criterios de ${col.title}`
-                  }
-                  className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded border text-[9px] font-bold leading-none shadow-2xs transition-colors shrink-0 ${
-                    isRubricExpanded
-                      ? 'bg-purple-600 border-purple-700 text-white hover:bg-purple-700'
-                      : 'bg-white/90 border-purple-300 text-purple-800 hover:bg-purple-600 hover:text-white'
-                  }`}
-                >
-                  <LayoutGrid className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
-                  <span>{colRubric.criteria.length}</span>
-                  {isRubricExpanded ? (
-                    <ChevronsLeft className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
-                  ) : (
-                    <ChevronsRight className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+            {inExpandedRubricFolder ? (
+              <>
+                <div className="flex-1 flex flex-col items-center justify-center w-full min-h-0 px-0.5 pt-4 gap-0.5">
+                  <span className="text-[0.76em] font-semibold text-purple-950/75 uppercase tracking-wide leading-none">
+                    Total
+                  </span>
+                </div>
+                <div className="w-full flex items-center justify-center gap-0.5 text-[0.76em] text-slate-600 shrink-0 min-h-[14px]">
+                  {col.date && <span className="truncate">{col.date}</span>}
+                  {col.isLocked && (
+                    <Lock style={baseSmallIconStyle} className="text-slate-600 shrink-0" />
                   )}
-                </button>
-              )}
-            </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex-1 flex items-center justify-center w-full min-h-0 overflow-hidden px-0.5">
+                  <span
+                    style={isVertical ? { maxHeight: Math.max(20, unzoomedCellH - 28) } : undefined}
+                    className={`text-[0.88em] font-bold text-slate-900 leading-tight whitespace-normal break-normal [overflow-wrap:normal] [word-break:normal] ${
+                      isVertical
+                        ? '[writing-mode:vertical-rl] rotate-180 overflow-hidden text-left'
+                        : 'text-center w-full'
+                    }`}
+                  >
+                    {col.title}
+                  </span>
+                </div>
+
+                <div className="w-full flex items-center justify-center gap-0.5 text-[0.76em] text-slate-600 shrink-0 min-h-[14px]">
+                  {col.date && !isVertical && <span className="truncate">{col.date}</span>}
+                  {col.isLocked && <Lock style={baseSmallIconStyle} className="text-slate-600 shrink-0" />}
+                  {col.type === 'AVERAGE' && (
+                    <Calculator style={baseSmallIconStyle} className="text-amber-700 shrink-0" />
+                  )}
+                  {col.type === 'RUBRIC' && !canExpandRubric && (
+                    <LayoutGrid style={baseSmallIconStyle} className="text-purple-700 shrink-0" />
+                  )}
+                  {col.type === 'RUBRIC' && canExpandRubric && colRubric && (
+                    <button
+                      type="button"
+                      data-rubric-expand-btn={col.id}
+                      aria-expanded={isRubricExpanded}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleColumnRubricExpanded(col.id);
+                      }}
+                      title={
+                        isRubricExpanded
+                          ? `Plegar subcolumnas de criterios (${colRubric.criteria.length})`
+                          : `Abrir rúbrica en ${colRubric.criteria.length} subcolumnas de criterios`
+                      }
+                      aria-label={
+                        isRubricExpanded
+                          ? `Plegar criterios de ${col.title}`
+                          : `Abrir criterios de ${col.title}`
+                      }
+                      className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded border text-[9px] font-bold leading-none shadow-2xs transition-colors shrink-0 ${
+                        isRubricExpanded
+                          ? 'bg-purple-600 border-purple-700 text-white hover:bg-purple-700'
+                          : 'bg-white/90 border-purple-300 text-purple-800 hover:bg-purple-600 hover:text-white'
+                      }`}
+                    >
+                      <LayoutGrid className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                      <span>{colRubric.criteria.length}</span>
+                      {isRubricExpanded ? (
+                        <ChevronsLeft className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                      ) : (
+                        <ChevronsRight className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                      )}
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -3195,7 +3241,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           {/* Row 1: Top-Left Student Header + Standalone cols (rowSpan=2) + Closed Folders + Open Folder Canopies */}
           <tr>
             <th
-              rowSpan={showLomloeBar ? 3 : 2}
+              rowSpan={totalHeaderRows}
               onClick={(e) => {
                 if (!device.isTouch || justResizedRef.current) return;
                 const target = e.target as HTMLElement | null;
@@ -3615,9 +3661,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       <span className="inline-flex items-center gap-1 min-w-0 truncate">
                         <LayoutGrid style={baseSmallIconStyle} className="text-purple-700 shrink-0" />
                         <span className="truncate">{col.title}</span>
-                        <span className="text-[0.82em] font-semibold text-purple-900/75 truncate">
-                          · {rubric.title}
-                        </span>
                       </span>
                       <button
                         type="button"
@@ -3840,7 +3883,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
             {/* Add Column / Folder Top-Right Button (also acts as drop zone to pull columns OUT of folders or move to end) */}
             <th
-              rowSpan={showLomloeBar ? 3 : 2}
+              rowSpan={totalHeaderRows}
               onDragOver={(e) => {
                 if (!dragItem) return;
                 e.preventDefault();
@@ -3999,7 +4042,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             </th>
           </tr>
 
-          {/* Row 2: Folder seamless left Summary Columns (both open & closed!) + Child Column Headers */}
+          {/* Row 2: Folder seamless left Summary Columns + Child Column Headers + Child Rubric Canopies */}
           <tr>
             {row2Slots.map((slot) => {
               if (slot.kind === 'FOLDER_SUMMARY') {
@@ -4010,11 +4053,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   selectedColumnTarget?.kind === 'FOLDER' &&
                   selectedColumnTarget.folder.id === folder.id;
                 const unzoomedFldSummaryH = baseHeaderH + (showLomloeBar ? baseLomloeRowH : 0);
+                const fldRowSpan = (hasExpandedChildRubric ? 2 : 1) + (showLomloeBar ? 1 : 0);
 
                 return (
                   <th
                     key={key}
-                    rowSpan={showLomloeBar ? 2 : undefined}
+                    rowSpan={fldRowSpan > 1 ? fldRowSpan : undefined}
                     onPointerDown={(e) => {
                       longPress.start(e, () => {
                         selectFolderSummaryColumn(folder, childCols);
@@ -4186,14 +4230,185 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               }
 
               if (slot.kind === 'RUBRIC_CRITERION') {
+                // If this criterion belongs to an expanded CHILD rubric inside a folder, Row 2 renders the canopy above and Row 3 renders this criterion!
+                if (hasExpandedChildRubric && slot.isChild) {
+                  return null;
+                }
                 const { col, rubric, criterion, criterionIndex, key, width } = slot;
-                const unzoomedCritH = baseHeaderH + (showLomloeBar ? baseLomloeRowH : 0);
+                const critUnzoomedH = baseHeaderH + (showLomloeBar ? baseLomloeRowH : 0);
                 const critH = headerH + (showLomloeBar ? lomloeRowH : 0);
+                const critRowSpan = (hasExpandedChildRubric ? 2 : 1) + (showLomloeBar ? 1 : 0);
                 const isCritColSelected =
                   selectedColumnTarget?.kind === 'COL' && selectedColumnTarget.col.id === col.id;
                 return (
                   <th
                     key={key}
+                    rowSpan={critRowSpan > 1 ? critRowSpan : undefined}
+                    data-rubric-crit-header={key}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      selectEntireColumn(col);
+                    }}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      onEditColumn(col);
+                    }}
+                    style={{
+                      height: critH,
+                      maxHeight: critH,
+                      backgroundColor: blendWithWhite(col.color, 0.34),
+                    }}
+                    title={`Criterio ${criterionIndex + 1}: ${criterion.title} (Peso: ${criterion.weight}%) · Rúbrica: ${rubric.title}`}
+                    className={`border-r border-b border-t border-t-slate-300/80 border-slate-300 p-0 relative cursor-pointer align-middle transition-[background-color,border-color,color,filter,opacity,box-shadow] hover:brightness-97 overflow-hidden ${
+                      isCritColSelected ? 'col-header-selected' : ''
+                    }`}
+                  >
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width,
+                        height: critUnzoomedH,
+                        fontSize: `${baseTextFs}px`,
+                        transform: `scale(${gridZoom})`,
+                        transformOrigin: 'top left',
+                      }}
+                      className="px-1 py-1 flex flex-col items-center justify-between gap-0.5 overflow-hidden"
+                    >
+                      <span className="px-1 py-0 rounded bg-purple-100/90 border border-purple-200 text-[0.68em] font-extrabold text-purple-900 leading-tight shrink-0">
+                        C{criterionIndex + 1} · {criterion.weight}%
+                      </span>
+                      <div className="flex-1 flex items-center justify-center w-full min-h-0 overflow-hidden px-0.5">
+                        <span className="text-[0.8em] font-semibold text-slate-800 leading-tight text-center line-clamp-3 break-words">
+                          {criterion.title}
+                        </span>
+                      </div>
+                    </div>
+                  </th>
+                );
+              }
+
+              // Expanded CHILD rubric inside an open folder renders its horizontal folder-style canopy in Row 2!
+              const childExpandedRubric =
+                hasExpandedChildRubric && slot.isChild && slot.col.rubricExpanded
+                  ? resolveColumnRubric(slot.col)
+                  : null;
+              if (childExpandedRubric && childExpandedRubric.criteria.length > 0) {
+                const { col } = slot;
+                const critCount = childExpandedRubric.criteria.length;
+                const totalUnzoomedW = col.width + critCount * 75;
+                const isColSelected =
+                  selectedColumnTarget?.kind === 'COL' && selectedColumnTarget.col.id === col.id;
+                return (
+                  <th
+                    key={`rubric-child-canopy-${col.id}`}
+                    colSpan={1 + critCount}
+                    onClick={(e) => {
+                      if (justResizedRef.current) return;
+                      e.stopPropagation();
+                      selectEntireColumn(col);
+                    }}
+                    onDoubleClick={(e) => {
+                      if (justResizedRef.current) return;
+                      e.stopPropagation();
+                      toggleColumnRubricExpanded(col.id);
+                    }}
+                    onContextMenu={(e) => {
+                      if (justResizedRef.current) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      selectEntireColumn(col);
+                      onEditColumn(col);
+                    }}
+                    style={{
+                      height: subCanopyH,
+                      maxHeight: subCanopyH,
+                      backgroundColor: col.color,
+                    }}
+                    title={`${col.title} (${childExpandedRubric.title}) — Doble clic para plegar subcolumnas`}
+                    className={`border-r border-b-0 border-t border-t-slate-300/80 border-slate-300 p-0 text-center cursor-pointer hover:brightness-97 transition-[background-color,border-color,color,filter,opacity,box-shadow] relative overflow-hidden ${
+                      isColSelected ? 'col-header-selected' : ''
+                    }`}
+                  >
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: totalUnzoomedW,
+                        height: subCanopyBaseH,
+                        fontSize: `${baseTextFs}px`,
+                        transform: `scale(${gridZoom})`,
+                        transformOrigin: 'top left',
+                      }}
+                      className="px-2 flex items-center justify-between gap-1 text-[0.82em] font-bold text-slate-900 overflow-hidden"
+                    >
+                      <span className="inline-flex items-center gap-1 min-w-0 truncate">
+                        <LayoutGrid style={baseSmallIconStyle} className="text-purple-700 shrink-0" />
+                        <span className="truncate">{col.title}</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleColumnRubricExpanded(col.id);
+                        }}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        title="Plegar subcolumnas de criterios"
+                        aria-label={`Plegar criterios de ${col.title}`}
+                        className="px-1.5 py-0.5 rounded bg-white/80 hover:bg-purple-600 hover:text-white border border-purple-300/80 text-purple-800 text-[0.74em] font-bold inline-flex items-center gap-0.5 shrink-0"
+                      >
+                        <ChevronsLeft className="w-3 h-3" aria-hidden="true" />
+                        <span>Plegar</span>
+                      </button>
+                    </div>
+                  </th>
+                );
+              }
+
+              const isStandaloneExpandedRubric =
+                !slot.isChild && slot.col.type === 'RUBRIC' && Boolean(slot.col.rubricExpanded);
+              return renderColumnHeaderCell(
+                slot.col,
+                false,
+                isStandaloneExpandedRubric,
+                hasExpandedChildRubric ? 2 : undefined
+              );
+            })}
+          </tr>
+
+          {/* Row 3 (only when a rubric INSIDE a folder is expanded): overall rubric cell + criterion subcolumns */}
+          {hasExpandedChildRubric && (
+            <tr>
+              {row2Slots.map((slot) => {
+                if (slot.kind === 'FOLDER_SUMMARY') return null;
+                if (slot.kind === 'COL') {
+                  if (!slot.isChild || !slot.col.rubricExpanded) return null;
+                  const r = resolveColumnRubric(slot.col);
+                  if (!r || r.criteria.length === 0) return null;
+                  const subBodyBaseH = Math.max(36, baseHeaderH - subCanopyBaseH);
+                  const subBodyH = headerH - subCanopyH;
+                  return renderColumnHeaderCell(
+                    slot.col,
+                    false,
+                    true,
+                    1,
+                    subBodyH,
+                    subBodyBaseH
+                  );
+                }
+                if (!slot.isChild) return null;
+                const { col, rubric, criterion, criterionIndex, key, width } = slot;
+                const subBodyBaseH = Math.max(36, baseHeaderH - subCanopyBaseH);
+                const subBodyH = headerH - subCanopyH;
+                const critUnzoomedH = subBodyBaseH + (showLomloeBar ? baseLomloeRowH : 0);
+                const critH = subBodyH + (showLomloeBar ? lomloeRowH : 0);
+                const isCritColSelected =
+                  selectedColumnTarget?.kind === 'COL' && selectedColumnTarget.col.id === col.id;
+                return (
+                  <th
+                    key={`r3-${key}`}
                     rowSpan={showLomloeBar ? 2 : undefined}
                     data-rubric-crit-header={key}
                     onClick={(e) => {
@@ -4220,7 +4435,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         top: 0,
                         left: 0,
                         width,
-                        height: unzoomedCritH,
+                        height: critUnzoomedH,
                         fontSize: `${baseTextFs}px`,
                         transform: `scale(${gridZoom})`,
                         transformOrigin: 'top left',
@@ -4238,15 +4453,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     </div>
                   </th>
                 );
-              }
-
-              return renderColumnHeaderCell(
-                slot.col,
-                false,
-                !slot.isChild && slot.col.type === 'RUBRIC' && Boolean(slot.col.rubricExpanded)
-              );
-            })}
-          </tr>
+              })}
+            </tr>
+          )}
 
           {/* Row 3: iDoceo-style LOMLOE Criteria Codes, Specific Competence Numbers & Key Competence Badges */}
           {showLomloeBar && activeCurriculum && (

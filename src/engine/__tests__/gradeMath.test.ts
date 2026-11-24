@@ -369,17 +369,17 @@ describe('Weighted Averages, Cross-Tab Chaining, Rubrics & Folders', () => {
     book.groupByGroups = true;
 
     const effective = getEffectiveBookGroups(book);
-    expect(effective.map((g) => g.name)).toEqual(['Equipo Rojo', 'Equipo Azul', 'Refuerzo']);
+    expect(effective.map((g) => g.name)).toEqual(['Equipo Azul', 'Equipo Rojo', 'Refuerzo']);
 
     const organized = organizeStudentsForGrid(book, book.tabs[0], '');
     expect(organized.groups.map((g) => g.name)).toEqual([
-      'Equipo Rojo',
       'Equipo Azul',
+      'Equipo Rojo',
       'Refuerzo',
       'Sin grupo',
     ]);
-    expect(organized.groups[0].students).toHaveLength(1);
-    expect(organized.groups[1].students).toHaveLength(2);
+    expect(organized.groups[0].students).toHaveLength(2);
+    expect(organized.groups[1].students).toHaveLength(1);
     expect(organized.visibleStudents).toHaveLength(book.students.length);
 
     // Collapsing Equipo Azul hides its 2 students from visibleStudents (keyboard nav skips them)

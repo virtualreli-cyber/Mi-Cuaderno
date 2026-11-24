@@ -1048,13 +1048,12 @@ export function getStudentActiveGroup(
 
 /**
  * Merges explicitly edited groups in the active category with any ad-hoc assigned group names
- * so every group assigned to a student is represented cleanly with a pastel color.
+ * so every group assigned to a student is represented cleanly with a pastel color,
+ * always ordered alphabetically (A–Z).
  */
 export function getEffectiveBookGroups(book: ClassBook): StudentGroupDef[] {
   const { activeCategory } = ensureGroupCategories(book);
-  const configured = [...(activeCategory.groups ?? [])].sort(
-    (a, b) => a.orderIndex - b.orderIndex
-  );
+  const configured = [...(activeCategory.groups ?? [])];
   const seen = new Set(configured.map((g) => g.name.trim().toLowerCase()));
   const extraNames: string[] = [];
 
@@ -1069,8 +1068,6 @@ export function getEffectiveBookGroups(book: ClassBook): StudentGroupDef[] {
     }
   }
 
-  extraNames.sort((a, b) => a.localeCompare(b, 'es'));
-
   const extras: StudentGroupDef[] = extraNames.map((name, i) => ({
     id: `grp-auto-${name}`,
     name,
@@ -1078,7 +1075,9 @@ export function getEffectiveBookGroups(book: ClassBook): StudentGroupDef[] {
     orderIndex: configured.length + i,
   }));
 
-  return [...configured, ...extras];
+  return [...configured, ...extras].sort((a, b) =>
+    a.name.trim().localeCompare(b.name.trim(), 'es', { numeric: true, sensitivity: 'base' })
+  );
 }
 
 /**
@@ -1154,7 +1153,9 @@ export function sortStudentList(
         const gb = getStudentActiveGroup(b, book) ?? '';
         if (ga && !gb) return -1;
         if (!ga && gb) return 1;
-        if (ga !== gb) return ga.localeCompare(gb, 'es');
+        if (ga !== gb) {
+          return ga.localeCompare(gb, 'es', { numeric: true, sensitivity: 'base' });
+        }
         return compareLastAsc(a, b);
       }
       case 'GRADE_DESC':
