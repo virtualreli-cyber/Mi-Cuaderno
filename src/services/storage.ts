@@ -193,6 +193,7 @@ function hydrateBook(
         editorMode: c.editorMode ?? undefined,
         counterStep: typeof c.counterStep === 'number' ? c.counterStep : undefined,
         rubricShowPercentage: Boolean(c.rubricShowPercentage),
+        rubricExpanded: c.rubricExpanded ? true : undefined,
         summaryRowOverrides: c.summaryRowOverrides ?? undefined,
         groupSummaryRowOverrides: c.groupSummaryRowOverrides ?? undefined,
         lomloeCriteriaIds: (() => {

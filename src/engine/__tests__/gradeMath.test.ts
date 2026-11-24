@@ -7,6 +7,7 @@ import {
   computeFolderFormulaValue,
   computeFolderSourceSignature,
   computeFolderSummary,
+  computeRubricCriterionResult,
   computeRubricPercentage,
   computeRubricScore,
   countEmptyGradesInColumns,
@@ -757,5 +758,33 @@ describe('Weighted Averages, Cross-Tab Chaining, Rubrics & Folders', () => {
       comment: 'Ajuste carpeta',
     });
     expect(countFolderOverridesAndNotices(afterFullRestore, folder.id).totalCount).toBe(0);
+  });
+
+  it('computes individual rubric criterion results and recalculates total rubric score when criteria change', () => {
+    const rubric = DEFAULT_RUBRICS[0];
+    const crit0 = rubric.criteria[0];
+    const crit1 = rubric.criteria[1];
+    const highest = [...rubric.levels].sort((a, b) => b.percentage - a.percentage)[0];
+    const lowest = [...rubric.levels].sort((a, b) => a.percentage - b.percentage)[0];
+
+    const evalData = {
+      rubricId: rubric.id,
+      selections: {
+        [crit0.id]: { levelId: highest.id },
+        [crit1.id]: { levelId: lowest.id },
+      },
+    };
+
+    const res0 = computeRubricCriterionResult(rubric, crit0.id, evalData);
+    const res1 = computeRubricCriterionResult(rubric, crit1.id, evalData);
+    expect(res0?.level.id).toBe(highest.id);
+    expect(res0?.percentage).toBe(highest.percentage);
+    expect(res1?.level.id).toBe(lowest.id);
+    expect(res1?.percentage).toBe(lowest.percentage);
+
+    const missingCrit = rubric.criteria[2];
+    if (missingCrit) {
+      expect(computeRubricCriterionResult(rubric, missingCrit.id, evalData)).toBeNull();
+    }
   });
 });

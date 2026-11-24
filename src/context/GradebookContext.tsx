@@ -315,6 +315,24 @@ interface GradebookContextValue {
     comment?: string,
     preserveManualOverride?: boolean
   ) => void;
+  toggleColumnRubricExpanded: (columnId: string) => void;
+  setRubricCriterionForStudents: (
+    studentIds: string[],
+    columnId: string,
+    rubricId: string,
+    criterionId: string,
+    levelId: string | null
+  ) => void;
+  setRubricEvalForStudents: (
+    studentIds: string[],
+    columnId: string,
+    rubricId: string,
+    selections: RubricCellEval['selections'],
+    options?: {
+      comment?: string;
+      touchedCriteriaIds?: string[];
+    }
+  ) => void;
   clearCell: (studentId: string, columnId: string) => void;
   clearMultipleCells: (targets: Array<{ studentId: string; columnId: string }>) => void;
   fillEmptyGradesWithNP: (columnIds: string[]) => {
@@ -3157,6 +3175,117 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [mutateActiveBook]
   );
 
+  const toggleColumnRubricExpanded = useCallback<
+    GradebookContextValue['toggleColumnRubricExpanded']
+  >(
+    (columnId) => {
+      mutateActiveBook((book) => {
+        return {
+          ...book,
+          tabs: book.tabs.map((t) => ({
+            ...t,
+            columns: t.columns.map((c) =>
+              c.id === columnId ? { ...c, rubricExpanded: !c.rubricExpanded } : c
+            ),
+          })),
+        };
+      }, false);
+    },
+    [mutateActiveBook]
+  );
+
+  const setRubricCriterionForStudents = useCallback<
+    GradebookContextValue['setRubricCriterionForStudents']
+  >(
+    (studentIds, columnId, rubricId, criterionId, levelId) => {
+      if (studentIds.length === 0) return;
+      mutateActiveBook(
+        (book, ws) => {
+          const nextCells = { ...book.cells };
+          for (const studentId of studentIds) {
+            const k = cellKey(studentId, columnId);
+            const prev = nextCells[k];
+            const prevSelections = prev?.rubricEval?.selections ?? {};
+            const nextSelections: RubricCellEval['selections'] = { ...prevSelections };
+            if (levelId) {
+              nextSelections[criterionId] = { levelId };
+            } else {
+              delete nextSelections[criterionId];
+            }
+            const cleanComment = prev?.comment ?? '';
+            const hasSelections = Object.keys(nextSelections).length > 0;
+            if (!hasSelections && !cleanComment) {
+              delete nextCells[k];
+            } else {
+              nextCells[k] = {
+                grade: null,
+                comment: cleanComment,
+                rubricEval: { rubricId, selections: nextSelections },
+              };
+            }
+          }
+          return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
+        },
+        true,
+        studentIds.length === 1 ? { studentId: studentIds[0], columnId } : null
+      );
+    },
+    [mutateActiveBook]
+  );
+
+  const setRubricEvalForStudents = useCallback<
+    GradebookContextValue['setRubricEvalForStudents']
+  >(
+    (studentIds, columnId, rubricId, selections, options) => {
+      if (studentIds.length === 0) return;
+      mutateActiveBook(
+        (book, ws) => {
+          const nextCells = { ...book.cells };
+          const touched = options?.touchedCriteriaIds;
+          const cleanBatchComment = options?.comment?.trim();
+
+          for (const studentId of studentIds) {
+            const k = cellKey(studentId, columnId);
+            const prev = nextCells[k];
+            let nextSelections: RubricCellEval['selections'];
+            if (touched) {
+              nextSelections = { ...(prev?.rubricEval?.selections ?? {}) };
+              for (const critId of touched) {
+                if (selections[critId]?.levelId) {
+                  nextSelections[critId] = { ...selections[critId] };
+                } else {
+                  delete nextSelections[critId];
+                }
+              }
+            } else {
+              nextSelections = structuredClone(selections);
+            }
+
+            const cleanComment =
+              cleanBatchComment !== undefined && cleanBatchComment.length > 0
+                ? cleanBatchComment
+                : (prev?.comment ?? '');
+            const hasSelections = Object.keys(nextSelections).length > 0;
+
+            if (!hasSelections && !cleanComment) {
+              delete nextCells[k];
+            } else {
+              nextCells[k] = {
+                grade: null,
+                comment: cleanComment,
+                rubricEval: { rubricId, selections: nextSelections },
+              };
+            }
+          }
+          return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
+        },
+        true,
+        studentIds.length === 1 ? { studentId: studentIds[0], columnId } : null
+      );
+    },
+    [mutateActiveBook]
+  );
+
   const clearCell = useCallback<GradebookContextValue['clearCell']>(
     (studentId, rawColumnId) => {
       const columnId = normalizeCellTargetId(rawColumnId);
@@ -3876,6 +4005,9 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setMultipleCellsData,
     applyCellsBatch,
     setCellRubricEval,
+    toggleColumnRubricExpanded,
+    setRubricCriterionForStudents,
+    setRubricEvalForStudents,
     clearCell,
     clearMultipleCells,
     fillEmptyGradesWithNP,

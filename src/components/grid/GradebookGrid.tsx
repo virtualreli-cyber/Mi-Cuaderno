@@ -20,6 +20,8 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronsDown,
+  ChevronsLeft,
+  ChevronsRight,
   Copy,
   Eraser,
   FileX2,
@@ -57,6 +59,7 @@ import {
   computeColumnSummaryMetric,
   computeFolderFormulaValue,
   computeFolderSummary,
+  computeRubricCriterionResult,
   countEmptyGradesInColumns,
   countFolderOverridesAndNotices,
   ensureGroupCategories,
@@ -65,6 +68,7 @@ import {
   formatGrade,
   getEffectiveBookGroups,
   getStudentActiveGroup,
+  normalizeRubricLevels,
   organizeStudentsForGrid,
   parseLiveMixedInput,
   parseMixedInput,
@@ -87,6 +91,8 @@ import {
   type ColumnEntity,
   type ColumnSummaryMetric,
   type FolderEntity,
+  type RubricCriterion,
+  type RubricEntity,
   type StudentEntity,
 } from '../../types/gradebook';
 import {
@@ -108,15 +114,32 @@ interface GradebookGridProps {
   onNewColumn: (presetType?: 'NUMERIC' | 'AVERAGE' | 'RUBRIC', folderId?: string | null) => void;
   onEditFolder: (tabId: string, folder: FolderEntity) => void;
   onOpenCellModal: (student: StudentEntity, col: ColumnEntity) => void;
-  onOpenRubricGrader: (student: StudentEntity, col: ColumnEntity) => void;
+  onOpenRubricGrader: (
+    student: StudentEntity | null,
+    col: ColumnEntity,
+    groupBatch?: { groupName: string; studentIds: string[] } | null
+  ) => void;
   onOpenLomloeManager?: () => void;
 }
+
+const RUBRIC_CRIT_SEP = '::crit::';
 
 type DisplaySlot =
   | {
       kind: 'COL';
       key: string;
       col: ColumnEntity;
+      width: number;
+      isChild: boolean;
+      parentFolder?: FolderEntity;
+    }
+  | {
+      kind: 'RUBRIC_CRITERION';
+      key: string;
+      col: ColumnEntity;
+      rubric: RubricEntity;
+      criterion: RubricCriterion;
+      criterionIndex: number;
       width: number;
       isChild: boolean;
       parentFolder?: FolderEntity;
@@ -132,8 +155,25 @@ type DisplaySlot =
 
 type Row1HeaderItem =
   | { kind: 'COL'; col: ColumnEntity }
+  | {
+      kind: 'RUBRIC_EXPANDED';
+      col: ColumnEntity;
+      rubric: RubricEntity;
+      criteria: RubricCriterion[];
+      critWidth: number;
+    }
   | { kind: 'FOLDER_CLOSED'; folder: FolderEntity; childCols: ColumnEntity[] }
-  | { kind: 'FOLDER_OPEN'; folder: FolderEntity; childCols: ColumnEntity[] };
+  | {
+      kind: 'FOLDER_OPEN';
+      folder: FolderEntity;
+      childCols: ColumnEntity[];
+      childColSpan: number;
+      childWidthSum: number;
+    };
+
+function getDisplaySlotId(slot: DisplaySlot): string {
+  return slot.kind === 'COL' ? slot.col.id : slot.key;
+}
 
 type SelectedColumnTarget =
   | { kind: 'COL'; col: ColumnEntity }
@@ -234,6 +274,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setCellData,
     setMultipleCellsData,
     applyCellsBatch,
+    setRubricCriterionForStudents,
+    toggleColumnRubricExpanded,
     clearCell,
     clearMultipleCells,
     fillEmptyGradesWithNP,
@@ -319,7 +361,25 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     studentIds: string[];
     slot:
       | { kind: 'COL'; col: ColumnEntity }
-      | { kind: 'FOLDER'; folder: FolderEntity; childCols: ColumnEntity[] };
+      | { kind: 'FOLDER'; folder: FolderEntity; childCols: ColumnEntity[] }
+      | {
+          kind: 'RUBRIC_CRITERION';
+          col: ColumnEntity;
+          rubric: RubricEntity;
+          criterion: RubricCriterion;
+          criterionIndex: number;
+        };
+    top: number;
+    left: number;
+  } | null>(null);
+  const [criterionPicker, setCriterionPicker] = useState<{
+    studentIds: string[];
+    studentLabel: string;
+    col: ColumnEntity;
+    rubric: RubricEntity;
+    criterion: RubricCriterion;
+    criterionIndex: number;
+    currentLevelId: string | null;
     top: number;
     left: number;
   } | null>(null);
@@ -637,6 +697,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       setAddGroupSummaryMenu(null);
       setSummaryCellPicker(null);
       setGroupColAction(null);
+      setCriterionPicker(null);
       setSelectedGroupColCell(null);
       setSelectedSummaryCell(null);
       setLomloePicker(null);
@@ -666,6 +727,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setSelectedSummaryCell(null);
     setInlineEdit(null);
     setInlineEditRect(null);
+    setCriterionPicker(null);
     setLomloePicker(null);
     setEducamosMenu(null);
   }, [activeBook?.id, activeTab?.id]);
@@ -794,6 +856,26 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       };
     }, [activeBook, activeTab, searchQuery]);
 
+  const normalizedRubricById = useMemo(() => {
+    const map = new Map<string, RubricEntity>();
+    for (const r of workspace.rubrics) {
+      map.set(r.id, { ...r, levels: normalizeRubricLevels(r.levels) });
+    }
+    return map;
+  }, [workspace.rubrics]);
+
+  const resolveColumnRubric = useCallback(
+    (col: ColumnEntity): RubricEntity | null => {
+      if (col.type !== 'RUBRIC') return null;
+      return (
+        (col.rubricId ? normalizedRubricById.get(col.rubricId) : undefined) ??
+        normalizedRubricById.values().next().value ??
+        null
+      );
+    },
+    [normalizedRubricById]
+  );
+
   // Build iDoceo-style continuous horizontal slots + Row 1/Row 2 header topology
   const { visibleColumns, displaySlots, row1Headers, row2Slots } = useMemo(() => {
     if (!activeTab) {
@@ -810,18 +892,62 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     const slots: DisplaySlot[] = [];
     const r1: Row1HeaderItem[] = [];
     const r2: DisplaySlot[] = [];
+    const getCritWidth = (col: ColumnEntity) =>
+      Math.max(76, Math.min(112, Math.round(col.width * 0.82)));
+
+    const buildExpandedCriterionSlots = (
+      col: ColumnEntity,
+      rubric: RubricEntity,
+      isChild: boolean,
+      parentFolder?: FolderEntity
+    ): DisplaySlot[] => {
+      const cw = getCritWidth(col);
+      return rubric.criteria.map((criterion, criterionIndex) => ({
+        kind: 'RUBRIC_CRITERION' as const,
+        key: `${col.id}${RUBRIC_CRIT_SEP}${criterion.id}`,
+        col,
+        rubric,
+        criterion,
+        criterionIndex,
+        width: cw,
+        isChild,
+        parentFolder,
+      }));
+    };
 
     for (const item of topItems) {
       if (item.kind === 'COL') {
         visCols.push(item.col);
-        slots.push({
-          kind: 'COL',
-          key: item.col.id,
-          col: item.col,
-          width: item.col.width,
-          isChild: false,
-        });
-        r1.push({ kind: 'COL', col: item.col });
+        const rubric = item.col.rubricExpanded ? resolveColumnRubric(item.col) : null;
+        if (rubric && rubric.criteria.length > 0) {
+          const critWidth = getCritWidth(item.col);
+          const colSlot: DisplaySlot = {
+            kind: 'COL',
+            key: item.col.id,
+            col: item.col,
+            width: item.col.width,
+            isChild: false,
+          };
+          const critSlots = buildExpandedCriterionSlots(item.col, rubric, false);
+          r1.push({
+            kind: 'RUBRIC_EXPANDED',
+            col: item.col,
+            rubric,
+            criteria: rubric.criteria,
+            critWidth,
+          });
+          slots.push(colSlot, ...critSlots);
+          r2.push(colSlot, ...critSlots);
+        } else {
+          slots.push({
+            kind: 'COL',
+            key: item.col.id,
+            col: item.col,
+            width: item.col.width,
+            isChild: false,
+          });
+          r1.push({ kind: 'COL', col: item.col });
+        }
         continue;
       }
 
@@ -851,9 +977,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           isOpen: true,
         };
         slots.push(sumSlot);
-        r1.push({ kind: 'FOLDER_OPEN', folder, childCols });
         r2.push(sumSlot);
 
+        let childColSpan = 0;
+        let childWidthSum = 0;
         for (const c of childCols) {
           visCols.push(c);
           const cSlot: DisplaySlot = {
@@ -866,12 +993,30 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           };
           slots.push(cSlot);
           r2.push(cSlot);
+          childColSpan += 1;
+          childWidthSum += c.width;
+
+          const childRubric = c.rubricExpanded ? resolveColumnRubric(c) : null;
+          if (childRubric && childRubric.criteria.length > 0) {
+            const critSlots = buildExpandedCriterionSlots(c, childRubric, true, folder);
+            slots.push(...critSlots);
+            r2.push(...critSlots);
+            childColSpan += critSlots.length;
+            childWidthSum += critSlots.reduce((acc, s) => acc + s.width, 0);
+          }
         }
+        r1.push({
+          kind: 'FOLDER_OPEN',
+          folder,
+          childCols,
+          childColSpan,
+          childWidthSum,
+        });
       }
     }
 
     return { visibleColumns: visCols, displaySlots: slots, row1Headers: r1, row2Slots: r2 };
-  }, [activeTab]);
+  }, [activeTab, resolveColumnRubric]);
 
   // Helper to resolve drag payload safely from state or dataTransfer
   const readDragPayload = (e: React.DragEvent): DragItemPayload | null => {
@@ -1095,7 +1240,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   );
 
   const slotIdsInOrder = useMemo(
-    () => displaySlots.map((s) => (s.kind === 'FOLDER_SUMMARY' ? s.key : s.col.id)),
+    () => displaySlots.map(getDisplaySlotId),
     [displaySlots]
   );
 
@@ -1371,6 +1516,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             );
             return val !== null ? formatGrade(val, 2) : '';
           }
+          if (slot.kind === 'RUBRIC_CRITERION') {
+            const evalData = activeBook.cells[cellKey(selectedStudentRowId, slot.col.id)]?.rubricEval;
+            const critRes = computeRubricCriterionResult(slot.rubric, slot.criterion.id, evalData);
+            return critRes ? formatCellCopyValue(critRes.grade, slot.col) : '';
+          }
           const cell = activeBook.cells[cellKey(selectedStudentRowId, slot.col.id)];
           const gradeStr = formatCellCopyValue(cell?.grade ?? null, slot.col);
           return gradeStr || cell?.comment || '';
@@ -1389,7 +1539,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     const rowIndexMap = new Map(visibleStudents.map((s, idx) => [s.id, idx]));
     const slotMap = new Map<string, { idx: number; slot: DisplaySlot }>();
     displaySlots.forEach((slot, idx) => {
-      slotMap.set(slot.kind === 'FOLDER_SUMMARY' ? slot.key : slot.col.id, { idx, slot });
+      slotMap.set(getDisplaySlotId(slot), { idx, slot });
     });
 
     const rowMap = new Map<number, Map<number, string>>();
@@ -1414,6 +1564,14 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           activeBook
         );
         textVal = val !== null ? formatGrade(val, 2) : '';
+      } else if (slotEntry.slot.kind === 'RUBRIC_CRITERION') {
+        const evalData = activeBook.cells[cellKey(studentId, slotEntry.slot.col.id)]?.rubricEval;
+        const critRes = computeRubricCriterionResult(
+          slotEntry.slot.rubric,
+          slotEntry.slot.criterion.id,
+          evalData
+        );
+        textVal = critRes ? formatCellCopyValue(critRes.grade, slotEntry.slot.col) : '';
       } else {
         const cell = activeBook.cells[cellKey(studentId, slotEntry.slot.col.id)];
         const gradeStr = formatCellCopyValue(cell?.grade ?? null, slotEntry.slot.col);
@@ -1989,9 +2147,82 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         } else if (e.shiftKey) {
           moveSelection(studentId, columnId, 'DOWN', true);
         } else {
+          const critSlot = displaySlots.find(
+            (s): s is Extract<DisplaySlot, { kind: 'RUBRIC_CRITERION' }> =>
+              s.kind === 'RUBRIC_CRITERION' && s.key === columnId
+          );
+          if (critSlot) {
+            const cellNode = getCellNode(studentId, columnId);
+            const rect = cellNode?.getBoundingClientRect();
+            const matchingStudentIds = Array.from(selectedKeys)
+              .filter((k) => k.endsWith(`::${columnId}`))
+              .map((k) => k.slice(0, k.indexOf('::')));
+            const studentIdsForPicker =
+              matchingStudentIds.length > 1 ? matchingStudentIds : [studentId];
+            const stObj = visibleStudents.find((s) => s.id === studentId);
+            const curLevelId =
+              activeBook?.cells[cellKey(studentId, critSlot.col.id)]?.rubricEval?.selections?.[
+                critSlot.criterion.id
+              ]?.levelId ?? null;
+            setCriterionPicker({
+              studentIds: studentIdsForPicker,
+              studentLabel:
+                studentIdsForPicker.length > 1
+                  ? `${studentIdsForPicker.length} alumnos seleccionados`
+                  : stObj
+                    ? `${stObj.lastName}, ${stObj.firstName}`
+                    : 'Alumno',
+              col: critSlot.col,
+              rubric: critSlot.rubric,
+              criterion: critSlot.criterion,
+              criterionIndex: critSlot.criterionIndex,
+              currentLevelId: studentIdsForPicker.length === 1 ? curLevelId : null,
+              top: rect
+                ? Math.max(12, Math.min(window.innerHeight - 360, rect.bottom + 6))
+                : 160,
+              left: rect
+                ? Math.max(12, Math.min(window.innerWidth - 310, rect.left))
+                : 200,
+            });
+            return;
+          }
           startInlineEditForCell(studentId, columnId, null, false);
         }
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        const selectedCritKeys = (
+          selectedKeys.size > 0
+            ? Array.from(selectedKeys)
+            : [cellKey(studentId, columnId)]
+        ).filter((k) => k.includes(RUBRIC_CRIT_SEP));
+        if (selectedCritKeys.length > 0 && !activeTab?.isLocked) {
+          e.preventDefault();
+          const bySlot = new Map<string, string[]>();
+          for (const k of selectedCritKeys) {
+            const sep = k.indexOf('::');
+            if (sep < 0) continue;
+            const sid = k.slice(0, sep);
+            const slotId = k.slice(sep + 2);
+            const arr = bySlot.get(slotId) ?? [];
+            arr.push(sid);
+            bySlot.set(slotId, arr);
+          }
+          for (const [slotId, sids] of bySlot.entries()) {
+            const slot = displaySlots.find(
+              (s): s is Extract<DisplaySlot, { kind: 'RUBRIC_CRITERION' }> =>
+                s.kind === 'RUBRIC_CRITERION' && s.key === slotId
+            );
+            if (slot && !slot.col.isLocked) {
+              setRubricCriterionForStudents(
+                sids,
+                slot.col.id,
+                slot.rubric.id,
+                slot.criterion.id,
+                null
+              );
+            }
+          }
+          return;
+        }
         if (clearableTargets.length > 1) {
           e.preventDefault();
           clearMultipleCells(clearableTargets);
@@ -2009,6 +2240,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         e.preventDefault();
         setLomloePicker(null);
         setEducamosMenu(null);
+        setCriterionPicker(null);
         setSummaryCellPicker(null);
         setSelectedSummaryCell(null);
         setQuickCounterColumnId(null);
@@ -2468,29 +2700,37 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   const totalActiveStudents = activeBook.students.filter((s) => !s.isHidden).length;
   const isSlotColumnSelected = (slot: DisplaySlot) =>
     (selectedColumnTarget?.kind === 'COL' &&
-      slot.kind === 'COL' &&
+      (slot.kind === 'COL' || slot.kind === 'RUBRIC_CRITERION') &&
       selectedColumnTarget.col.id === slot.col.id) ||
     (selectedColumnTarget?.kind === 'FOLDER' &&
       slot.kind === 'FOLDER_SUMMARY' &&
       selectedColumnTarget.folder.id === slot.folder.id);
 
-  // Shared renderer for standalone columns (rowSpan=2 in Row 1) and child columns (in Row 2)
-  const renderColumnHeaderCell = (col: ColumnEntity, isStandalone: boolean) => {
+  // Shared renderer for standalone columns (rowSpan=2 in Row 1) and child / expanded-rubric columns (in Row 2)
+  const renderColumnHeaderCell = (
+    col: ColumnEntity,
+    isStandalone: boolean,
+    inExpandedRubricRow2 = false
+  ) => {
     const hint = dropHint?.key === col.id ? dropHint.mode : null;
     const isDraggingThis = dragItem?.kind === 'COL' && dragItem.id === col.id;
     const isColSelected =
       selectedColumnTarget?.kind === 'COL' && selectedColumnTarget.col.id === col.id;
     const isVertical = shouldRenderVerticalHeader(col.title, col.width, col.headerOrientation);
-    const cellHeight = isStandalone ? canopyH + headerH : headerH;
-    const unzoomedCellH = isStandalone ? baseCanopyH + baseHeaderH : baseHeaderH;
+    const hasTopCanopy = isStandalone && !inExpandedRubricRow2;
+    const cellHeight = hasTopCanopy ? canopyH + headerH : headerH;
+    const unzoomedCellH = hasTopCanopy ? baseCanopyH + baseHeaderH : baseHeaderH;
     const educamosSummary = getColumnEducamosSummary(col, activeBook.students, activeBook.cells);
     const isEducamosMenuOpen = educamosMenu?.colId === col.id;
+    const colRubric = resolveColumnRubric(col);
+    const canExpandRubric = Boolean(colRubric && colRubric.criteria.length > 0);
+    const isRubricExpanded = canExpandRubric && Boolean(col.rubricExpanded);
 
     return (
       <th
         key={col.id}
         data-col-header={col.id}
-        rowSpan={isStandalone ? 2 : undefined}
+        rowSpan={hasTopCanopy ? 2 : undefined}
         draggable={!activeTab.isLocked && !device.isTouch}
         onPointerDown={(e) => {
           longPress.start(e, () => {
@@ -2687,8 +2927,45 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               {col.type === 'AVERAGE' && (
                 <Calculator style={baseSmallIconStyle} className="text-amber-700 shrink-0" />
               )}
-              {col.type === 'RUBRIC' && (
+              {col.type === 'RUBRIC' && !canExpandRubric && (
                 <LayoutGrid style={baseSmallIconStyle} className="text-purple-700 shrink-0" />
+              )}
+              {col.type === 'RUBRIC' && canExpandRubric && colRubric && (
+                <button
+                  type="button"
+                  data-rubric-expand-btn={col.id}
+                  aria-expanded={isRubricExpanded}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleColumnRubricExpanded(col.id);
+                  }}
+                  title={
+                    isRubricExpanded
+                      ? `Plegar subcolumnas de criterios (${colRubric.criteria.length})`
+                      : `Abrir rúbrica en ${colRubric.criteria.length} subcolumnas de criterios`
+                  }
+                  aria-label={
+                    isRubricExpanded
+                      ? `Plegar criterios de ${col.title}`
+                      : `Abrir criterios de ${col.title}`
+                  }
+                  className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded border text-[9px] font-bold leading-none shadow-2xs transition-colors shrink-0 ${
+                    isRubricExpanded
+                      ? 'bg-purple-600 border-purple-700 text-white hover:bg-purple-700'
+                      : 'bg-white/90 border-purple-300 text-purple-800 hover:bg-purple-600 hover:text-white'
+                  }`}
+                >
+                  <LayoutGrid className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                  <span>{colRubric.criteria.length}</span>
+                  {isRubricExpanded ? (
+                    <ChevronsLeft className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                  ) : (
+                    <ChevronsRight className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                  )}
+                </button>
               )}
             </div>
           </div>
@@ -3155,7 +3432,83 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 return renderColumnHeaderCell(item.col, true);
               }
 
-              // Both FOLDER_CLOSED (colSpan=1) and FOLDER_OPEN (colSpan=1+childCols.length) render the top Row 1 canopy!
+              if (item.kind === 'RUBRIC_EXPANDED') {
+                const { col, rubric, criteria, critWidth } = item;
+                const totalUnzoomedW = col.width + criteria.length * critWidth;
+                const isColSelected =
+                  selectedColumnTarget?.kind === 'COL' && selectedColumnTarget.col.id === col.id;
+
+                return (
+                  <th
+                    key={`rubric-canopy-${col.id}`}
+                    colSpan={1 + criteria.length}
+                    onClick={(e) => {
+                      if (justResizedRef.current) return;
+                      e.stopPropagation();
+                      selectEntireColumn(col);
+                    }}
+                    onDoubleClick={(e) => {
+                      if (justResizedRef.current) return;
+                      e.stopPropagation();
+                      toggleColumnRubricExpanded(col.id);
+                    }}
+                    onContextMenu={(e) => {
+                      if (justResizedRef.current) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      selectEntireColumn(col);
+                      onEditColumn(col);
+                    }}
+                    style={{
+                      height: canopyH,
+                      maxHeight: canopyH,
+                      backgroundColor: col.color,
+                    }}
+                    title={`${col.title} (${rubric.title}) — Doble clic aquí para plegar subcolumnas de criterios`}
+                    className={`border-r border-b-0 border-slate-300 p-0 text-center cursor-pointer hover:brightness-97 transition-[background-color,border-color,color,filter,opacity,box-shadow] relative overflow-hidden ${
+                      isColSelected ? 'col-header-selected' : ''
+                    }`}
+                  >
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: totalUnzoomedW,
+                        height: baseCanopyH,
+                        fontSize: `${baseTextFs}px`,
+                        transform: `scale(${gridZoom})`,
+                        transformOrigin: 'top left',
+                      }}
+                      className="px-2 flex items-center justify-between gap-1 text-[0.84em] font-bold text-slate-900 overflow-hidden"
+                    >
+                      <span className="inline-flex items-center gap-1 min-w-0 truncate">
+                        <LayoutGrid style={baseSmallIconStyle} className="text-purple-700 shrink-0" />
+                        <span className="truncate">{col.title}</span>
+                        <span className="text-[0.82em] font-semibold text-purple-900/75 truncate">
+                          · {rubric.title}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleColumnRubricExpanded(col.id);
+                        }}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        title="Plegar subcolumnas de criterios"
+                        aria-label={`Plegar criterios de ${col.title}`}
+                        className="px-1.5 py-0.5 rounded bg-white/80 hover:bg-purple-600 hover:text-white border border-purple-300/80 text-purple-800 text-[0.76em] font-bold inline-flex items-center gap-0.5 shrink-0"
+                      >
+                        <ChevronsLeft className="w-3 h-3" aria-hidden="true" />
+                        <span>Plegar</span>
+                      </button>
+                    </div>
+                  </th>
+                );
+              }
+
+              // Both FOLDER_CLOSED (colSpan=1) and FOLDER_OPEN (colSpan=1+childColSpan) render the top Row 1 canopy!
               // Double-click on this top bar folds/unfolds the folder; clicking ⋮ edits the folder.
               const { folder, childCols } = item;
               const isClosed = item.kind === 'FOLDER_CLOSED';
@@ -3166,13 +3519,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 selectedColumnTarget?.kind === 'FOLDER' &&
                 selectedColumnTarget.folder.id === folder.id;
               const unzoomedCanopyW =
-                (folder.width ?? 68) +
-                (isClosed ? 0 : childCols.reduce((sum, c) => sum + c.width, 0));
+                (folder.width ?? 68) + (item.kind === 'FOLDER_OPEN' ? item.childWidthSum : 0);
 
               return (
                 <th
                   key={fldKey}
-                  colSpan={isClosed ? 1 : 1 + childCols.length}
+                  colSpan={item.kind === 'FOLDER_OPEN' ? 1 + item.childColSpan : 1}
                   draggable={!activeTab.isLocked && !device.isTouch}
                   onPointerDown={(e) => {
                     longPress.start(e, () => {
@@ -3667,7 +4019,66 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 );
               }
 
-              return renderColumnHeaderCell(slot.col, false);
+              if (slot.kind === 'RUBRIC_CRITERION') {
+                const { col, rubric, criterion, criterionIndex, key, width } = slot;
+                const unzoomedCritH = baseHeaderH + (showLomloeBar ? baseLomloeRowH : 0);
+                const critH = headerH + (showLomloeBar ? lomloeRowH : 0);
+                const isCritColSelected =
+                  selectedColumnTarget?.kind === 'COL' && selectedColumnTarget.col.id === col.id;
+                return (
+                  <th
+                    key={key}
+                    rowSpan={showLomloeBar ? 2 : undefined}
+                    data-rubric-crit-header={key}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      selectEntireColumn(col);
+                    }}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      onEditColumn(col);
+                    }}
+                    style={{
+                      height: critH,
+                      maxHeight: critH,
+                      backgroundColor: blendWithWhite(col.color, 0.34),
+                    }}
+                    title={`Criterio ${criterionIndex + 1}: ${criterion.title} (Peso: ${criterion.weight}%) · Rúbrica: ${rubric.title}`}
+                    className={`border-r border-b border-t border-t-slate-300/80 border-slate-300 p-0 relative cursor-pointer align-middle transition-[background-color,border-color,color,filter,opacity,box-shadow] hover:brightness-97 overflow-hidden ${
+                      isCritColSelected ? 'col-header-selected' : ''
+                    }`}
+                  >
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width,
+                        height: unzoomedCritH,
+                        fontSize: `${baseTextFs}px`,
+                        transform: `scale(${gridZoom})`,
+                        transformOrigin: 'top left',
+                      }}
+                      className="px-1 py-1 flex flex-col items-center justify-between gap-0.5 overflow-hidden"
+                    >
+                      <span className="px-1 py-0 rounded bg-purple-100/90 border border-purple-200 text-[0.68em] font-extrabold text-purple-900 leading-tight shrink-0">
+                        C{criterionIndex + 1} · {criterion.weight}%
+                      </span>
+                      <div className="flex-1 flex items-center justify-center w-full min-h-0 overflow-hidden px-0.5">
+                        <span className="text-[0.8em] font-semibold text-slate-800 leading-tight text-center line-clamp-3 break-words">
+                          {criterion.title}
+                        </span>
+                      </div>
+                    </div>
+                  </th>
+                );
+              }
+
+              return renderColumnHeaderCell(
+                slot.col,
+                false,
+                !slot.isChild && slot.col.type === 'RUBRIC' && Boolean(slot.col.rubricExpanded)
+              );
             })}
           </tr>
 
@@ -3675,8 +4086,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           {showLomloeBar && activeCurriculum && (
             <tr data-lomloe-row="true">
               {displaySlots.map((slot) => {
-                if (slot.kind === 'FOLDER_SUMMARY') {
-                  // Covered seamlessly by FOLDER_SUMMARY rowSpan={2}
+                if (slot.kind === 'FOLDER_SUMMARY' || slot.kind === 'RUBRIC_CRITERION') {
+                  // Covered seamlessly by FOLDER_SUMMARY / RUBRIC_CRITERION rowSpan={2}
                   return null;
                 }
                 const { col } = slot;
@@ -3892,9 +4303,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     {/* iDoceo-style per-column Group Action Cells above each group */}
                     {displaySlots.map((slot) => {
                       const isFolder = slot.kind === 'FOLDER_SUMMARY';
+                      const isCritSlot = slot.kind === 'RUBRIC_CRITERION';
                       const cellBg = isFolder
                         ? blendWithWhite(slot.folder.color, 0.36)
-                        : blendWithWhite(bucket.color, 0.66);
+                        : isCritSlot
+                          ? blendWithWhite(bucket.color, 0.56)
+                          : blendWithWhite(bucket.color, 0.66);
                       const isActivePopover =
                         groupColAction?.bucketKey === bucket.key &&
                         ((groupColAction.slot.kind === 'COL' &&
@@ -3902,11 +4316,38 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           groupColAction.slot.col.id === slot.col.id) ||
                           (groupColAction.slot.kind === 'FOLDER' &&
                             slot.kind === 'FOLDER_SUMMARY' &&
-                            groupColAction.slot.folder.id === slot.folder.id));
+                            groupColAction.slot.folder.id === slot.folder.id) ||
+                          (groupColAction.slot.kind === 'RUBRIC_CRITERION' &&
+                            slot.kind === 'RUBRIC_CRITERION' &&
+                            groupColAction.slot.col.id === slot.col.id &&
+                            groupColAction.slot.criterion.id === slot.criterion.id));
 
                       const isSelectedGroupCol =
                         selectedGroupColCell?.bucketKey === bucket.key &&
                         selectedGroupColCell?.slotKey === slot.key;
+
+                      const buildGroupActionPayload = (rect: DOMRect) => ({
+                        bucketKey: bucket.key,
+                        bucketName: bucket.name,
+                        studentIds: groupStudentIds,
+                        slot: isFolder
+                          ? ({
+                              kind: 'FOLDER',
+                              folder: slot.folder,
+                              childCols: slot.childCols,
+                            } as const)
+                          : isCritSlot
+                            ? ({
+                                kind: 'RUBRIC_CRITERION',
+                                col: slot.col,
+                                rubric: slot.rubric,
+                                criterion: slot.criterion,
+                                criterionIndex: slot.criterionIndex,
+                              } as const)
+                            : ({ kind: 'COL', col: slot.col } as const),
+                        top: Math.max(12, Math.min(window.innerHeight - 400, rect.bottom + 6)),
+                        left: Math.max(12, Math.min(window.innerWidth - 320, rect.left - 80)),
+                      });
 
                       return (
                         <td
@@ -3918,6 +4359,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             e.stopPropagation();
                             setSummaryCellPicker(null);
                             setAddGroupSummaryMenu(null);
+                            setCriterionPicker(null);
                             setGroupColAction(null);
                             setSelectedGroupColCell({ bucketKey: bucket.key, slotKey: slot.key });
                           }}
@@ -3927,21 +4369,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             setGroupColGradeDraft('');
                             setSummaryCellPicker(null);
                             setAddGroupSummaryMenu(null);
+                            setCriterionPicker(null);
                             setSelectedGroupColCell({ bucketKey: bucket.key, slotKey: slot.key });
-                            setGroupColAction({
-                              bucketKey: bucket.key,
-                              bucketName: bucket.name,
-                              studentIds: groupStudentIds,
-                              slot: isFolder
-                                ? {
-                                    kind: 'FOLDER',
-                                    folder: slot.folder,
-                                    childCols: slot.childCols,
-                                  }
-                                : { kind: 'COL', col: slot.col },
-                              top: Math.max(12, Math.min(window.innerHeight - 360, rect.bottom + 6)),
-                              left: Math.max(12, Math.min(window.innerWidth - 300, rect.left - 80)),
-                            });
+                            setGroupColAction(buildGroupActionPayload(rect));
                           }}
                           onContextMenu={(e) => {
                             e.preventDefault();
@@ -3950,26 +4380,18 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             setGroupColGradeDraft('');
                             setSummaryCellPicker(null);
                             setAddGroupSummaryMenu(null);
+                            setCriterionPicker(null);
                             setSelectedGroupColCell({ bucketKey: bucket.key, slotKey: slot.key });
-                            setGroupColAction({
-                              bucketKey: bucket.key,
-                              bucketName: bucket.name,
-                              studentIds: groupStudentIds,
-                              slot: isFolder
-                                ? {
-                                    kind: 'FOLDER',
-                                    folder: slot.folder,
-                                    childCols: slot.childCols,
-                                  }
-                                : { kind: 'COL', col: slot.col },
-                              top: Math.max(12, Math.min(window.innerHeight - 360, rect.bottom + 6)),
-                              left: Math.max(12, Math.min(window.innerWidth - 300, rect.left - 80)),
-                            });
+                            setGroupColAction(buildGroupActionPayload(rect));
                           }}
                           title={
                             isFolder
                               ? `Grupo "${bucket.name}" · Doble clic: ver estadísticas en carpeta ${slot.folder.title}`
-                              : `Grupo "${bucket.name}" · Doble clic: modificar notas o ver estadísticas en ${slot.col.title}`
+                              : isCritSlot
+                                ? `Grupo "${bucket.name}" · Doble clic: evaluar criterio C${slot.criterionIndex + 1} (${slot.criterion.title}) en todo el grupo`
+                                : slot.col.type === 'RUBRIC'
+                                  ? `Grupo "${bucket.name}" · Doble clic: evaluar toda la rúbrica "${slot.col.title}" para este grupo`
+                                  : `Grupo "${bucket.name}" · Doble clic: modificar notas o ver estadísticas en ${slot.col.title}`
                           }
                           className={`border-r border-b border-t border-slate-300 text-center align-middle cursor-pointer hover:brightness-95 transition-[background-color,border-color,color,filter,opacity,box-shadow] ${
                             isActivePopover || isSelectedGroupCol
@@ -3982,6 +4404,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           <div className="flex items-center justify-center h-full text-slate-500/80 hover:text-blue-700">
                             {isFolder ? (
                               <Hexagon style={smallIconStyle} />
+                            ) : isCritSlot || slot.col.type === 'RUBRIC' ? (
+                              <LayoutGrid style={smallIconStyle} className="text-purple-700/80" />
                             ) : (
                               <ChevronsDown style={smallIconStyle} />
                             )}
@@ -4338,6 +4762,161 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                                 {fComment}
                               </span>
                             )}
+                          </div>
+                        </td>
+                      );
+                    }
+
+                    if (slot.kind === 'RUBRIC_CRITERION') {
+                      const { col, rubric, criterion, criterionIndex, key: critSlotKey } = slot;
+                      const critCellKey = cellKey(student.id, critSlotKey);
+                      const parentCell = activeBook.cells[cellKey(student.id, col.id)];
+                      const critRes = computeRubricCriterionResult(
+                        rubric,
+                        criterion.id,
+                        parentCell?.rubricEval
+                      );
+                      const isFocusedCritCell =
+                        selectedCoord?.studentId === student.id &&
+                        selectedCoord?.columnId === critSlotKey;
+                      const isCritInMulti = selectedKeys.has(critCellKey);
+                      const isCritColSelected = isSlotColumnSelected(slot);
+                      const showPct = Boolean(
+                        col.rubricShowPercentage || workspace.settings.showRubricsAsPercent
+                      );
+                      const critBg = critRes ? critRes.level.color : blendWithWhite(rowBg, 0.15);
+
+                      const openCritEditor = (rect: DOMRect) => {
+                        clearCellTooltip();
+                        const selectedInSameSlot = Array.from(selectedKeys)
+                          .filter((k) => k.endsWith(`::${critSlotKey}`))
+                          .map((k) => k.slice(0, k.indexOf('::')));
+                        const targetStudentIds =
+                          selectedInSameSlot.length > 1 && selectedKeys.has(critCellKey)
+                            ? selectedInSameSlot
+                            : [student.id];
+                        setGroupColAction(null);
+                        setSummaryCellPicker(null);
+                        setLomloePicker(null);
+                        setEducamosMenu(null);
+                        setCriterionPicker({
+                          studentIds: targetStudentIds,
+                          studentLabel:
+                            targetStudentIds.length > 1
+                              ? `${targetStudentIds.length} alumnos seleccionados`
+                              : `${student.lastName}, ${student.firstName}`,
+                          col,
+                          rubric,
+                          criterion,
+                          criterionIndex,
+                          currentLevelId:
+                            targetStudentIds.length === 1 ? (critRes?.level.id ?? null) : null,
+                          top: Math.max(12, Math.min(window.innerHeight - 360, rect.bottom + 6)),
+                          left: Math.max(12, Math.min(window.innerWidth - 310, rect.left)),
+                        });
+                      };
+
+                      return (
+                        <td
+                          key={`${student.id}-${critSlotKey}`}
+                          data-cell={critCellKey}
+                          aria-selected={isCritInMulti || isFocusedCritCell}
+                          tabIndex={isFocusedCritCell ? 0 : -1}
+                          style={{
+                            height: rowH,
+                            backgroundColor: critBg,
+                            color: '#0F172A',
+                          }}
+                          onMouseDown={(e) => {
+                            if (e.shiftKey || e.metaKey || e.ctrlKey) {
+                              e.preventDefault();
+                            }
+                          }}
+                          onPointerDown={(e) => {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            longPress.start(e, () => {
+                              selectSingleCell(student.id, critSlotKey);
+                              ensureCellVisible(student.id, critSlotKey, 'auto');
+                              openCritEditor(rect);
+                            });
+                          }}
+                          onPointerMove={longPress.move}
+                          onPointerUp={longPress.cancel}
+                          onPointerCancel={longPress.cancel}
+                          onClick={(e) => {
+                            if (longPress.wasJustTriggered()) return;
+                            clearCellTooltip();
+                            const clicked = { studentId: student.id, columnId: critSlotKey };
+                            const isMod = e.metaKey || e.ctrlKey;
+                            if (e.shiftKey) {
+                              const anchor = anchorCoord ?? selectedCoord ?? clicked;
+                              selectRangeToCell(anchor, clicked, isMod);
+                            } else if (isMod) {
+                              setSelectedStudentRowId(null);
+                              const next = new Set(selectedKeys);
+                              if (next.has(critCellKey)) next.delete(critCellKey);
+                              else next.add(critCellKey);
+                              setSelectedKeys(next);
+                              if (next.size === 0) {
+                                setSelectedCoord(null);
+                                setAnchorCoord(null);
+                              } else {
+                                setSelectedCoord(clicked);
+                                setAnchorCoord(clicked);
+                              }
+                            } else {
+                              selectSingleCell(student.id, critSlotKey);
+                              ensureCellVisible(student.id, critSlotKey, 'auto');
+                            }
+                          }}
+                          onDoubleClick={(e) => {
+                            if (e.shiftKey || e.metaKey || e.ctrlKey) return;
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            selectSingleCell(student.id, critSlotKey);
+                            ensureCellVisible(student.id, critSlotKey, 'auto');
+                            openCritEditor(rect);
+                          }}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            selectSingleCell(student.id, critSlotKey);
+                            ensureCellVisible(student.id, critSlotKey, 'auto');
+                            openCritEditor(rect);
+                          }}
+                          title={`${criterion.title} · ${
+                            critRes
+                              ? `${critRes.level.title} (${critRes.percentage}%)`
+                              : 'Sin evaluar · Doble clic o Enter para valorar este criterio'
+                          }`}
+                          className={`border-r border-b border-slate-200 px-1 py-0.5 text-center align-middle relative cursor-pointer overflow-hidden ${
+                            isFocusedCritCell
+                              ? 'cell-selected z-10'
+                              : isCritInMulti
+                                ? 'cell-multi-selected z-10'
+                                : isStudentRowSelected
+                                  ? 'student-row-cell-tint'
+                                  : isCritColSelected
+                                    ? 'col-cell-tint'
+                                    : 'hover:brightness-97'
+                          }`}
+                        >
+                          <div className="flex flex-col items-center justify-center gap-0 h-full w-full overflow-hidden leading-tight px-0">
+                            {critRes ? (
+                              <>
+                                <span
+                                  style={{ fontSize: `${scaledGradeFs}px` }}
+                                  className="font-normal tabular-nums leading-[1.08] shrink-0"
+                                >
+                                  {formatCellDisplayGrade(critRes.grade, col, showPct)}
+                                </span>
+                                {rowH >= 38 && (
+                                  <span className="text-[0.72em] font-medium text-slate-700/90 leading-[1.08] truncate max-w-full">
+                                    {critRes.level.title}
+                                  </span>
+                                )}
+                              </>
+                            ) : null}
                           </div>
                         </td>
                       );
@@ -4722,9 +5301,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
                       {displaySlots.map((slot) => {
                         const isFolder = slot.kind === 'FOLDER_SUMMARY';
+                        const isCritSlot = slot.kind === 'RUBRIC_CRITERION';
                         const overrideMetric = isFolder
                           ? slot.folder.groupSummaryRowOverrides?.[gRowIdx]
-                          : slot.col.groupSummaryRowOverrides?.[gRowIdx];
+                          : isCritSlot
+                            ? undefined
+                            : slot.col.groupSummaryRowOverrides?.[gRowIdx];
                         const effectiveMetric = overrideMetric ?? globalGrpMetric;
                         const metricOpt = COLUMN_SUMMARY_OPTIONS.find(
                           (o) => o.metric === effectiveMetric
@@ -4733,6 +5315,16 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         const grpGrades = bucket.students.map((st) => {
                           if (isFolder) {
                             return computeFolderSummary(slot.folder, slot.childCols, st.id, activeBook);
+                          }
+                          if (isCritSlot) {
+                            const pCell = activeBook.cells[cellKey(st.id, slot.col.id)];
+                            return (
+                              computeRubricCriterionResult(
+                                slot.rubric,
+                                slot.criterion.id,
+                                pCell?.rubricEval
+                              )?.grade ?? null
+                            );
                           }
                           return activeBook.cells[cellKey(st.id, slot.col.id)]?.grade ?? null;
                         });
@@ -5000,9 +5592,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
                 {displaySlots.map((slot) => {
                   const isFolder = slot.kind === 'FOLDER_SUMMARY';
+                  const isCritSlot = slot.kind === 'RUBRIC_CRITERION';
                   const overrideMetric = isFolder
                     ? slot.folder.summaryRowOverrides?.[rowIdx]
-                    : slot.col.summaryRowOverrides?.[rowIdx];
+                    : isCritSlot
+                      ? undefined
+                      : slot.col.summaryRowOverrides?.[rowIdx];
                   const effectiveMetric = overrideMetric ?? globalMetric;
                   const metricOpt = COLUMN_SUMMARY_OPTIONS.find(
                     (o) => o.metric === effectiveMetric
@@ -5011,6 +5606,16 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   const gradesForSlot = visibleStudents.map((st) => {
                     if (isFolder) {
                       return computeFolderSummary(slot.folder, slot.childCols, st.id, activeBook);
+                    }
+                    if (isCritSlot) {
+                      const pCell = activeBook.cells[cellKey(st.id, slot.col.id)];
+                      return (
+                        computeRubricCriterionResult(
+                          slot.rubric,
+                          slot.criterion.id,
+                          pCell?.rubricEval
+                        )?.grade ?? null
+                      );
                     }
                     return activeBook.cells[cellKey(st.id, slot.col.id)]?.grade ?? null;
                   });
@@ -5472,28 +6077,48 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         </div>
       )}
 
-      {/* Floating iDoceo-style Group Column Header Action Popover (batch grade + group stats!) */}
+      {/* Floating iDoceo-style Group Column Header Action Popover (batch grade, rubric, criterion + group stats!) */}
       {groupColAction && (() => {
         const actSlot = groupColAction.slot;
         const isCol = actSlot.kind === 'COL';
+        const isCrit = actSlot.kind === 'RUBRIC_CRITERION';
         const colEntity = actSlot.kind === 'COL' ? actSlot.col : null;
+        const critColEntity = actSlot.kind === 'RUBRIC_CRITERION' ? actSlot.col : null;
         const folderSlot = actSlot.kind === 'FOLDER' ? actSlot : null;
-        const canBatchEdit = Boolean(
+        const canBatchEditCol = Boolean(
           colEntity && !activeTab.isLocked && !colEntity.isLocked && colEntity.type !== 'AVERAGE'
+        );
+        const canBatchEditCrit = Boolean(
+          critColEntity && !activeTab.isLocked && !critColEntity.isLocked
         );
 
         const groupGrades = groupColAction.studentIds.map((sid) => {
           if (colEntity) {
             return activeBook.cells[cellKey(sid, colEntity.id)]?.grade ?? null;
           }
+          if (actSlot.kind === 'RUBRIC_CRITERION') {
+            const pCell = activeBook.cells[cellKey(sid, actSlot.col.id)];
+            return (
+              computeRubricCriterionResult(
+                actSlot.rubric,
+                actSlot.criterion.id,
+                pCell?.rubricEval
+              )?.grade ?? null
+            );
+          }
           if (folderSlot) {
             return computeFolderSummary(folderSlot.folder, folderSlot.childCols, sid, activeBook);
           }
           return null;
         });
-        const threshold = colEntity ? colEntity.passThreshold : activeBook.passThreshold;
-        const decimals = colEntity ? colEntity.decimals : 2;
-        const title = colEntity ? colEntity.title : (folderSlot?.folder.title ?? '');
+        const threshold =
+          colEntity?.passThreshold ?? critColEntity?.passThreshold ?? activeBook.passThreshold;
+        const decimals = colEntity?.decimals ?? critColEntity?.decimals ?? 2;
+        const title = colEntity
+          ? colEntity.title
+          : isCrit
+            ? `C${actSlot.criterionIndex + 1}: ${actSlot.criterion.title}`
+            : (folderSlot?.folder.title ?? '');
 
         const targets = colEntity
           ? groupColAction.studentIds.map((studentId) => ({ studentId, columnId: colEntity.id }))
@@ -5505,13 +6130,18 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             style={{ top: groupColAction.top, left: groupColAction.left }}
             role="dialog"
             aria-label={`Acciones del grupo ${groupColAction.bucketName} en ${title}`}
-            className="fixed w-72 rounded-2xl border border-slate-200 bg-white shadow-2xl p-3 z-50 text-xs space-y-2.5"
+            className="fixed w-76 rounded-2xl border border-slate-200 bg-white shadow-2xl p-3 z-50 text-xs space-y-2.5"
           >
             <div className="flex items-start justify-between gap-2 pb-2 border-b border-slate-100">
               <div className="min-w-0">
                 <div className="font-bold text-slate-900 truncate">{groupColAction.bucketName}</div>
                 <div className="text-[11px] text-slate-500 truncate">
-                  {isCol ? title : `Carpeta: ${title}`} · {groupColAction.studentIds.length} alumnos
+                  {isCol
+                    ? title
+                    : isCrit
+                      ? `${actSlot.col.title} · ${title}`
+                      : `Carpeta: ${title}`}{' '}
+                  · {groupColAction.studentIds.length} alumnos
                 </div>
               </div>
               <button
@@ -5523,7 +6153,109 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               </button>
             </div>
 
-            {canBatchEdit && colEntity && (
+            {isCrit && canBatchEditCrit && (
+              <div className="space-y-1.5">
+                <div className="text-[11px] font-semibold text-purple-950 flex items-center justify-between gap-2">
+                  <span>Valorar criterio para todo el grupo</span>
+                  <span className="text-[10px] font-bold text-purple-700">
+                    Peso {actSlot.criterion.weight}%
+                  </span>
+                </div>
+                <div className="space-y-1 max-h-56 overflow-y-auto pr-0.5">
+                  {actSlot.rubric.levels.map((lvl) => {
+                    const converted =
+                      actSlot.rubric.minScore +
+                      (lvl.percentage / 100) * (actSlot.rubric.maxScore - actSlot.rubric.minScore);
+                    const scoreStr = formatCellDisplayGrade(
+                      converted,
+                      actSlot.col,
+                      Boolean(
+                        actSlot.col.rubricShowPercentage || workspace.settings.showRubricsAsPercent
+                      )
+                    );
+                    const desc =
+                      actSlot.rubric.descriptors[`${actSlot.criterion.id}::${lvl.id}`] ?? '';
+                    return (
+                      <button
+                        key={lvl.id}
+                        type="button"
+                        disabled={groupColAction.studentIds.length === 0}
+                        onClick={() => {
+                          setRubricCriterionForStudents(
+                            groupColAction.studentIds,
+                            actSlot.col.id,
+                            actSlot.rubric.id,
+                            actSlot.criterion.id,
+                            lvl.id
+                          );
+                          showCopyToast(
+                            `Criterio "${actSlot.criterion.title}" → "${lvl.title}" aplicado a ${groupColAction.studentIds.length} alumnos de "${groupColAction.bucketName}"`
+                          );
+                          setGroupColAction(null);
+                        }}
+                        style={{ backgroundColor: blendWithWhite(lvl.color, 0.2) }}
+                        className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 hover:border-purple-400 text-left flex items-start justify-between gap-2 transition-colors"
+                      >
+                        <div className="min-w-0">
+                          <div className="font-bold text-slate-900 truncate">{lvl.title}</div>
+                          {desc && (
+                            <div className="text-[10px] text-slate-600 line-clamp-2">{desc}</div>
+                          )}
+                        </div>
+                        <span className="font-bold text-slate-900 tabular-nums shrink-0">
+                          {scoreStr}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  disabled={groupColAction.studentIds.length === 0}
+                  onClick={() => {
+                    setRubricCriterionForStudents(
+                      groupColAction.studentIds,
+                      actSlot.col.id,
+                      actSlot.rubric.id,
+                      actSlot.criterion.id,
+                      null
+                    );
+                    showCopyToast(
+                      `Criterio "${actSlot.criterion.title}" borrado en "${groupColAction.bucketName}"`
+                    );
+                    setGroupColAction(null);
+                  }}
+                  className="w-full px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50/70 hover:bg-rose-100 text-rose-700 font-semibold flex items-center justify-center gap-1 text-[11px]"
+                >
+                  <Eraser className="w-3 h-3" />
+                  <span>Borrar criterio en todo el grupo</span>
+                </button>
+              </div>
+            )}
+
+            {canBatchEditCol && colEntity && colEntity.type === 'RUBRIC' && (
+              <div className="space-y-1.5">
+                <button
+                  type="button"
+                  disabled={groupColAction.studentIds.length === 0}
+                  onClick={() => {
+                    const grpName = groupColAction.bucketName;
+                    const sids = groupColAction.studentIds;
+                    setGroupColAction(null);
+                    onOpenRubricGrader(null, colEntity, {
+                      groupName: grpName,
+                      studentIds: sids,
+                    });
+                  }}
+                  className="w-full px-3 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:opacity-40 text-white font-semibold flex items-center justify-center gap-1.5 shadow-2xs"
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  <span>Evaluar toda la rúbrica para el grupo</span>
+                </button>
+              </div>
+            )}
+
+            {canBatchEditCol && colEntity && (
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -5539,12 +6271,14 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 className="space-y-2"
               >
                 <label className="block font-semibold text-slate-700 text-[11px]">
-                  Poner nota / texto a todo el grupo a la vez
+                  {colEntity.type === 'RUBRIC'
+                    ? 'O poner nota manual / texto al grupo'
+                    : 'Poner nota / texto a todo el grupo a la vez'}
                 </label>
                 <div className="flex items-center gap-1.5">
                   <input
                     type="text"
-                    autoFocus
+                    autoFocus={colEntity.type !== 'RUBRIC'}
                     value={groupColGradeDraft}
                     onChange={(e) => setGroupColGradeDraft(e.target.value)}
                     placeholder="Ej: 8.5 buen trabajo"
@@ -5655,6 +6389,130 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           </div>
         );
       })()}
+
+      {/* Floating Single-Criterion Level Picker Popover (1 student or multi-selected students) */}
+      {criterionPicker && (
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{ top: criterionPicker.top, left: criterionPicker.left }}
+          role="dialog"
+          aria-label={`Valorar criterio ${criterionPicker.criterion.title}`}
+          className="fixed w-76 rounded-2xl border border-purple-200 bg-white shadow-2xl p-3 z-50 text-xs space-y-2"
+        >
+          <div className="flex items-start justify-between gap-2 pb-1.5 border-b border-slate-100">
+            <div className="min-w-0">
+              <div className="font-bold text-slate-900 truncate">
+                {criterionPicker.studentLabel}
+              </div>
+              <div className="text-[11px] text-purple-900 font-semibold truncate">
+                C{criterionPicker.criterionIndex + 1}: {criterionPicker.criterion.title} (
+                {criterionPicker.criterion.weight}%)
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCriterionPicker(null)}
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <div className="space-y-1 max-h-64 overflow-y-auto pr-0.5">
+            {criterionPicker.rubric.levels.map((lvl) => {
+              const isSelectedLvl = criterionPicker.currentLevelId === lvl.id;
+              const converted =
+                criterionPicker.rubric.minScore +
+                (lvl.percentage / 100) *
+                  (criterionPicker.rubric.maxScore - criterionPicker.rubric.minScore);
+              const scoreStr = formatCellDisplayGrade(
+                converted,
+                criterionPicker.col,
+                Boolean(
+                  criterionPicker.col.rubricShowPercentage ||
+                    workspace.settings.showRubricsAsPercent
+                )
+              );
+              const desc =
+                criterionPicker.rubric.descriptors[
+                  `${criterionPicker.criterion.id}::${lvl.id}`
+                ] ?? '';
+              return (
+                <button
+                  key={lvl.id}
+                  type="button"
+                  disabled={activeTab.isLocked || Boolean(criterionPicker.col.isLocked)}
+                  onClick={() => {
+                    setRubricCriterionForStudents(
+                      criterionPicker.studentIds,
+                      criterionPicker.col.id,
+                      criterionPicker.rubric.id,
+                      criterionPicker.criterion.id,
+                      isSelectedLvl ? null : lvl.id
+                    );
+                    setCriterionPicker(null);
+                  }}
+                  style={{ backgroundColor: lvl.color }}
+                  className={`w-full px-2.5 py-2 rounded-xl border text-left flex items-start justify-between gap-2 transition-colors disabled:opacity-50 ${
+                    isSelectedLvl
+                      ? 'border-slate-800 ring-2 ring-inset ring-slate-800/70'
+                      : 'border-slate-200 hover:border-purple-400'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-900 flex items-center gap-1">
+                      {isSelectedLvl && <Check className="w-3 h-3 text-slate-900 shrink-0" />}
+                      <span className="truncate">{lvl.title}</span>
+                    </div>
+                    {desc && (
+                      <div className="text-[10.5px] text-slate-700 leading-snug mt-0.5">
+                        {desc}
+                      </div>
+                    )}
+                  </div>
+                  <span className="font-bold text-slate-900 tabular-nums shrink-0">
+                    {scoreStr}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
+            <button
+              type="button"
+              disabled={activeTab.isLocked || Boolean(criterionPicker.col.isLocked)}
+              onClick={() => {
+                setRubricCriterionForStudents(
+                  criterionPicker.studentIds,
+                  criterionPicker.col.id,
+                  criterionPicker.rubric.id,
+                  criterionPicker.criterion.id,
+                  null
+                );
+                setCriterionPicker(null);
+              }}
+              className="px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50/70 hover:bg-rose-100 text-rose-700 font-semibold flex items-center gap-1 text-[11px] disabled:opacity-40"
+            >
+              <Eraser className="w-3 h-3" />
+              <span>Quitar nivel</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const targetSt =
+                  visibleStudents.find((s) => s.id === criterionPicker.studentIds[0]) ?? null;
+                const col = criterionPicker.col;
+                setCriterionPicker(null);
+                onOpenRubricGrader(targetSt, col);
+              }}
+              className="px-2.5 py-1 rounded-lg border border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-800 font-semibold text-[11px]"
+            >
+              Abrir rúbrica completa
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Touch-only Contextual Action Bar (Tablet/iPad & Mobile — zero footprint on Desktop!) */}
       {device.isTouch && !inlineEdit && (() => {

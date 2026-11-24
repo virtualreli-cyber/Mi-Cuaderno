@@ -241,6 +241,29 @@ export function computeRubricScore(
 }
 
 /**
+ * Resolves the selected level and converted numeric score for a single criterion
+ * inside a student's rubric evaluation.
+ */
+export function computeRubricCriterionResult(
+  rubric: RubricEntity,
+  criterionId: string,
+  evalData: RubricCellEval | undefined
+): { level: RubricEntity['levels'][number]; grade: number; percentage: number } | null {
+  if (!evalData || rubric.levels.length === 0) return null;
+  const sel = evalData.selections?.[criterionId];
+  if (!sel?.levelId) return null;
+  const lvl = rubric.levels.find((l) => l.id === sel.levelId);
+  if (!lvl) return null;
+  const norm = lvl.percentage / 100;
+  const raw = rubric.minScore + norm * (rubric.maxScore - rubric.minScore);
+  return {
+    level: lvl,
+    grade: roundTo(raw, rubric.decimals),
+    percentage: lvl.percentage,
+  };
+}
+
+/**
  * Formats a grade for display in the gradebook grid.
  * For RUBRIC columns:
  * - By default (`showPercent = false`), displays the 0–10 converted grade (e.g. "8.40").

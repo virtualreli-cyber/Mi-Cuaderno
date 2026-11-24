@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronLeft, ChevronRight, Edit3, FileText, Plus, RotateCcw, Scale, Trash2 } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Edit3, FileText, Plus, RotateCcw, Scale, Trash2, Users } from 'lucide-react';
 import { getRubricLevelPastelColor } from '../../constants/colors';
 import { useGradebook } from '../../context/GradebookContext';
 import { getEducamosSnappedGrade, isCellOutdatedForEducamos } from '../../engine/educamos';
@@ -8,6 +8,8 @@ import {
   computeRubricPercentage,
   computeRubricScore,
   formatGrade,
+  getEffectiveBookGroups,
+  getStudentActiveGroup,
   makeId,
   normalizeRubricLevels,
 } from '../../engine/gradeMath';
@@ -99,6 +101,7 @@ interface RubricGraderModalProps {
   column: ColumnEntity | null;
   students: StudentEntity[];
   initialStudentId: string | null;
+  groupBatch?: { groupName: string; studentIds: string[] } | null;
 }
 
 export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
@@ -107,13 +110,16 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
   column,
   students,
   initialStudentId,
+  groupBatch = null,
 }) => {
   const {
     workspace,
     activeBook,
     setCellData,
     setCellRubricEval,
+    setRubricEvalForStudents,
     clearCell,
+    clearMultipleCells,
     updateColumn,
     updateSettings,
     markCellEducamosUpdated,
@@ -124,6 +130,13 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
   const [selectionModified, setSelectionModified] = useState(false);
   const [showManualInput, setShowManualInput] = useState(false);
   const [manualDraft, setManualDraft] = useState('');
+  const [touchedCriteriaIds, setTouchedCriteriaIds] = useState<Set<string>>(() => new Set());
+  const [mixedCriteriaIds, setMixedCriteriaIds] = useState<Set<string>>(() => new Set());
+  const [selectedBatchGroupName, setSelectedBatchGroupName] = useState<string>('');
+  const [modalNotice, setModalNotice] = useState<string | null>(null);
+  const noticeTimerRef = useRef<number | null>(null);
+
+  const isGroupMode = Boolean(groupBatch && groupBatch.studentIds.length > 0);
 
   const rubricGridRef = useRef<HTMLDivElement>(null);
   const rubricZoom = workspace.settings.rubricZoom ?? 1;
@@ -151,26 +164,114 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
     [rawRubric]
   );
 
-  useEffect(() => {
-    if (open) setStudentId(initialStudentId);
-  }, [open, initialStudentId]);
+  const classGroupOptions = useMemo(() => {
+    if (!activeBook) return [] as Array<{ name: string; color: string; studentIds: string[] }>;
+    const defs = getEffectiveBookGroups(activeBook);
+    const byName = new Map<string, string[]>();
+    for (const st of activeBook.students) {
+      if (st.isHidden) continue;
+      const g = getStudentActiveGroup(st, activeBook);
+      if (!g) continue;
+      const list = byName.get(g) ?? [];
+      list.push(st.id);
+      byName.set(g, list);
+    }
+    const ordered: Array<{ name: string; color: string; studentIds: string[] }> = [];
+    for (const def of defs) {
+      const ids = byName.get(def.name) ?? [];
+      if (ids.length > 0) {
+        ordered.push({ name: def.name, color: def.color, studentIds: ids });
+      }
+    }
+    return ordered;
+  }, [activeBook]);
 
   useEffect(() => {
-    if (!open || !studentId || !column || !activeBook) return;
+    if (open) {
+      setStudentId(initialStudentId);
+      setModalNotice(null);
+    }
+    return () => {
+      if (noticeTimerRef.current !== null) {
+        window.clearTimeout(noticeTimerRef.current);
+        noticeTimerRef.current = null;
+      }
+    };
+  }, [open, initialStudentId, groupBatch]);
+
+  useEffect(() => {
+    if (!open || !column || !activeBook || !rubric) return;
+
+    if (isGroupMode && groupBatch) {
+      const commonSelections: RubricCellEval['selections'] = {};
+      const mixed = new Set<string>();
+      for (const crit of rubric.criteria) {
+        let firstVal: string | null | undefined;
+        let allEqual = true;
+        for (const sid of groupBatch.studentIds) {
+          const lvlId =
+            activeBook.cells[cellKey(sid, column.id)]?.rubricEval?.selections?.[crit.id]?.levelId ??
+            null;
+          if (firstVal === undefined) {
+            firstVal = lvlId;
+          } else if (firstVal !== lvlId) {
+            allEqual = false;
+            break;
+          }
+        }
+        if (allEqual && firstVal) {
+          commonSelections[crit.id] = { levelId: firstVal };
+        } else if (!allEqual) {
+          mixed.add(crit.id);
+        }
+      }
+      setSelections(commonSelections);
+      setMixedCriteriaIds(mixed);
+      setTouchedCriteriaIds(new Set());
+      setComment('');
+      setSelectionModified(false);
+      setShowManualInput(false);
+      setManualDraft('');
+      return;
+    }
+
+    if (!studentId) return;
     const cell = activeBook.cells[cellKey(studentId, column.id)];
     setSelections(cell?.rubricEval?.selections ? structuredClone(cell.rubricEval.selections) : {});
+    setMixedCriteriaIds(new Set());
+    setTouchedCriteriaIds(new Set());
     setComment(cell?.comment ?? '');
     setSelectionModified(false);
     setShowManualInput(false);
     setManualDraft('');
-  }, [open, studentId, column, activeBook]);
 
-  if (!column || !rubric || !activeBook || !studentId) return null;
+    const stObj = activeBook.students.find((s) => s.id === studentId);
+    const activeGrp = stObj ? getStudentActiveGroup(stObj, activeBook) : undefined;
+    if (activeGrp && classGroupOptions.some((g) => g.name === activeGrp)) {
+      setSelectedBatchGroupName(activeGrp);
+    } else if (classGroupOptions.length > 0) {
+      setSelectedBatchGroupName(classGroupOptions[0].name);
+    } else {
+      setSelectedBatchGroupName('');
+    }
+  }, [open, studentId, column, activeBook, rubric, isGroupMode, groupBatch, classGroupOptions]);
 
-  const stIdx = students.findIndex((s) => s.id === studentId);
-  const student = students[stIdx];
-  const currentCell = activeBook.cells[cellKey(studentId, column.id)];
-  const hasActiveManualOverride = Boolean(currentCell?.manualOverride) && !selectionModified;
+  if (!column || !rubric || !activeBook || (!studentId && !isGroupMode)) return null;
+
+  const showNotice = (msg: string) => {
+    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+    setModalNotice(msg);
+    noticeTimerRef.current = window.setTimeout(() => {
+      setModalNotice(null);
+      noticeTimerRef.current = null;
+    }, 2400);
+  };
+
+  const stIdx = studentId ? students.findIndex((s) => s.id === studentId) : -1;
+  const student = stIdx >= 0 ? students[stIdx] : undefined;
+  const currentCell =
+    !isGroupMode && studentId ? activeBook.cells[cellKey(studentId, column.id)] : undefined;
+  const hasActiveManualOverride = !isGroupMode && Boolean(currentCell?.manualOverride) && !selectionModified;
 
   const computedScore = computeRubricScore(rubric, { rubricId: rubric.id, selections });
   const computedPct = computeRubricPercentage(rubric, { rubricId: rubric.id, selections });
@@ -186,11 +287,28 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
   const showAsPercent = Boolean(liveCol.rubricShowPercentage);
 
   const commitCurrent = (forceRubricCalc = false) => {
+    if (isGroupMode && groupBatch) {
+      if (touchedCriteriaIds.size === 0 && !comment.trim()) return;
+      setRubricEvalForStudents(
+        groupBatch.studentIds,
+        column.id,
+        rubric.id,
+        selections,
+        {
+          comment,
+          touchedCriteriaIds:
+            mixedCriteriaIds.size > 0 ? Array.from(touchedCriteriaIds) : undefined,
+        }
+      );
+      return;
+    }
+    if (!studentId) return;
     const preserveManual = hasActiveManualOverride && !forceRubricCalc;
     setCellRubricEval(studentId, column.id, { rubricId: rubric.id, selections }, comment, preserveManual);
   };
 
   const applyManualGrade = () => {
+    if (!studentId || isGroupMode) return;
     const cleaned = manualDraft.trim().replace(',', '.');
     const parsed = Number(cleaned);
     if (cleaned && Number.isFinite(parsed)) {
@@ -212,16 +330,26 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
     if (next) setStudentId(next.id);
   };
 
+  const selectedGroupOption =
+    classGroupOptions.find((g) => g.name === selectedBatchGroupName) ?? classGroupOptions[0] ?? null;
+
   return (
     <Modal
       open={open}
       onClose={() => {
-        commitCurrent();
+        if (!isGroupMode) {
+          commitCurrent();
+        }
         onClose();
       }}
       title={rubric.title}
-      subtitle={`Columna: ${column.title}`}
+      subtitle={
+        isGroupMode && groupBatch
+          ? `Columna: ${column.title} · Evaluación grupal (${groupBatch.groupName})`
+          : `Columna: ${column.title}`
+      }
       maxWidthClass="w-[min(980px,96vw)]"
+      notice={modalNotice}
       headerActions={
         <div className="px-3 py-1 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 font-bold text-xs sm:text-sm tabular-nums whitespace-nowrap">
           Nota: {displayScore !== null ? formatGrade(displayScore, rubric.decimals) : '—'}
@@ -234,39 +362,55 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
       }
     >
       <div className="p-5 space-y-3 text-xs">
-        {/* Student navigation header */}
-        <div className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5">
-          <button
-            type="button"
-            disabled={stIdx <= 0}
-            onClick={() => navigate(-1)}
-            className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-40 font-semibold flex items-center gap-1"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            <span>Anterior</span>
-          </button>
-
-          <div className="text-center min-w-0">
-            <div className="text-sm font-bold text-slate-900 truncate">
-              {student ? `${student.firstName} ${student.lastName}` : 'Alumno'}
-            </div>
-            <div className="text-[11px] text-slate-500">
-              {stIdx + 1} de {students.length}
+        {/* Group Mode Banner OR Student navigation header */}
+        {isGroupMode && groupBatch ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 bg-indigo-50 border border-indigo-200 rounded-xl px-3.5 py-2.5">
+            <div className="flex items-center gap-2 min-w-0">
+              <Users className="w-4 h-4 text-indigo-700 shrink-0" />
+              <div className="min-w-0">
+                <div className="text-sm font-bold text-indigo-950 truncate">
+                  Grupo: {groupBatch.groupName} ({groupBatch.studentIds.length} alumnos)
+                </div>
+                <div className="text-[11px] text-indigo-800">
+                  Los criterios que selecciones se aplicarán a todos los alumnos de este grupo a la vez.
+                </div>
+              </div>
             </div>
           </div>
+        ) : (
+          <div className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5">
+            <button
+              type="button"
+              disabled={stIdx <= 0}
+              onClick={() => navigate(-1)}
+              className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-40 font-semibold flex items-center gap-1"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              <span>Anterior</span>
+            </button>
 
-          <button
-            type="button"
-            disabled={stIdx < 0 || stIdx >= students.length - 1}
-            onClick={() => navigate(1)}
-            className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-40 font-semibold flex items-center gap-1"
-          >
-            <span>Siguiente</span>
-            <ChevronRight className="w-4 h-4" />
-          </button>
-        </div>
+            <div className="text-center min-w-0">
+              <div className="text-sm font-bold text-slate-900 truncate">
+                {student ? `${student.firstName} ${student.lastName}` : 'Alumno'}
+              </div>
+              <div className="text-[11px] text-slate-500">
+                {stIdx + 1} de {students.length}
+              </div>
+            </div>
 
-        {/* Display mode, discreet manual grade toggle & Zoom controls toolbar */}
+            <button
+              type="button"
+              disabled={stIdx < 0 || stIdx >= students.length - 1}
+              onClick={() => navigate(1)}
+              className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 disabled:opacity-40 font-semibold flex items-center gap-1"
+            >
+              <span>Siguiente</span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Display mode, discreet manual grade toggle, apply-to-group & Zoom controls toolbar */}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-1.5">
             <button
@@ -284,7 +428,7 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
               {showAsPercent ? 'No convertir (%)' : 'Convertida (0–10)'}
             </button>
 
-            {!column.isLocked && (
+            {!isGroupMode && !column.isLocked && (
               <button
                 type="button"
                 onClick={() => {
@@ -325,7 +469,7 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
               </button>
             )}
 
-            {isCellOutdatedForEducamos(liveCol, studentId, currentCell) && (
+            {!isGroupMode && studentId && isCellOutdatedForEducamos(liveCol, studentId, currentCell) && (
               <button
                 type="button"
                 onClick={() => {
@@ -353,6 +497,50 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
             onChangeZoom={(z) => updateSettings({ rubricZoom: z })}
           />
         </div>
+
+        {/* Apply current rubric directly to an entire student group (visible whenever class has groups) */}
+        {!isGroupMode && !column.isLocked && classGroupOptions.length > 0 && selectedGroupOption && (
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl border border-indigo-200/80 bg-indigo-50/60">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-indigo-950">
+              <Users className="w-3.5 h-3.5 text-indigo-700 shrink-0" />
+              <span>Aplicar esta rúbrica a todo un grupo:</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <select
+                value={selectedGroupOption.name}
+                onChange={(e) => setSelectedBatchGroupName(e.target.value)}
+                aria-label="Seleccionar grupo al que aplicar la rúbrica"
+                className="border border-indigo-200 bg-white rounded-lg px-2 py-1 text-[11px] font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400/30"
+              >
+                {classGroupOptions.map((grp) => (
+                  <option key={grp.name} value={grp.name}>
+                    {grp.name} ({grp.studentIds.length} al.)
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => {
+                  commitCurrent();
+                  setRubricEvalForStudents(
+                    selectedGroupOption.studentIds,
+                    column.id,
+                    rubric.id,
+                    selections,
+                    { comment }
+                  );
+                  showNotice(
+                    `Rúbrica aplicada a "${selectedGroupOption.name}" (${selectedGroupOption.studentIds.length} alumnos)`
+                  );
+                }}
+                className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-[11px] flex items-center gap-1"
+              >
+                <Users className="w-3 h-3" />
+                <span>Aplicar al grupo</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {showManualInput && !column.isLocked && (
           <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl border border-amber-200 bg-amber-50/75">
@@ -454,6 +642,8 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
             <tbody>
               {rubric.criteria.map((crit) => {
                 const chosenLvl = selections[crit.id]?.levelId;
+                const isMixedUntouched =
+                  isGroupMode && mixedCriteriaIds.has(crit.id) && !touchedCriteriaIds.has(crit.id);
                 return (
                   <tr key={crit.id} className="border-b border-slate-200 last:border-b-0">
                     <td className="p-2 border-r border-slate-200 bg-slate-50/70 align-top">
@@ -461,6 +651,11 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
                         {crit.title}
                       </div>
                       <div className="text-[0.88em] text-slate-500 mt-1">Peso: {crit.weight}%</div>
+                      {isMixedUntouched && (
+                        <span className="inline-block mt-1 px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800 text-[0.76em] font-semibold">
+                          Mixto en grupo
+                        </span>
+                      )}
                     </td>
                     {rubric.levels.map((lvl) => {
                       const isPicked = chosenLvl === lvl.id;
@@ -470,6 +665,12 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
                           key={lvl.id}
                           onClick={() => {
                             setSelectionModified(true);
+                            setTouchedCriteriaIds((prev) => {
+                              if (prev.has(crit.id)) return prev;
+                              const next = new Set(prev);
+                              next.add(crit.id);
+                              return next;
+                            });
                             setSelections((prev) => {
                               if (prev[crit.id]?.levelId === lvl.id) {
                                 const next = { ...prev };
@@ -513,7 +714,9 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
 
         <div>
           <label className="block font-semibold text-slate-700 mb-1">
-            Comentario adicional en la celda (no afecta a la nota)
+            {isGroupMode
+              ? 'Comentario grupal opcional (si se deja vacío conserva el comentario previo de cada alumno)'
+              : 'Comentario adicional en la celda (no afecta a la nota)'}
           </label>
           <input
             type="text"
@@ -524,30 +727,56 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
           />
         </div>
 
-        <div className="flex items-center justify-between pt-2 border-t border-slate-200">
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200">
           <button
             type="button"
             onClick={() => {
-              clearCell(studentId, column.id);
+              if (isGroupMode && groupBatch) {
+                clearMultipleCells(
+                  groupBatch.studentIds.map((sid) => ({ studentId: sid, columnId: column.id }))
+                );
+                onClose();
+                return;
+              }
+              if (studentId) {
+                clearCell(studentId, column.id);
+              }
               onClose();
             }}
             className="px-3 py-2 rounded-xl text-rose-600 hover:bg-rose-50 font-semibold flex items-center gap-1.5"
           >
             <Trash2 className="w-3.5 h-3.5" />
-            <span>Borrar evaluación</span>
+            <span>{isGroupMode ? 'Borrar evaluaciones del grupo' : 'Borrar evaluación'}</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              commitCurrent();
-              onClose();
-            }}
-            className="px-4 py-2 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-700 flex items-center gap-1.5"
-          >
-            <Check className="w-3.5 h-3.5" />
-            <span>Guardar y cerrar</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {isGroupMode && (
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-3.5 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 font-semibold"
+              >
+                Cancelar
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                commitCurrent();
+                onClose();
+              }}
+              className={`px-4 py-2 rounded-xl text-white font-semibold flex items-center gap-1.5 ${
+                isGroupMode ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-blue-600 hover:bg-blue-700'
+              }`}
+            >
+              {isGroupMode ? <Users className="w-3.5 h-3.5" /> : <Check className="w-3.5 h-3.5" />}
+              <span>
+                {isGroupMode && groupBatch
+                  ? `Aplicar a "${groupBatch.groupName}" (${groupBatch.studentIds.length})`
+                  : 'Guardar y cerrar'}
+              </span>
+            </button>
+          </div>
         </div>
       </div>
     </Modal>

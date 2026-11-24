@@ -76,8 +76,9 @@ const CuadernoShell: React.FC = () => {
   } | null>(null);
 
   const [rubricGraderTarget, setRubricGraderTarget] = useState<{
-    student: StudentEntity;
+    student: StudentEntity | null;
     column: ColumnEntity;
+    groupBatch?: { groupName: string; studentIds: string[] } | null;
   } | null>(null);
 
   const [showRubricBuilder, setShowRubricBuilder] = useState(false);
@@ -177,7 +178,9 @@ const CuadernoShell: React.FC = () => {
               }
               onEditFolder={(tabId, folder) => setFolderModal({ tabId, folder })}
               onOpenCellModal={(student, column) => setCellModalTarget({ student, column })}
-              onOpenRubricGrader={(student, column) => setRubricGraderTarget({ student, column })}
+              onOpenRubricGrader={(student, column, groupBatch) =>
+                setRubricGraderTarget({ student, column, groupBatch: groupBatch ?? null })
+              }
               onOpenLomloeManager={() => setShowLomloeModal(true)}
             />
           </main>
@@ -256,7 +259,8 @@ const CuadernoShell: React.FC = () => {
         open={Boolean(rubricGraderTarget)}
         column={rubricGraderTarget?.column ?? null}
         students={sortedStudents}
-        initialStudentId={rubricGraderTarget?.student.id ?? null}
+        initialStudentId={rubricGraderTarget?.student?.id ?? null}
+        groupBatch={rubricGraderTarget?.groupBatch ?? null}
         onClose={() => setRubricGraderTarget(null)}
       />
 

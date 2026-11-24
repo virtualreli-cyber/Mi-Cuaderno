@@ -176,8 +176,8 @@ function stripFolderUi(folder: FolderEntity): Omit<FolderEntity, 'width' | 'isCo
   return rest;
 }
 
-function stripColumnUi(col: ColumnEntity): Omit<ColumnEntity, 'width'> {
-  const { width: _w, ...rest } = col;
+function stripColumnUi(col: ColumnEntity): Omit<ColumnEntity, 'width' | 'rubricExpanded'> {
+  const { width: _w, rubricExpanded: _rExp, ...rest } = col;
   return rest;
 }
 
@@ -430,6 +430,7 @@ function mergeTab(
     return {
       ...c,
       width: localC.width,
+      ...(localC.rubricExpanded ? { rubricExpanded: true } : {}),
     };
   });
 
@@ -863,7 +864,13 @@ export function preserveDeviceLocalLayoutAndNav(
           }),
           columns: rTab.columns.map((rCol) => {
             const lCol = localColMap.get(rCol.id);
-            return lCol ? { ...rCol, width: lCol.width } : rCol;
+            return lCol
+              ? {
+                  ...rCol,
+                  width: lCol.width,
+                  ...(lCol.rubricExpanded ? { rubricExpanded: true } : {}),
+                }
+              : rCol;
           }),
         };
       }),

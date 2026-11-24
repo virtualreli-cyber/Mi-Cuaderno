@@ -187,6 +187,8 @@ export interface ColumnEntity {
   rubricId?: string;
   /** Por defecto false: las rúbricas se muestran convertidas de % a 0–10. Si true ("No convertir"), muestra el %. Al copiar siempre se copia 0–10. */
   rubricShowPercentage?: boolean;
+  /** Estado local UI: despliega la columna de rúbrica en subcolumnas por criterio en la cuadrícula. */
+  rubricExpanded?: boolean;
   /** Sobrescrituras por fila (0..4) para los resúmenes inferiores de esta columna */
   summaryRowOverrides?: Record<number, ColumnSummaryMetric>;
   /** Sobrescrituras por fila (0..4) para los resúmenes al final de cada grupo */
