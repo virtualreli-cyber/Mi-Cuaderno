@@ -4,6 +4,7 @@ import { getRubricLevelPastelColor } from '../../constants/colors';
 import { useGradebook } from '../../context/GradebookContext';
 import { getEducamosSnappedGrade, isCellOutdatedForEducamos } from '../../engine/educamos';
 import {
+  applyCounterDelta,
   clampGradeForColumn,
   computeRubricPercentage,
   computeRubricScore,
@@ -272,10 +273,21 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
   const currentCell =
     !isGroupMode && studentId ? activeBook.cells[cellKey(studentId, column.id)] : undefined;
   const hasActiveManualOverride = !isGroupMode && Boolean(currentCell?.manualOverride) && !selectionModified;
+  const pendingAdj =
+    !isGroupMode &&
+    typeof currentCell?.pendingAdjustment === 'number' &&
+    Number.isFinite(currentCell.pendingAdjustment) &&
+    currentCell.pendingAdjustment !== 0
+      ? currentCell.pendingAdjustment
+      : 0;
 
   const computedScore = computeRubricScore(rubric, { rubricId: rubric.id, selections });
   const computedPct = computeRubricPercentage(rubric, { rubricId: rubric.id, selections });
-  const displayScore = hasActiveManualOverride ? (currentCell?.grade ?? null) : computedScore;
+  const adjustedComputedScore =
+    computedScore !== null && pendingAdj !== 0
+      ? applyCounterDelta(computedScore, pendingAdj, column)
+      : computedScore;
+  const displayScore = hasActiveManualOverride ? (currentCell?.grade ?? null) : adjustedComputedScore;
   const displayPct = hasActiveManualOverride
     ? currentCell?.grade !== null && currentCell?.grade !== undefined
       ? Number(((currentCell.grade / (rubric.maxScore - rubric.minScore || 10)) * 100).toFixed(1))
@@ -358,6 +370,12 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
           {displayPct !== null && (
             <span className="ml-1.5 text-xs font-semibold text-blue-700 opacity-85">
               ({Number.isInteger(displayPct) ? displayPct : displayPct.toFixed(1)}%)
+            </span>
+          )}
+          {pendingAdj !== 0 && !hasActiveManualOverride && (
+            <span className="ml-1.5 px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-900 text-[10px] font-bold">
+              {pendingAdj > 0 ? '+' : ''}
+              {String(pendingAdj).replace('.', ',')} pend.
             </span>
           )}
         </div>

@@ -56,7 +56,11 @@ function normalizeCell(cell: CellEntity | undefined): CellEntity | null {
   const cleanComment = (cell.comment ?? '').trim();
   const hasRubric = Boolean(cell.rubricEval && Object.keys(cell.rubricEval.selections ?? {}).length > 0);
   const hasNotice = Boolean(cell.autoRecalcNotice);
-  if (!hasGrade && !cleanComment && !hasRubric && !hasNotice) return null;
+  const hasPending =
+    typeof cell.pendingAdjustment === 'number' &&
+    Number.isFinite(cell.pendingAdjustment) &&
+    cell.pendingAdjustment !== 0;
+  if (!hasGrade && !cleanComment && !hasRubric && !hasNotice && !hasPending) return null;
   return {
     grade: hasGrade ? cell.grade : null,
     comment: cleanComment,
@@ -66,6 +70,7 @@ function normalizeCell(cell: CellEntity | undefined): CellEntity | null {
       ? { manualSourceSignature: cell.manualSourceSignature }
       : {}),
     ...(hasNotice ? { autoRecalcNotice: true } : {}),
+    ...(hasPending ? { pendingAdjustment: cell.pendingAdjustment } : {}),
   };
 }
 

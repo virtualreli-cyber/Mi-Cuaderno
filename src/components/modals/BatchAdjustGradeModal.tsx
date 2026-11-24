@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownUp, Check, MessageSquarePlus } from 'lucide-react';
 import {
   appendCellComment,
@@ -20,7 +20,14 @@ interface BatchAdjustGradeModalProps {
   columns: ColumnEntity[];
   onClose: () => void;
   onApply: (
-    entries: Array<{ studentId: string; columnId: string; grade: number | null; comment: string }>
+    entries: Array<{
+      studentId: string;
+      columnId: string;
+      grade: number | null;
+      comment: string;
+      pendingAdjustment?: number;
+      hasExplicitPendingAdjustment?: boolean;
+    }>
   ) => void;
 }
 
@@ -42,8 +49,9 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
 }) => {
   const [deltaDraft, setDeltaDraft] = useState<string>('-1');
   const [comment, setComment] = useState('');
-  const [separator, setSeparator] = useState<CommentAppendSeparator>('SPACE');
-  const [includeEmpty, setIncludeEmpty] = useState(false);
+  const [separator, setSeparator] = useState<CommentAppendSeparator>('NEWLINE');
+  const [commentError, setCommentError] = useState(false);
+  const commentRef = useRef<HTMLTextAreaElement>(null);
 
   const colMap = useMemo(() => new Map(columns.map((c) => [c.id, c])), [columns]);
 
@@ -93,9 +101,9 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
     if (!targetState) return;
     setDeltaDraft('-1');
     setComment('');
-    setSeparator('SPACE');
-    setIncludeEmpty(stats.gradedCount === 0);
-  }, [targetState, stats.gradedCount]);
+    setSeparator('NEWLINE');
+    setCommentError(false);
+  }, [targetState]);
 
   const parsedDelta = useMemo(() => {
     const cleaned = deltaDraft.trim().replace(',', '.');
@@ -105,10 +113,11 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
 
   const isDeltaValid = Number.isFinite(parsedDelta);
   const effectiveDelta = isDeltaValid ? parsedDelta : 0;
+  const hasComment = comment.trim().length > 0;
 
   const previewBatch = useMemo(() => {
     if (!targetState || !book || !isDeltaValid) {
-      return { entries: [], adjustedCount: 0, skippedEmptyCount: 0 };
+      return { entries: [], adjustedCount: 0, immediateCount: 0, queuedPendingCount: 0 };
     }
     return buildGradeAdjustmentBatch({
       book,
@@ -117,19 +126,25 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
       delta: effectiveDelta,
       comment,
       separator,
-      includeEmpty,
     });
-  }, [targetState, book, colMap, isDeltaValid, effectiveDelta, comment, separator, includeEmpty]);
+  }, [targetState, book, colMap, isDeltaValid, effectiveDelta, comment, separator]);
 
-  const hasChangesToApply =
-    isDeltaValid &&
-    previewBatch.adjustedCount > 0 &&
-    (effectiveDelta !== 0 || comment.trim().length > 0);
+  const canSubmit = isDeltaValid && previewBatch.adjustedCount > 0 && hasComment;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!hasChangesToApply) return;
-    onApply(previewBatch.entries);
+    if (!hasComment) {
+      setCommentError(true);
+      commentRef.current?.focus();
+      return;
+    }
+    if (!canSubmit) return;
+    onApply(
+      previewBatch.entries.map((entry) => ({
+        ...entry,
+        hasExplicitPendingAdjustment: true,
+      }))
+    );
     onClose();
   };
 
@@ -209,23 +224,47 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
             </div>
           </div>
 
-          {/* 2. Comment + append mode */}
+          {/* 2. Comment (required) + fixed-height box so modal never elongates */}
           <div className="space-y-2 pt-2 border-t border-slate-100">
-            <label
-              htmlFor="batch-adjust-comment"
-              className="font-bold text-slate-800 flex items-center gap-1.5"
-            >
-              <MessageSquarePlus className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" />
-              <span>Comentario a añadir (opcional)</span>
-            </label>
+            <div className="flex items-center justify-between gap-2">
+              <label
+                htmlFor="batch-adjust-comment"
+                className="font-bold text-slate-800 flex items-center gap-1.5"
+              >
+                <MessageSquarePlus className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" />
+                <span>Comentario / motivo</span>
+              </label>
+              <span
+                className={`text-[10.5px] font-semibold ${
+                  hasComment
+                    ? 'text-emerald-700'
+                    : commentError
+                      ? 'text-rose-600'
+                      : 'text-amber-700'
+                }`}
+              >
+                {hasComment ? 'Listo' : 'Obligatorio'}
+              </span>
+            </div>
 
             <textarea
+              ref={commentRef}
               id="batch-adjust-comment"
-              rows={2}
+              rows={3}
+              wrap="soft"
               value={comment}
-              onChange={(e) => setComment(e.target.value)}
+              onChange={(e) => {
+                setComment(e.target.value);
+                if (commentError && e.target.value.trim()) {
+                  setCommentError(false);
+                }
+              }}
               placeholder="Ej: Baja 1 punto por mal comportamiento / Sube 0,5 por buen trabajo..."
-              className="w-full border border-slate-300 rounded-xl px-3 py-2 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 resize-y"
+              className={`w-full h-[76px] border rounded-xl px-3 py-2 text-xs bg-white focus:outline-none focus:ring-2 resize-none overflow-y-auto break-words ${
+                commentError && !hasComment
+                  ? 'border-rose-400 focus:ring-rose-500/30'
+                  : 'border-slate-300 focus:ring-blue-500/30'
+              }`}
             />
 
             <div className="flex flex-wrap gap-1">
@@ -233,11 +272,12 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
                 <button
                   key={chip}
                   type="button"
-                  onClick={() =>
+                  onClick={() => {
                     setComment((prev) =>
                       prev.trim() ? `${prev.trim().replace(/\.$/, '')}. ${chip}` : chip
-                    )
-                  }
+                    );
+                    setCommentError(false);
+                  }}
                   className="px-2 py-0.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-[11px] font-medium text-slate-600 transition-colors"
                 >
                   + {chip}
@@ -247,21 +287,9 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
 
             <div className="space-y-1.5 pt-1">
               <div className="text-[11px] font-semibold text-slate-600">
-                Si algún alumno ya tenía comentario, añadir:
+                Si algún alumno ya tenía comentario, añadir después de:
               </div>
               <div className="grid grid-cols-2 gap-1.5">
-                <button
-                  type="button"
-                  data-comment-sep="SPACE"
-                  onClick={() => setSeparator('SPACE')}
-                  className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-semibold transition-colors ${
-                    separator === 'SPACE'
-                      ? 'border-blue-600 bg-blue-50 text-blue-800'
-                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  Punto y seguido (. )
-                </button>
                 <button
                   type="button"
                   data-comment-sep="NEWLINE"
@@ -274,45 +302,60 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
                 >
                   Punto y aparte (↵)
                 </button>
+                <button
+                  type="button"
+                  data-comment-sep="SPACE"
+                  onClick={() => setSeparator('SPACE')}
+                  className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-semibold transition-colors ${
+                    separator === 'SPACE'
+                      ? 'border-blue-600 bg-blue-50 text-blue-800'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  Punto y seguido (. )
+                </button>
               </div>
 
-              {comment.trim() && (
-                <div
-                  data-comment-append-preview="true"
-                  className="px-2.5 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 whitespace-pre-wrap break-words"
-                >
-                  <span className="font-semibold text-slate-500">Vista previa con texto previo: </span>
-                  {appendCellComment(
-                    stats.sampleExistingComment || 'Comentario anterior',
-                    comment,
-                    separator
-                  )}
-                </div>
-              )}
+              <div
+                data-comment-append-preview="true"
+                className="h-12 overflow-y-auto px-2.5 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 whitespace-pre-wrap break-words"
+              >
+                {hasComment ? (
+                  <>
+                    <span className="font-semibold text-slate-500">Vista previa: </span>
+                    {appendCellComment(
+                      stats.sampleExistingComment || 'Comentario anterior',
+                      comment,
+                      separator
+                    )}
+                  </>
+                ) : (
+                  <span className="text-slate-400">
+                    {commentError
+                      ? 'Debes escribir un comentario para poder aplicar el cambio.'
+                      : separator === 'NEWLINE'
+                        ? 'Si ya tenía comentario, se añadirá debajo tras punto y aparte.'
+                        : 'Si ya tenía comentario, se añadirá a continuación tras punto y seguido.'}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* 3. Empty cells option */}
-          <div className="pt-2 border-t border-slate-100 space-y-2">
-            <div className="flex items-center justify-between text-[11px] text-slate-600">
-              <span>
-                Selección: <strong>{stats.total}</strong>{' '}
-                {stats.total === 1 ? 'alumno' : 'alumnos'} ({stats.gradedCount} con nota ·{' '}
-                {stats.emptyCount} sin nota)
-              </span>
+          {/* 3. Summary of immediate + queued pending cells */}
+          <div className="pt-2 border-t border-slate-100 text-[11px] text-slate-600 space-y-0.5">
+            <div>
+              Se aplicará a <strong>{stats.total}</strong>{' '}
+              {stats.total === 1 ? 'alumno' : 'alumnos'}:{' '}
+              <strong>{stats.gradedCount}</strong> con nota inmediata
+              {stats.emptyCount > 0 && (
+                <>
+                  {' '}
+                  · <strong>{stats.emptyCount}</strong> sin nota aún (quedará guardado para cuando evalúes)
+                </>
+              )}
+              .
             </div>
-
-            {stats.emptyCount > 0 && (
-              <label className="flex items-center gap-2 cursor-pointer select-none text-slate-700 font-medium">
-                <input
-                  type="checkbox"
-                  checked={includeEmpty}
-                  onChange={(e) => setIncludeEmpty(e.target.checked)}
-                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                />
-                <span>Aplicar también a celdas sin nota (partir desde 0)</span>
-              </label>
-            )}
           </div>
 
           <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
@@ -326,7 +369,7 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
             <button
               type="submit"
               data-batch-adjust-apply="true"
-              disabled={!hasChangesToApply}
+              disabled={!canSubmit}
               className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-bold flex items-center gap-1.5 shadow-sm transition-colors"
             >
               <Check className="w-3.5 h-3.5" aria-hidden="true" />

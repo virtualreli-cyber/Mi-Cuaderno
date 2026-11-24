@@ -149,6 +149,12 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
     currentCell?.grade !== null && currentCell?.grade !== undefined && !Number.isNaN(currentCell.grade)
       ? currentCell.grade
       : null;
+  const pendingDelta =
+    typeof currentCell?.pendingAdjustment === 'number' &&
+    Number.isFinite(currentCell.pendingAdjustment) &&
+    currentCell.pendingAdjustment !== 0
+      ? currentCell.pendingAdjustment
+      : 0;
 
   const editorMode = column.editorMode ?? 'STANDARD';
   const counterStep = Math.abs(column.counterStep ?? 1) || 1;
@@ -253,6 +259,38 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
       maxWidthClass="w-[min(430px,95vw)]"
     >
       <form ref={formRef} onSubmit={handleSave} className="p-4 space-y-3.5 text-xs">
+        {pendingDelta !== 0 && (
+          <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-950">
+            <div className="min-w-0">
+              <div className="font-bold text-[11px]">
+                Ajuste pendiente: {pendingDelta > 0 ? '+' : ''}
+                {String(pendingDelta).replace('.', ',')} pt
+              </div>
+              <div className="text-[11px] text-amber-800">
+                {(() => {
+                  const previewInput = parseGradeInput(gradeStr);
+                  if (previewInput !== null) {
+                    const finalPreview = applyCounterDelta(previewInput, pendingDelta, column);
+                    return `Al guardar ${String(previewInput).replace('.', ',')} se aplicará automáticamente → ${String(finalPreview).replace('.', ',')}`;
+                  }
+                  return 'Se aplicará automáticamente en cuanto guardes una nota numérica o evalúes la rúbrica.';
+                })()}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setCellData(student.id, column.id, currentNumericGrade, comment, {
+                  clearPendingAdjustment: true,
+                });
+              }}
+              className="shrink-0 px-2 py-1 rounded-lg bg-white border border-amber-300 hover:bg-amber-100 text-[11px] font-semibold text-amber-900"
+            >
+              Quitar
+            </button>
+          </div>
+        )}
+
         {/* Counter quick actions (1-click opposite operation + standard step) */}
         {(editorMode === 'COUNTER_POS' ||
           editorMode === 'COUNTER_NEG' ||

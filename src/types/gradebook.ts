@@ -145,6 +145,8 @@ export interface CellEntity {
   manualSourceSignature?: string;
   /** True when a manually overridden folder cell was automatically recalculated after an upstream change */
   autoRecalcNotice?: boolean;
+  /** Pending grade delta (+/-) queued on an ungraded cell to apply automatically when a grade is later entered */
+  pendingAdjustment?: number;
 }
 
 export interface AverageConfig {

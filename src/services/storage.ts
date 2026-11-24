@@ -116,6 +116,12 @@ function hydrateCells(rawCells: Record<string, CellEntity> | undefined): Record<
           ? cell.manualSourceSignature
           : undefined,
       autoRecalcNotice: cell.autoRecalcNotice ? true : undefined,
+      pendingAdjustment:
+        typeof cell.pendingAdjustment === 'number' &&
+        Number.isFinite(cell.pendingAdjustment) &&
+        cell.pendingAdjustment !== 0
+          ? cell.pendingAdjustment
+          : undefined,
     };
   }
   return out;

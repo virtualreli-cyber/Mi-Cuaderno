@@ -819,21 +819,26 @@ describe('Weighted Averages, Cross-Tab Chaining, Rubrics & Folders', () => {
     expect(appendCellComment('Nota previa', '   ', 'SPACE')).toBe('Nota previa');
   });
 
-  it('adjusts selected or column grades by delta, respects bounds, and appends comments accurately', () => {
+  it('adjusts graded cells immediately, queues pendingAdjustment on ungraded cells, and applies pendingAdjustment when rubric is later evaluated', () => {
     const ws = createSeedWorkspace();
     const book = structuredClone(ws.classes[0]);
     const tab = book.tabs[0];
     const numCol = tab.columns.find((c) => c.type === 'NUMERIC' && !c.isLocked)!;
+    const rubCol = tab.columns.find((c) => c.type === 'RUBRIC' && !c.isLocked)!;
+    const rubric = ws.rubrics.find((r) => r.id === rubCol.rubricId)!;
     const [st0, st1, st2] = book.students;
 
     book.cells[cellKey(st0.id, numCol.id)] = { grade: 8, comment: 'Buen cuaderno' };
     book.cells[cellKey(st1.id, numCol.id)] = { grade: 0.5, comment: 'Falta material.' };
     delete book.cells[cellKey(st2.id, numCol.id)];
 
-    const colMap = new Map([[numCol.id, numCol]]);
+    const colMap = new Map([
+      [numCol.id, numCol],
+      [rubCol.id, rubCol],
+    ]);
 
-    // 1. Only graded students (-1, punto y seguido)
-    const onlyGraded = buildGradeAdjustmentBatch({
+    // 1. Default separator = punto y aparte ('NEWLINE'); st2 gets queued pendingAdjustment: -1
+    const firstBatch = buildGradeAdjustmentBatch({
       book,
       targets: [
         { studentId: st0.id, columnId: numCol.id },
@@ -843,56 +848,82 @@ describe('Weighted Averages, Cross-Tab Chaining, Rubrics & Folders', () => {
       colMap,
       delta: -1,
       comment: 'Mal comportamiento',
-      separator: 'SPACE',
-      includeEmpty: false,
     });
 
-    expect(onlyGraded.adjustedCount).toBe(2);
-    expect(onlyGraded.skippedEmptyCount).toBe(1);
-    expect(onlyGraded.entries).toEqual([
+    expect(firstBatch.immediateCount).toBe(2);
+    expect(firstBatch.queuedPendingCount).toBe(1);
+    expect(firstBatch.entries).toEqual([
       {
         studentId: st0.id,
         columnId: numCol.id,
         grade: 7,
-        comment: 'Buen cuaderno. Mal comportamiento',
+        comment: 'Buen cuaderno.\nMal comportamiento',
+        pendingAdjustment: undefined,
       },
       {
         studentId: st1.id,
         columnId: numCol.id,
         grade: numCol.minValue,
-        comment: 'Falta material. Mal comportamiento',
-      },
-    ]);
-
-    // 2. Include empty cell (+0.5, punto y aparte)
-    const withEmpty = buildGradeAdjustmentBatch({
-      book,
-      targets: [
-        { studentId: st0.id, columnId: numCol.id },
-        { studentId: st2.id, columnId: numCol.id },
-      ],
-      colMap,
-      delta: 0.5,
-      comment: 'Buen trabajo',
-      separator: 'NEWLINE',
-      includeEmpty: true,
-    });
-
-    expect(withEmpty.adjustedCount).toBe(2);
-    expect(withEmpty.skippedEmptyCount).toBe(0);
-    expect(withEmpty.entries).toEqual([
-      {
-        studentId: st0.id,
-        columnId: numCol.id,
-        grade: 8.5,
-        comment: 'Buen cuaderno.\nBuen trabajo',
+        comment: 'Falta material.\nMal comportamiento',
+        pendingAdjustment: undefined,
       },
       {
         studentId: st2.id,
         columnId: numCol.id,
-        grade: 0.5,
-        comment: 'Buen trabajo',
+        grade: null,
+        comment: 'Mal comportamiento',
+        pendingAdjustment: -1,
       },
     ]);
+
+    // Accumulate a second pending adjustment on st2 (+0.5, punto y seguido) before grading
+    book.cells[cellKey(st2.id, numCol.id)] = {
+      grade: null,
+      comment: 'Mal comportamiento',
+      pendingAdjustment: -1,
+    };
+    const secondBatch = buildGradeAdjustmentBatch({
+      book,
+      targets: [{ studentId: st2.id, columnId: numCol.id }],
+      colMap,
+      delta: 0.5,
+      comment: 'Recupera actitud',
+      separator: 'SPACE',
+    });
+    expect(secondBatch.entries[0]).toEqual({
+      studentId: st2.id,
+      columnId: numCol.id,
+      grade: null,
+      comment: 'Mal comportamiento. Recupera actitud',
+      pendingAdjustment: -0.5,
+    });
+
+    // 2. Rubric empty cell gets -1 queued; later evaluating rubric applies -1 automatically via recalculateBook
+    delete book.cells[cellKey(st2.id, rubCol.id)];
+    const rubPending = buildGradeAdjustmentBatch({
+      book,
+      targets: [{ studentId: st2.id, columnId: rubCol.id }],
+      colMap,
+      delta: -1,
+      comment: 'Entrega tardía',
+    });
+    expect(rubPending.entries[0].grade).toBeNull();
+    expect(rubPending.entries[0].pendingAdjustment).toBe(-1);
+
+    const bestLevel = [...rubric.levels].sort((a, b) => b.percentage - a.percentage)[0];
+    const selections: Record<string, { levelId: string }> = {};
+    for (const crit of rubric.criteria) {
+      selections[crit.id] = { levelId: bestLevel.id };
+    }
+    book.cells[cellKey(st2.id, rubCol.id)] = {
+      grade: null,
+      comment: 'Entrega tardía',
+      pendingAdjustment: -1,
+      rubricEval: { rubricId: rubric.id, selections },
+    };
+    const recalculated = recalculateBook(book, ws.rubrics);
+    const expectedScore = applyCounterDelta(rubric.maxScore, -1, rubCol);
+    expect(recalculated.cells[cellKey(st2.id, rubCol.id)]?.grade).toBe(expectedScore);
+    expect(recalculated.cells[cellKey(st2.id, rubCol.id)]?.pendingAdjustment).toBe(-1);
   });
 });

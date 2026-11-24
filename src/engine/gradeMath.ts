@@ -210,7 +210,7 @@ export type CommentAppendSeparator = 'SPACE' | 'NEWLINE';
 export function appendCellComment(
   existingComment: string | undefined,
   addition: string,
-  separator: CommentAppendSeparator = 'SPACE'
+  separator: CommentAppendSeparator = 'NEWLINE'
 ): string {
   const cleanAdd = addition.trim();
   const cleanPrev = (existingComment ?? '').trim();
@@ -226,6 +226,7 @@ export interface GradeAdjustmentEntry {
   columnId: string;
   grade: number | null;
   comment: string;
+  pendingAdjustment?: number;
 }
 
 export function buildGradeAdjustmentBatch(options: {
@@ -234,16 +235,17 @@ export function buildGradeAdjustmentBatch(options: {
   colMap: Map<string, ColumnEntity>;
   delta: number;
   comment: string;
-  separator: CommentAppendSeparator;
-  includeEmpty: boolean;
+  separator?: CommentAppendSeparator;
 }): {
   entries: GradeAdjustmentEntry[];
   adjustedCount: number;
-  skippedEmptyCount: number;
+  immediateCount: number;
+  queuedPendingCount: number;
 } {
-  const { book, targets, colMap, delta, comment, separator, includeEmpty } = options;
+  const { book, targets, colMap, delta, comment, separator = 'NEWLINE' } = options;
   const entries: GradeAdjustmentEntry[] = [];
-  let skippedEmptyCount = 0;
+  let immediateCount = 0;
+  let queuedPendingCount = 0;
 
   for (const { studentId, columnId } of targets) {
     const col = colMap.get(columnId);
@@ -255,32 +257,37 @@ export function buildGradeAdjustmentBatch(options: {
       existing?.grade !== undefined &&
       !Number.isNaN(existing.grade);
 
-    if (!hasGrade && !includeEmpty) {
-      skippedEmptyCount += 1;
-      continue;
-    }
-
-    const nextGrade =
-      delta !== 0
-        ? applyCounterDelta(hasGrade ? existing!.grade : null, delta, col)
-        : hasGrade
-          ? existing!.grade!
-          : null;
-
     const nextComment = appendCellComment(existing?.comment, comment, separator);
 
-    entries.push({
-      studentId,
-      columnId: col.id,
-      grade: nextGrade,
-      comment: nextComment,
-    });
+    if (hasGrade) {
+      const nextGrade =
+        delta !== 0 ? applyCounterDelta(existing!.grade, delta, col) : existing!.grade!;
+      immediateCount += 1;
+      entries.push({
+        studentId,
+        columnId: col.id,
+        grade: nextGrade,
+        comment: nextComment,
+        pendingAdjustment: undefined,
+      });
+    } else {
+      const nextPending = roundTo((existing?.pendingAdjustment ?? 0) + delta, 3);
+      queuedPendingCount += 1;
+      entries.push({
+        studentId,
+        columnId: col.id,
+        grade: null,
+        comment: nextComment,
+        pendingAdjustment: nextPending !== 0 ? nextPending : undefined,
+      });
+    }
   }
 
   return {
     entries,
     adjustedCount: entries.length,
-    skippedEmptyCount,
+    immediateCount,
+    queuedPendingCount,
   };
 }
 
@@ -415,9 +422,17 @@ export function recalculateBook(book: ClassBook, rubrics: RubricEntity[]): Class
       const cell = nextCells[k];
       if (!cell || cell.manualOverride || !cell.rubricEval) continue;
       const computed = computeRubricScore(rubric, cell.rubricEval);
+      const pending =
+        typeof cell.pendingAdjustment === 'number' && Number.isFinite(cell.pendingAdjustment)
+          ? cell.pendingAdjustment
+          : 0;
+      const finalRubricGrade =
+        computed !== null && pending !== 0
+          ? applyCounterDelta(computed, pending, col)
+          : computed;
       nextCells[k] = {
         ...cell,
-        grade: computed,
+        grade: finalRubricGrade,
       };
     }
   }
@@ -1582,6 +1597,7 @@ export function fillColumnsEmptyWithNP(
         ...prev,
         grade: zeroGrade,
         comment: 'NP',
+        pendingAdjustment: undefined,
       };
     }
 

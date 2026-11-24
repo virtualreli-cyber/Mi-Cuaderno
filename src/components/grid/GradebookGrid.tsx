@@ -5611,6 +5611,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     const cell = activeBook.cells[key];
                     const grade = cell?.grade ?? null;
                     const comment = cell?.comment ?? '';
+                    const pendingAdj =
+                      typeof cell?.pendingAdjustment === 'number' &&
+                      Number.isFinite(cell.pendingAdjustment) &&
+                      cell.pendingAdjustment !== 0
+                        ? cell.pendingAdjustment
+                        : 0;
                     const isFocusedCell =
                       selectedCoord?.studentId === student.id &&
                       selectedCoord?.columnId === col.id;
@@ -5777,7 +5783,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           }
                         }}
                         onMouseEnter={(e) => {
-                          if (isInline || !comment || !comment.trim()) return;
+                          if (isInline || (!comment.trim() && pendingAdj === 0)) return;
                           const rect = e.currentTarget.getBoundingClientRect();
                           if (cellTooltipTimerRef.current !== null) {
                             window.clearTimeout(cellTooltipTimerRef.current);
@@ -5788,7 +5794,17 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             left: rect.left,
                             width: rect.width,
                           };
-                          const txt = comment.trim();
+                          const pendingPrefix =
+                            pendingAdj !== 0
+                              ? `${grade !== null ? 'Ajuste aplicado' : 'Ajuste pendiente'}: ${
+                                  pendingAdj > 0 ? '+' : ''
+                                }${String(pendingAdj).replace('.', ',')} pt`
+                              : '';
+                          const cleanCmt = comment.trim();
+                          const txt =
+                            pendingPrefix && cleanCmt
+                              ? `${pendingPrefix}\n${cleanCmt}`
+                              : pendingPrefix || cleanCmt;
                           cellTooltipTimerRef.current = window.setTimeout(() => {
                             cellTooltipTimerRef.current = null;
                             setCellTooltip({ text: txt, rect: snapshot });
@@ -5849,7 +5865,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         )}
 
                         <div className="flex flex-col items-center justify-center gap-0 h-full w-full overflow-hidden leading-tight px-0">
-                          {grade !== null && (
+                          {grade !== null ? (
                             <span
                               style={{ fontSize: `${scaledGradeFs}px` }}
                               className="font-normal tabular-nums leading-[1.08] shrink-0"
@@ -5863,7 +5879,19 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                                 )
                               )}
                             </span>
-                          )}
+                          ) : pendingAdj !== 0 ? (
+                            <span
+                              data-pending-adjustment-badge="true"
+                              className={`px-1.5 py-0 rounded-full text-[9.5px] font-bold tabular-nums leading-[13px] shrink-0 ${
+                                pendingAdj < 0
+                                  ? 'bg-rose-100/90 text-rose-800 border border-rose-200/80'
+                                  : 'bg-emerald-100/90 text-emerald-800 border border-emerald-200/80'
+                              }`}
+                            >
+                              {pendingAdj > 0 ? '+' : ''}
+                              {String(pendingAdj).replace('.', ',')} pend.
+                            </span>
+                          ) : null}
                           {comment && (
                             <span
                               className={`w-full overflow-hidden text-ellipsis break-words [overflow-wrap:break-word] ${
@@ -8923,10 +8951,13 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         onClose={() => setBatchAdjustState(null)}
         onApply={(entries) => {
           applyCellsBatch(entries);
+          const pendingCnt = entries.filter((e) => e.grade === null && e.pendingAdjustment).length;
           showCopyToast(
-            entries.length === 1
-              ? '1 celda actualizada'
-              : `${entries.length} celdas actualizadas`
+            pendingCnt > 0
+              ? `${entries.length} celdas actualizadas (${pendingCnt} con ajuste pendiente)`
+              : entries.length === 1
+                ? '1 celda actualizada'
+                : `${entries.length} celdas actualizadas`
           );
         }}
       />

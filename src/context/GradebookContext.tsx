@@ -40,6 +40,7 @@ import {
   markEducamosCellSynced,
 } from '../engine/educamos';
 import {
+  applyCounterDelta,
   clampGradeForColumn,
   computeFolderSourceSignature,
   ensureGroupCategories,
@@ -297,7 +298,11 @@ interface GradebookContextValue {
     columnId: string,
     grade: number | null,
     comment: string,
-    options?: { preserveExistingGrade?: boolean; preserveExistingComment?: boolean }
+    options?: {
+      preserveExistingGrade?: boolean;
+      preserveExistingComment?: boolean;
+      clearPendingAdjustment?: boolean;
+    }
   ) => void;
   setMultipleCellsData: (
     targets: Array<{ studentId: string; columnId: string }>,
@@ -306,7 +311,14 @@ interface GradebookContextValue {
     options?: { preserveExistingGrade?: boolean; preserveExistingComment?: boolean }
   ) => void;
   applyCellsBatch: (
-    entries: Array<{ studentId: string; columnId: string; grade: number | null; comment: string }>
+    entries: Array<{
+      studentId: string;
+      columnId: string;
+      grade: number | null;
+      comment: string;
+      pendingAdjustment?: number;
+      hasExplicitPendingAdjustment?: boolean;
+    }>
   ) => void;
   setCellRubricEval: (
     studentId: string,
@@ -3057,7 +3069,13 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
     rawTargetId: string,
     grade: number | null,
     comment: string,
-    options?: { preserveExistingGrade?: boolean; preserveExistingComment?: boolean }
+    options?: {
+      preserveExistingGrade?: boolean;
+      preserveExistingComment?: boolean;
+      clearPendingAdjustment?: boolean;
+      hasExplicitPendingAdjustment?: boolean;
+      pendingAdjustment?: number;
+    }
   ) => {
     const targetId = normalizeCellTargetId(rawTargetId);
     const k = cellKey(studentId, targetId);
@@ -3077,9 +3095,41 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
     if (col) {
       if (col.isLocked || col.type === 'AVERAGE') return;
 
+      const prevPending =
+        !options?.clearPendingAdjustment &&
+        typeof prev?.pendingAdjustment === 'number' &&
+        Number.isFinite(prev.pendingAdjustment) &&
+        prev.pendingAdjustment !== 0
+          ? prev.pendingAdjustment
+          : undefined;
+
+      const resolvePendingOutput = (enteringNumericGrade: boolean): number | undefined => {
+        if (options?.hasExplicitPendingAdjustment) {
+          return options.pendingAdjustment && options.pendingAdjustment !== 0
+            ? options.pendingAdjustment
+            : undefined;
+        }
+        if (options?.clearPendingAdjustment) return undefined;
+        return enteringNumericGrade ? undefined : prevPending;
+      };
+
       if (col.type === 'RUBRIC') {
-        if (options?.preserveExistingGrade || (targetGrade === null && cleanComment)) {
-          if (prev?.grade === null && !prev?.rubricEval && !cleanComment) {
+        if (options?.hasExplicitPendingAdjustment && targetGrade === null) {
+          const nextPending = resolvePendingOutput(false);
+          if (!prev?.rubricEval && !cleanComment && !nextPending) {
+            delete nextCells[k];
+          } else {
+            nextCells[k] = {
+              grade: null,
+              comment: cleanComment,
+              rubricEval: prev?.rubricEval,
+              manualOverride: prev?.manualOverride,
+              pendingAdjustment: nextPending,
+            };
+          }
+        } else if (options?.preserveExistingGrade || (targetGrade === null && (cleanComment || prevPending))) {
+          const nextPending = resolvePendingOutput(false);
+          if (prev?.grade === null && !prev?.rubricEval && !cleanComment && !nextPending) {
             delete nextCells[k];
           } else {
             nextCells[k] = {
@@ -3087,10 +3137,15 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
               comment: cleanComment,
               rubricEval: prev?.rubricEval,
               manualOverride: prev?.manualOverride,
+              pendingAdjustment: nextPending,
             };
           }
         } else if (targetGrade !== null) {
-          const finalGrade = clampGradeForColumn(targetGrade, col);
+          const adjustedTarget =
+            !options?.hasExplicitPendingAdjustment && prevPending
+              ? applyCounterDelta(targetGrade, prevPending, col)
+              : targetGrade;
+          const finalGrade = clampGradeForColumn(adjustedTarget, col);
           const unchangedRubricGrade =
             Boolean(prev?.rubricEval) &&
             !prev?.manualOverride &&
@@ -3103,6 +3158,7 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
             comment: cleanComment,
             rubricEval: prev?.rubricEval,
             manualOverride: unchangedRubricGrade ? undefined : true,
+            pendingAdjustment: resolvePendingOutput(true),
           };
         } else {
           delete nextCells[k];
@@ -3111,14 +3167,20 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
       }
 
       // NUMERIC column
-      const finalGrade = targetGrade !== null ? clampGradeForColumn(targetGrade, col) : null;
-      if (finalGrade === null && !cleanComment) {
+      const adjustedNumeric =
+        !options?.hasExplicitPendingAdjustment && targetGrade !== null && prevPending
+          ? applyCounterDelta(targetGrade, prevPending, col)
+          : targetGrade;
+      const finalGrade = adjustedNumeric !== null ? clampGradeForColumn(adjustedNumeric, col) : null;
+      const nextPending = resolvePendingOutput(finalGrade !== null);
+      if (finalGrade === null && !cleanComment && !nextPending) {
         delete nextCells[k];
       } else {
         nextCells[k] = {
           ...prev,
           grade: finalGrade,
           comment: cleanComment,
+          pendingAdjustment: nextPending,
         };
       }
       return;
@@ -3220,7 +3282,12 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
           const keepManual = preserveManualOverride && Boolean(prev?.manualOverride);
           const nextCells = { ...book.cells };
 
-          if (!hasSelections && !cleanComment && !keepManual) {
+          const keepPending =
+            typeof prev?.pendingAdjustment === 'number' && prev.pendingAdjustment !== 0
+              ? prev.pendingAdjustment
+              : undefined;
+
+          if (!hasSelections && !cleanComment && !keepManual && !keepPending) {
             delete nextCells[k];
           } else {
             nextCells[k] = {
@@ -3228,6 +3295,7 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
               comment: cleanComment,
               rubricEval,
               manualOverride: keepManual ? prev?.manualOverride : undefined,
+              ...(keepPending ? { pendingAdjustment: keepPending } : {}),
             };
           }
           return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
@@ -3278,13 +3346,18 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
             }
             const cleanComment = prev?.comment ?? '';
             const hasSelections = Object.keys(nextSelections).length > 0;
-            if (!hasSelections && !cleanComment) {
+            const keepPending =
+              typeof prev?.pendingAdjustment === 'number' && prev.pendingAdjustment !== 0
+                ? prev.pendingAdjustment
+                : undefined;
+            if (!hasSelections && !cleanComment && !keepPending) {
               delete nextCells[k];
             } else {
               nextCells[k] = {
                 grade: null,
                 comment: cleanComment,
                 rubricEval: { rubricId, selections: nextSelections },
+                ...(keepPending ? { pendingAdjustment: keepPending } : {}),
               };
             }
           }
@@ -3330,14 +3403,19 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
                 ? cleanBatchComment
                 : (prev?.comment ?? '');
             const hasSelections = Object.keys(nextSelections).length > 0;
+            const keepPending =
+              typeof prev?.pendingAdjustment === 'number' && prev.pendingAdjustment !== 0
+                ? prev.pendingAdjustment
+                : undefined;
 
-            if (!hasSelections && !cleanComment) {
+            if (!hasSelections && !cleanComment && !keepPending) {
               delete nextCells[k];
             } else {
               nextCells[k] = {
                 grade: null,
                 comment: cleanComment,
                 rubricEval: { rubricId, selections: nextSelections },
+                ...(keepPending ? { pendingAdjustment: keepPending } : {}),
               };
             }
           }
@@ -3415,7 +3493,13 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
               entry.studentId,
               entry.columnId,
               entry.grade,
-              entry.comment
+              entry.comment,
+              entry.hasExplicitPendingAdjustment
+                ? {
+                    hasExplicitPendingAdjustment: true,
+                    pendingAdjustment: entry.pendingAdjustment,
+                  }
+                : undefined
             );
           }
 
