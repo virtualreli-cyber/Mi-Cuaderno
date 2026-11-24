@@ -1,13 +1,15 @@
-import { recalculateBook } from './gradeMath';
+import { ensureGroupCategories, recalculateBook } from './gradeMath';
 import type {
   CellEntity,
   ClassBook,
   ColumnEntity,
   FolderEntity,
   GradebookWorkspace,
+  GroupCategoryDef,
   LomloeCurriculum,
   RubricEntity,
   StudentEntity,
+  StudentGroupDef,
   TabEntity,
   ViewSettings,
 } from '../types/gradebook';
@@ -177,6 +179,183 @@ function stripFolderUi(folder: FolderEntity): Omit<FolderEntity, 'width' | 'isCo
 function stripColumnUi(col: ColumnEntity): Omit<ColumnEntity, 'width'> {
   const { width: _w, ...rest } = col;
   return rest;
+}
+
+function dedupeStudentGroups(groups: StudentGroupDef[]): StudentGroupDef[] {
+  const deduped: StudentGroupDef[] = [];
+  const seen = new Set<string>();
+  for (const g of groups) {
+    const low = g.name.trim().toLowerCase();
+    if (!low || seen.has(low)) continue;
+    seen.add(low);
+    deduped.push({ ...g, orderIndex: deduped.length });
+  }
+  return deduped;
+}
+
+function mergeGroupDefs(
+  baseGroups: StudentGroupDef[] | undefined,
+  localGroups: StudentGroupDef[],
+  remoteGroups: StudentGroupDef[],
+  preferLocal: boolean
+): { groups: StudentGroupDef[]; localChanges: number; remoteChanges: number } {
+  const merged = mergeById<StudentGroupDef>(
+    baseGroups,
+    localGroups,
+    remoteGroups,
+    preferLocal
+  );
+  return {
+    groups: dedupeStudentGroups(merged.items),
+    localChanges: merged.localChanges,
+    remoteChanges: merged.remoteChanges,
+  };
+}
+
+function mergeStringRecord3Way(
+  baseMap: Record<string, string> | undefined,
+  localMap: Record<string, string> | undefined,
+  remoteMap: Record<string, string> | undefined,
+  validKeys: Set<string>,
+  preferLocal: boolean
+): { map: Record<string, string>; localChanges: number; remoteChanges: number } {
+  const out: Record<string, string> = {};
+  let localChanges = 0;
+  let remoteChanges = 0;
+  const allKeys = new Set<string>([
+    ...Object.keys(baseMap ?? {}),
+    ...Object.keys(localMap ?? {}),
+    ...Object.keys(remoteMap ?? {}),
+  ]);
+  const hasBase = baseMap !== undefined;
+
+  for (const k of allKeys) {
+    if (!validKeys.has(k)) continue;
+    const bVal = baseMap?.[k]?.trim() || undefined;
+    const lVal = localMap?.[k]?.trim() || undefined;
+    const rVal = remoteMap?.[k]?.trim() || undefined;
+
+    if (lVal === rVal) {
+      if (lVal) out[k] = lVal;
+      continue;
+    }
+    if (hasBase && lVal === bVal) {
+      if (rVal) out[k] = rVal;
+      remoteChanges += 1;
+      continue;
+    }
+    if (hasBase && rVal === bVal) {
+      if (lVal) out[k] = lVal;
+      localChanges += 1;
+      continue;
+    }
+    if (!hasBase) {
+      if (lVal && !rVal) {
+        out[k] = lVal;
+        localChanges += 1;
+        continue;
+      }
+      if (rVal && !lVal) {
+        out[k] = rVal;
+        remoteChanges += 1;
+        continue;
+      }
+    }
+    const chosen = preferLocal ? lVal : rVal;
+    if (chosen) out[k] = chosen;
+    localChanges += 1;
+    remoteChanges += 1;
+  }
+
+  return { map: out, localChanges, remoteChanges };
+}
+
+function mergeGroupCategory(
+  baseCat: GroupCategoryDef | undefined,
+  localCat: GroupCategoryDef,
+  remoteCat: GroupCategoryDef,
+  validStudentIds: Set<string>,
+  preferLocal: boolean
+): { category: GroupCategoryDef; localChanges: number; remoteChanges: number } {
+  let localChanges = 0;
+  let remoteChanges = 0;
+
+  let mergedName = preferLocal ? localCat.name : remoteCat.name;
+  if (localCat.name === remoteCat.name) {
+    mergedName = localCat.name;
+  } else if (baseCat && localCat.name === baseCat.name) {
+    mergedName = remoteCat.name;
+    remoteChanges += 1;
+  } else if (baseCat && remoteCat.name === baseCat.name) {
+    mergedName = localCat.name;
+    localChanges += 1;
+  } else {
+    localChanges += 1;
+    remoteChanges += 1;
+  }
+
+  const groupMerge = mergeGroupDefs(
+    baseCat?.groups,
+    localCat.groups ?? [],
+    remoteCat.groups ?? [],
+    preferLocal
+  );
+  localChanges += groupMerge.localChanges;
+  remoteChanges += groupMerge.remoteChanges;
+
+  const assignMerge = mergeStringRecord3Way(
+    baseCat?.assignments,
+    localCat.assignments,
+    remoteCat.assignments,
+    validStudentIds,
+    preferLocal
+  );
+  localChanges += assignMerge.localChanges;
+  remoteChanges += assignMerge.remoteChanges;
+
+  const baseOrder = baseCat?.studentOrder;
+  const localOrder = localCat.studentOrder;
+  const remoteOrder = remoteCat.studentOrder;
+  let mergedStudentOrder: Record<string, string[]> | undefined;
+  if (localOrder || remoteOrder) {
+    const orderKeys = new Set([
+      ...Object.keys(baseOrder ?? {}),
+      ...Object.keys(localOrder ?? {}),
+      ...Object.keys(remoteOrder ?? {}),
+    ]);
+    const nextOrder: Record<string, string[]> = {};
+    for (const grpKey of orderKeys) {
+      const bArr = baseOrder?.[grpKey];
+      const lArr = localOrder?.[grpKey];
+      const rArr = remoteOrder?.[grpKey];
+      let chosenArr: string[] | undefined;
+      if (sameValue(lArr, rArr)) chosenArr = lArr;
+      else if (baseCat && sameValue(lArr, bArr)) chosenArr = rArr;
+      else if (baseCat && sameValue(rArr, bArr)) chosenArr = lArr;
+      else if (!baseCat && lArr && !rArr) chosenArr = lArr;
+      else if (!baseCat && rArr && !lArr) chosenArr = rArr;
+      else chosenArr = preferLocal ? lArr : rArr;
+      if (chosenArr && chosenArr.length > 0) {
+        const filtered = chosenArr.filter((sid) => validStudentIds.has(sid));
+        if (filtered.length > 0) nextOrder[grpKey] = filtered;
+      }
+    }
+    if (Object.keys(nextOrder).length > 0) {
+      mergedStudentOrder = nextOrder;
+    }
+  }
+
+  return {
+    category: {
+      id: localCat.id,
+      name: mergedName,
+      groups: groupMerge.groups,
+      assignments: assignMerge.map,
+      ...(mergedStudentOrder ? { studentOrder: mergedStudentOrder } : {}),
+    },
+    localChanges,
+    remoteChanges,
+  };
 }
 
 function mergeTab(
@@ -441,39 +620,158 @@ function mergeBook(
   }
 
   // Merge book-level scalar & group metadata
-  const pickBookField = <K extends keyof ClassBook>(field: K): ClassBook[K] => {
-    const bVal = baseBook?.[field];
+  const pickBookField = <K extends keyof ClassBook>(
+    field: K,
+    normalize: (val: ClassBook[K]) => unknown = (v) => v
+  ): ClassBook[K] => {
+    const bVal = baseBook ? baseBook[field] : undefined;
     const lVal = localBook[field];
     const rVal = remoteBook[field];
-    if (sameValue(lVal, rVal)) return lVal;
-    if (baseBook && sameValue(lVal, bVal)) return rVal;
-    if (baseBook && sameValue(rVal, bVal)) return lVal;
+    const nb = baseBook ? normalize(bVal as ClassBook[K]) : undefined;
+    const nl = normalize(lVal);
+    const nr = normalize(rVal);
+    if (sameValue(nl, nr)) return lVal;
+    if (baseBook && sameValue(nl, nb)) {
+      remoteChanges += 1;
+      return rVal;
+    }
+    if (baseBook && sameValue(nr, nb)) {
+      localChanges += 1;
+      return lVal;
+    }
+    localChanges += 1;
+    remoteChanges += 1;
     return preferLocal ? lVal : rVal;
   };
+
+  // Semantic 3-way merge of class grouping configuration (categories, groups, student assignments)
+  const hasAnyCategories =
+    Boolean(baseBook?.groupCategories && baseBook.groupCategories.length > 0) ||
+    Boolean(localBook.groupCategories && localBook.groupCategories.length > 0) ||
+    Boolean(remoteBook.groupCategories && remoteBook.groupCategories.length > 0);
+
+  let mergedGroups: StudentGroupDef[] | undefined;
+  let mergedGroupCategories: GroupCategoryDef[] | undefined;
+  let mergedActiveGroupCategoryId: string | null | undefined;
+  let alignedStudents = studentMerge.items;
+
+  if (hasAnyCategories) {
+    const bCats = baseBook ? ensureGroupCategories(baseBook).categories : undefined;
+    const lCats = ensureGroupCategories(localBook).categories;
+    const rCats = ensureGroupCategories(remoteBook).categories;
+    const catMerge = mergeById<GroupCategoryDef>(
+      bCats,
+      lCats,
+      rCats,
+      preferLocal,
+      (bCat, lCat, rCat) => {
+        const m = mergeGroupCategory(bCat, lCat, rCat, validStudentIds, preferLocal);
+        localChanges += m.localChanges;
+        remoteChanges += m.remoteChanges;
+        return m.category;
+      }
+    );
+    localChanges += catMerge.localChanges;
+    remoteChanges += catMerge.remoteChanges;
+
+    // Ensure every surviving category has student assignments pruned cleanly to surviving students
+    mergedGroupCategories = catMerge.items.map((cat) => {
+      const prunedAssignments: Record<string, string> = {};
+      for (const [sid, grpName] of Object.entries(cat.assignments ?? {})) {
+        if (validStudentIds.has(sid) && grpName?.trim()) {
+          prunedAssignments[sid] = grpName.trim();
+        }
+      }
+      return {
+        ...cat,
+        groups: dedupeStudentGroups(cat.groups ?? []),
+        assignments: prunedAssignments,
+      };
+    });
+
+    const resolveExplicitActiveCatId = (book: ClassBook | undefined): string | null =>
+      book?.groupCategories && book.groupCategories.length > 0
+        ? (book.activeGroupCategoryId ?? book.groupCategories[0].id)
+        : null;
+    const bActiveCat = resolveExplicitActiveCatId(baseBook);
+    const lActiveCat = resolveExplicitActiveCatId(localBook);
+    const rActiveCat = resolveExplicitActiveCatId(remoteBook);
+
+    let chosenActiveCat: string | null;
+    if (lActiveCat === rActiveCat) {
+      chosenActiveCat = lActiveCat;
+    } else if (baseBook && lActiveCat === bActiveCat) {
+      chosenActiveCat = rActiveCat;
+      if (rActiveCat !== null) remoteChanges += 1;
+    } else if (baseBook && rActiveCat === bActiveCat) {
+      chosenActiveCat = lActiveCat;
+      if (lActiveCat !== null) localChanges += 1;
+    } else if (!baseBook && lActiveCat && !rActiveCat) {
+      chosenActiveCat = lActiveCat;
+      localChanges += 1;
+    } else if (!baseBook && rActiveCat && !lActiveCat) {
+      chosenActiveCat = rActiveCat;
+      remoteChanges += 1;
+    } else {
+      chosenActiveCat = preferLocal ? lActiveCat : rActiveCat;
+      localChanges += 1;
+      remoteChanges += 1;
+    }
+
+    mergedActiveGroupCategoryId =
+      chosenActiveCat && mergedGroupCategories.some((c) => c.id === chosenActiveCat)
+        ? chosenActiveCat
+        : (mergedGroupCategories[0]?.id ?? undefined);
+
+    const defaultCat = mergedGroupCategories[0];
+    mergedGroups = defaultCat?.groups;
+    if (defaultCat) {
+      alignedStudents = studentMerge.items.map((st) => ({
+        ...st,
+        group: defaultCat.assignments[st.id] || undefined,
+      }));
+    }
+  } else {
+    const legacyGroupMerge = mergeGroupDefs(
+      baseBook?.groups,
+      localBook.groups ?? [],
+      remoteBook.groups ?? [],
+      preferLocal
+    );
+    localChanges += legacyGroupMerge.localChanges;
+    remoteChanges += legacyGroupMerge.remoteChanges;
+    mergedGroups =
+      legacyGroupMerge.groups.length > 0
+        ? legacyGroupMerge.groups
+        : localBook.groups !== undefined || remoteBook.groups !== undefined
+          ? []
+          : undefined;
+    mergedActiveGroupCategoryId = pickBookField('activeGroupCategoryId', (v) => v ?? null);
+  }
 
   const mergedBookRaw: ClassBook = {
     ...remoteBook,
     id: localBook.id,
     name: pickBookField('name'),
     subject: pickBookField('subject'),
-    school: pickBookField('school'),
+    school: pickBookField('school', (v) => v ?? null),
     year: pickBookField('year'),
     color: pickBookField('color'),
     passThreshold: pickBookField('passThreshold'),
     sortMode: pickBookField('sortMode'),
-    groupByGroups: pickBookField('groupByGroups'),
-    groups: pickBookField('groups'),
-    groupCategories: pickBookField('groupCategories'),
-    activeGroupCategoryId: pickBookField('activeGroupCategoryId'),
+    groupByGroups: Boolean(pickBookField('groupByGroups', (v) => Boolean(v))),
+    groups: mergedGroups,
+    groupCategories: mergedGroupCategories,
+    activeGroupCategoryId: mergedActiveGroupCategoryId,
     // Keep all device-local aspect & view state untouched by remote devices
     groupSpacerRows: localBook.groupSpacerRows,
     collapsedGroups: localBook.collapsedGroups,
-    summaryRows: pickBookField('summaryRows'),
-    groupSummaryRows: pickBookField('groupSummaryRows'),
-    lomloeCurriculumId: pickBookField('lomloeCurriculumId'),
+    summaryRows: pickBookField('summaryRows', (v) => v ?? []),
+    groupSummaryRows: pickBookField('groupSummaryRows', (v) => v ?? []),
+    lomloeCurriculumId: pickBookField('lomloeCurriculumId', (v) => v ?? null),
     showLomloeRow: localBook.showLomloeRow,
     isTemplate: localBook.isTemplate ?? remoteBook.isTemplate,
-    students: studentMerge.items,
+    students: alignedStudents,
     tabs: tabMerge.items,
     cells: mergedCells,
   };

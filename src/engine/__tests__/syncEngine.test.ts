@@ -225,4 +225,114 @@ describe('syncEngine — 3-way offline multi-device merge', () => {
       }
     }
   });
+
+  it('merges class group categories, group definitions, student assignments, active category and groupByGroups across devices without losing either side', () => {
+    const base = createSeedWorkspace();
+    const cls = base.classes[0];
+    const st0 = cls.students[0];
+    const st1 = cls.students[1];
+    const st2 = cls.students[2];
+
+    // Base already has default group category with st0 assigned
+    base.classes[0].groupByGroups = false;
+    base.classes[0].groups = [
+      { id: 'grp-a', name: 'Equipo A', color: '#DBEAFE', orderIndex: 0 },
+    ];
+    base.classes[0].groupCategories = [
+      {
+        id: 'cat-default',
+        name: 'Grupos de clase',
+        groups: [{ id: 'grp-a', name: 'Equipo A', color: '#DBEAFE', orderIndex: 0 }],
+        assignments: { [st0.id]: 'Equipo A' },
+      },
+    ];
+    base.classes[0].activeGroupCategoryId = 'cat-default';
+    base.classes[0].students[0].group = 'Equipo A';
+
+    // Device 1 (local iPad, offline): adds Equipo B, assigns st1, turns ON groupByGroups
+    const localIpad = structuredClone(base);
+    localIpad.classes[0].groupByGroups = true;
+    localIpad.classes[0].groupCategories![0].groups.push({
+      id: 'grp-b',
+      name: 'Equipo B',
+      color: '#DCFCE7',
+      orderIndex: 1,
+    });
+    localIpad.classes[0].groupCategories![0].assignments[st1.id] = 'Equipo B';
+    localIpad.classes[0].groups = structuredClone(localIpad.classes[0].groupCategories![0].groups);
+    localIpad.classes[0].students[1].group = 'Equipo B';
+    localIpad.updatedAt = '2026-11-24T08:00:00.000Z';
+
+    // Device 2 (remote Mac, offline): creates a new category "Talleres", assigns st2 in cat-default, selects "Talleres"
+    const remoteMac = structuredClone(base);
+    remoteMac.classes[0].groupCategories![0].assignments[st2.id] = 'Equipo A';
+    remoteMac.classes[0].students[2].group = 'Equipo A';
+    remoteMac.classes[0].groupCategories!.push({
+      id: 'cat-talleres',
+      name: 'Talleres',
+      groups: [{ id: 'grp-t1', name: 'Mesa 1', color: '#FEF3C7', orderIndex: 0 }],
+      assignments: { [st0.id]: 'Mesa 1', [st1.id]: 'Mesa 1' },
+    });
+    remoteMac.classes[0].activeGroupCategoryId = 'cat-talleres';
+    remoteMac.updatedAt = '2026-11-24T08:05:00.000Z';
+
+    const result = mergeWorkspaces3Way(base, localIpad, remoteMac);
+    const mergedBook = result.workspace.classes[0];
+
+    expect(result.hadDivergence).toBe(true);
+    expect(mergedBook.groupByGroups).toBe(true);
+    expect(mergedBook.activeGroupCategoryId).toBe('cat-talleres');
+    expect(mergedBook.groupCategories?.map((c) => c.id)).toEqual(['cat-default', 'cat-talleres']);
+
+    const defaultCat = mergedBook.groupCategories!.find((c) => c.id === 'cat-default')!;
+    expect(defaultCat.groups.map((g) => g.name)).toEqual(['Equipo A', 'Equipo B']);
+    expect(defaultCat.assignments).toEqual({
+      [st0.id]: 'Equipo A',
+      [st1.id]: 'Equipo B',
+      [st2.id]: 'Equipo A',
+    });
+    expect(mergedBook.students.find((s) => s.id === st1.id)?.group).toBe('Equipo B');
+    expect(mergedBook.students.find((s) => s.id === st2.id)?.group).toBe('Equipo A');
+
+    const talleresCat = mergedBook.groupCategories!.find((c) => c.id === 'cat-talleres')!;
+    expect(talleresCat.groups.map((g) => g.name)).toEqual(['Mesa 1']);
+    expect(talleresCat.assignments).toEqual({ [st0.id]: 'Mesa 1', [st1.id]: 'Mesa 1' });
+  });
+
+  it('preserves remote groupCategories when local device had uninitialized groupCategories and newer timestamp without base', () => {
+    const legacyLocal = createSeedWorkspace();
+    legacyLocal.classes[0].groupCategories = undefined;
+    legacyLocal.classes[0].groups = undefined;
+    legacyLocal.classes[0].groupByGroups = false;
+    legacyLocal.updatedAt = '2026-11-24T09:10:00.000Z';
+
+    const remoteWithGroups = createSeedWorkspace();
+    const st0 = remoteWithGroups.classes[0].students[0];
+    remoteWithGroups.classes[0].groupByGroups = true;
+    remoteWithGroups.classes[0].groupCategories = [
+      {
+        id: 'cat-default',
+        name: 'Grupos de clase',
+        groups: [{ id: 'grp-1', name: 'Grupo Alfa', color: '#FCE7F3', orderIndex: 0 }],
+        assignments: { [st0.id]: 'Grupo Alfa' },
+      },
+      {
+        id: 'cat-debates',
+        name: 'Debates',
+        groups: [{ id: 'grp-d1', name: 'A favor', color: '#DCFCE7', orderIndex: 0 }],
+        assignments: { [st0.id]: 'A favor' },
+      },
+    ];
+    remoteWithGroups.classes[0].activeGroupCategoryId = 'cat-debates';
+    remoteWithGroups.updatedAt = '2026-11-24T09:00:00.000Z';
+
+    const result = mergeWorkspaces3Way(null, legacyLocal, remoteWithGroups);
+    const mergedBook = result.workspace.classes[0];
+
+    expect(mergedBook.groupCategories?.map((c) => c.id)).toContain('cat-debates');
+    expect(mergedBook.activeGroupCategoryId).toBe('cat-debates');
+    expect(
+      mergedBook.groupCategories?.find((c) => c.id === 'cat-debates')?.assignments[st0.id]
+    ).toBe('A favor');
+  });
 });

@@ -2436,9 +2436,39 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         id: makeId('st'),
         orderIndex: activeBook.students.length,
       };
-      mutateActiveBook((book, ws) =>
-        recalculateBook({ ...book, students: [...book.students, st] }, ws.rubrics)
-      );
+      mutateActiveBook((book, ws) => {
+        let nextBook: ClassBook = { ...book, students: [...book.students, st] };
+        const cleanGroup = st.group?.trim();
+        if (cleanGroup && book.groupCategories && book.groupCategories.length > 0) {
+          const { categories } = ensureGroupCategories(book);
+          const defaultCat = categories[0];
+          const hasGroup = defaultCat.groups.some(
+            (g) => g.name.trim().toLowerCase() === cleanGroup.toLowerCase()
+          );
+          const nextCatGroups = hasGroup
+            ? defaultCat.groups
+            : [
+                ...defaultCat.groups,
+                {
+                  id: makeId('grp'),
+                  name: cleanGroup,
+                  color: getGroupDefaultColor(cleanGroup),
+                  orderIndex: defaultCat.groups.length,
+                },
+              ];
+          const updatedCat: GroupCategoryDef = {
+            ...defaultCat,
+            groups: nextCatGroups,
+            assignments: { ...defaultCat.assignments, [st.id]: cleanGroup },
+          };
+          nextBook = {
+            ...nextBook,
+            groups: nextCatGroups,
+            groupCategories: [updatedCat, ...categories.slice(1)],
+          };
+        }
+        return recalculateBook(nextBook, ws.rubrics);
+      });
       return st;
     },
     [activeBook, mutateActiveBook]
@@ -2449,8 +2479,9 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (!activeBook || incoming.length === 0) return;
       mutateActiveBook((book, ws) => {
         let nextStudents: StudentEntity[];
+        let addedStudents: StudentEntity[];
         if (mode === 'REPLACE') {
-          nextStudents = incoming.map((s, idx) => ({
+          addedStudents = incoming.map((s, idx) => ({
             id: makeId('st'),
             firstName: s.firstName,
             lastName: s.lastName,
@@ -2458,9 +2489,10 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             tags: [],
             orderIndex: idx,
           }));
+          nextStudents = addedStudents;
         } else {
           const startIndex = book.students.length;
-          const newStudents = incoming.map((s, idx) => ({
+          addedStudents = incoming.map((s, idx) => ({
             id: makeId('st'),
             firstName: s.firstName,
             lastName: s.lastName,
@@ -2468,9 +2500,46 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             tags: [],
             orderIndex: startIndex + idx,
           }));
-          nextStudents = [...book.students, ...newStudents];
+          nextStudents = [...book.students, ...addedStudents];
         }
-        return recalculateBook({ ...book, students: nextStudents }, ws.rubrics);
+
+        let nextBook: ClassBook = { ...book, students: nextStudents };
+        if (book.groupCategories && book.groupCategories.length > 0) {
+          const { categories } = ensureGroupCategories(book);
+          const validIds = new Set(nextStudents.map((s) => s.id));
+          const updatedCategories = categories.map((cat, idx) => {
+            const cleanedAssignments: Record<string, string> = {};
+            for (const [sid, grp] of Object.entries(cat.assignments)) {
+              if (validIds.has(sid)) cleanedAssignments[sid] = grp;
+            }
+            if (idx !== 0) {
+              return { ...cat, assignments: cleanedAssignments };
+            }
+            const nextGroups = [...cat.groups];
+            for (const st of addedStudents) {
+              const cleanGroup = st.group?.trim();
+              if (!cleanGroup) continue;
+              cleanedAssignments[st.id] = cleanGroup;
+              if (
+                !nextGroups.some((g) => g.name.trim().toLowerCase() === cleanGroup.toLowerCase())
+              ) {
+                nextGroups.push({
+                  id: makeId('grp'),
+                  name: cleanGroup,
+                  color: getGroupDefaultColor(cleanGroup),
+                  orderIndex: nextGroups.length,
+                });
+              }
+            }
+            return { ...cat, groups: nextGroups, assignments: cleanedAssignments };
+          });
+          nextBook = {
+            ...nextBook,
+            groups: updatedCategories[0]?.groups,
+            groupCategories: updatedCategories,
+          };
+        }
+        return recalculateBook(nextBook, ws.rubrics);
       });
     },
     [activeBook, mutateActiveBook]
@@ -2512,10 +2581,16 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         for (const k of Object.keys(nextCells)) {
           if (k.startsWith(`${studentId}::`)) delete nextCells[k];
         }
+        const nextCategories = book.groupCategories?.map((cat) => {
+          const nextAssignments = { ...cat.assignments };
+          delete nextAssignments[studentId];
+          return { ...cat, assignments: nextAssignments };
+        });
         return recalculateBook(
           {
             ...book,
             students: book.students.filter((s) => s.id !== studentId),
+            ...(nextCategories ? { groupCategories: nextCategories } : {}),
             cells: nextCells,
           },
           ws.rubrics
