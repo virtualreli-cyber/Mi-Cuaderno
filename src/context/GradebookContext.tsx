@@ -572,8 +572,9 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [markCloudSynced]
   );
 
-  // Track online / offline connectivity & auto-reconcile pending offline changes when reconnected
+  // Track online / offline connectivity & auto-reconcile pending offline changes when reconnected or resumed
   useEffect(() => {
+    let lastResumeCheck = 0;
     const handleOnline = () => {
       setIsOnline(true);
       if (userRef.current && isFirebaseConfigured) {
@@ -587,11 +588,23 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setSyncStatus('offline');
       setSyncError(null);
     };
+    const handleWakeSync = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!navigator.onLine || !userRef.current || !isFirebaseConfigured || !cloudReadyRef.current) return;
+      const now = Date.now();
+      if (now - lastResumeCheck < 4_000) return;
+      lastResumeCheck = now;
+      void reconcileWithCloud(userRef.current.uid);
+    };
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    window.addEventListener('focus', handleWakeSync);
+    document.addEventListener('visibilitychange', handleWakeSync);
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('focus', handleWakeSync);
+      document.removeEventListener('visibilitychange', handleWakeSync);
     };
   }, [reconcileWithCloud]);
 
@@ -745,7 +758,13 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         const uid = pendingCloudUserRef.current;
         pendingCloudUserRef.current = null;
         lastWrittenUpdatedAtRef.current = latest.updatedAt;
-        void saveFirebaseWorkspace(uid, latest);
+        void saveFirebaseWorkspace(uid, latest)
+          .then(() => {
+            markCloudSynced(uid, latest);
+          })
+          .catch(() => {
+            // Keep pending local marker so next reconnect/resume reconciles cleanly
+          });
       }
     };
     const onVisibility = () => {
@@ -757,7 +776,7 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       window.removeEventListener('pagehide', flushNow);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, []);
+  }, [markCloudSynced]);
 
   const isTemplateMode = workspace.activeMode === 'TEMPLATE';
 
