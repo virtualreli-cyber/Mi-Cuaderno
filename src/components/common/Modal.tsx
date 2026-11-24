@@ -218,7 +218,7 @@ export const Modal: React.FC<ModalProps> = ({
   subtitle,
   maxWidthClass = 'w-[min(640px,95vw)]',
   headerActions,
-  closedBy = 'any',
+  closedBy = 'closerequest',
   isNested = false,
   notice = null,
   children,
