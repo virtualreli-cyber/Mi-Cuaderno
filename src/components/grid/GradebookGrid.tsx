@@ -103,6 +103,10 @@ import {
 } from '../common/ZoomControls';
 import { LomloeCompetenceBadge } from '../lomloe/LomloeCompetenceBadge';
 import { LomloeCriteriaPickerPopover } from '../lomloe/LomloeCriteriaPickerPopover';
+import {
+  BatchAdjustGradeModal,
+  type BatchAdjustTargetState,
+} from '../modals/BatchAdjustGradeModal';
 
 interface GradebookGridProps {
   searchQuery: string;
@@ -404,6 +408,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     text: string;
     rect: { top: number; bottom: number; left: number; width: number };
   } | null>(null);
+  const [batchAdjustState, setBatchAdjustState] = useState<BatchAdjustTargetState | null>(null);
   const [touchMultiSelect, setTouchMultiSelect] = useState(false);
   const [editingGroup, setEditingGroup] = useState<{
     key: string;
@@ -741,6 +746,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setCriterionPicker(null);
     setLomloePicker(null);
     setEducamosMenu(null);
+    setBatchAdjustState(null);
     setTouchMultiSelect(false);
     setEditingGroup(null);
   }, [activeBook?.id, activeTab?.id]);
@@ -1254,6 +1260,40 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             .map(({ studentId, columnId }) => ({ studentId, columnId })),
     [activeTab?.isLocked, selectedTargets]
   );
+
+  const adjustableSelectionTargets = useMemo(
+    () =>
+      activeTab?.isLocked
+        ? []
+        : selectedTargets
+            .filter(
+              (t) =>
+                !t.isFolder &&
+                !t.col.isLocked &&
+                (t.col.type === 'NUMERIC' || t.col.type === 'RUBRIC')
+            )
+            .map(({ studentId, columnId }) => ({ studentId, columnId })),
+    [activeTab?.isLocked, selectedTargets]
+  );
+
+  const openBatchAdjustForSelection = useCallback(() => {
+    if (adjustableSelectionTargets.length === 0) return;
+    const distinctColIds = [...new Set(adjustableSelectionTargets.map((t) => t.columnId))];
+    const singleCol =
+      distinctColIds.length === 1
+        ? visibleColumns.find((c) => c.id === distinctColIds[0]) ?? null
+        : null;
+    const subtitle = singleCol
+      ? `${singleCol.title} · ${adjustableSelectionTargets.length} ${
+          adjustableSelectionTargets.length === 1 ? 'alumno seleccionado' : 'alumnos seleccionados'
+        }`
+      : `${adjustableSelectionTargets.length} celdas seleccionadas`;
+    setBatchAdjustState({
+      title: 'Ajustar notas seleccionadas',
+      subtitle,
+      targets: adjustableSelectionTargets,
+    });
+  }, [adjustableSelectionTargets, visibleColumns]);
 
   const clearableTargets = useMemo(
     () =>
@@ -7026,6 +7066,26 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   </button>
                   <button
                     type="button"
+                    data-group-batch-adjust-btn="true"
+                    disabled={targets.length === 0}
+                    onClick={() => {
+                      const grpName = groupColAction.bucketName;
+                      const colTitle = colEntity.title;
+                      const batchTargets = [...targets];
+                      setGroupColAction(null);
+                      setBatchAdjustState({
+                        title: 'Ajustar notas del grupo',
+                        subtitle: `${grpName} · ${colTitle} · ${batchTargets.length} alumnos`,
+                        targets: batchTargets,
+                      });
+                    }}
+                    className="px-2.5 py-1 rounded-lg border border-blue-200 bg-blue-50/80 hover:bg-blue-100 text-blue-800 font-semibold flex items-center gap-1 text-[11px]"
+                  >
+                    <ArrowDownUp className="w-3 h-3" />
+                    <span>± Nota y comentario</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => {
                       setSelectedColumnTarget(null);
                       const keys = new Set(
@@ -7338,16 +7398,38 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   <span>Copiar</span>
                 </button>
                 {canFillNP && (
-                  <button
-                    type="button"
-                    disabled={emptyNpCount === 0}
-                    onClick={() => triggerFillEmptyWithNP([col.id], col.title)}
-                    title="Rellenar celdas sin nota con 0 y NP"
-                    className="min-h-[38px] px-2.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-900 disabled:opacity-40 flex items-center gap-1 shrink-0"
-                  >
-                    <FileX2 className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>0 NP ({emptyNpCount})</span>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      data-col-batch-adjust-btn="true"
+                      disabled={visibleStudents.length === 0}
+                      onClick={() =>
+                        setBatchAdjustState({
+                          title: 'Ajustar notas y comentar',
+                          subtitle: `Columna: ${col.title} · ${visibleStudents.length} alumnos`,
+                          targets: visibleStudents.map((s) => ({
+                            studentId: s.id,
+                            columnId: col.id,
+                          })),
+                        })
+                      }
+                      title="Subir o bajar nota y añadir comentario a esta columna"
+                      className="min-h-[38px] px-2.5 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 disabled:opacity-40 flex items-center gap-1 shrink-0"
+                    >
+                      <ArrowDownUp className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>± Nota</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={emptyNpCount === 0}
+                      onClick={() => triggerFillEmptyWithNP([col.id], col.title)}
+                      title="Rellenar celdas sin nota con 0 y NP"
+                      className="min-h-[38px] px-2.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-900 disabled:opacity-40 flex items-center gap-1 shrink-0"
+                    >
+                      <FileX2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>0 NP ({emptyNpCount})</span>
+                    </button>
+                  </>
                 )}
                 {!activeTab.isLocked && (
                   <>
@@ -7727,6 +7809,18 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 </button>
               )}
 
+              {adjustableSelectionTargets.length > 0 && (
+                <button
+                  type="button"
+                  data-multi-batch-adjust-btn="true"
+                  onClick={openBatchAdjustForSelection}
+                  className="min-h-[38px] px-2.5 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 flex items-center gap-1 shrink-0"
+                >
+                  <ArrowDownUp className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>± Nota</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => setTouchMultiSelect((v) => !v)}
@@ -8044,8 +8138,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         return null;
       })()}
 
-      {/* Desktop quick action pill when multiple cells in same Rubric or Criterion column are selected */}
-      {!device.isTouch && !inlineEdit && selectedKeys.size > 1 && (sameRubricColSelection || sameCriterionSelection) && (
+      {/* Desktop quick action pill when multiple cells are selected */}
+      {!device.isTouch &&
+        !inlineEdit &&
+        selectedKeys.size > 1 &&
+        (sameRubricColSelection || sameCriterionSelection || adjustableSelectionTargets.length > 0) && (
         <div
           data-desktop-multi-rubric-bar="true"
           onMouseDown={(e) => e.stopPropagation()}
@@ -8053,7 +8150,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             bottom: 'calc(0.75rem + var(--safe-bottom))',
             left: 'max(0.75rem, var(--safe-left))',
           }}
-          className="absolute z-30 flex items-center gap-1.5 pl-3 pr-1.5 py-1.5 rounded-2xl border border-purple-200 bg-white/95 backdrop-blur-xs shadow-lg text-xs font-semibold text-slate-700"
+          className="absolute z-30 flex items-center gap-1.5 pl-3 pr-1.5 py-1.5 rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-xs shadow-lg text-xs font-semibold text-slate-700"
         >
           {sameRubricColSelection ? (
             <>
@@ -8072,6 +8169,16 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               >
                 <LayoutGrid className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Evaluar rúbrica ({sameRubricColSelection.studentIds.length})</span>
+              </button>
+              <button
+                type="button"
+                data-multi-batch-adjust-btn="true"
+                onClick={openBatchAdjustForSelection}
+                title="Subir o bajar nota y añadir comentario a las celdas seleccionadas"
+                className="px-2.5 py-1 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-900 flex items-center gap-1 shrink-0 transition-colors"
+              >
+                <ArrowDownUp className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>± Nota</span>
               </button>
               <button
                 type="button"
@@ -8122,7 +8229,36 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 <span>Valorar criterio ({sameCriterionSelection.studentIds.length})</span>
               </button>
             </>
-          ) : null}
+          ) : (
+            <>
+              <span className="font-bold text-slate-900 pr-1">
+                {adjustableSelectionTargets.length} sel.
+              </span>
+              <button
+                type="button"
+                data-multi-batch-adjust-btn="true"
+                onClick={openBatchAdjustForSelection}
+                title="Subir o bajar nota y añadir comentario a las celdas seleccionadas"
+                className="px-2.5 py-1 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-900 flex items-center gap-1 shrink-0 transition-colors"
+              >
+                <ArrowDownUp className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>± Nota ({adjustableSelectionTargets.length})</span>
+              </button>
+              {clearableTargets.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearMultipleCells(clearableTargets);
+                    showCopyToast(`${clearableTargets.length} celdas borradas`);
+                  }}
+                  className="px-2.5 py-1 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 flex items-center gap-1 shrink-0 transition-colors"
+                >
+                  <Eraser className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Borrar</span>
+                </button>
+              )}
+            </>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -8199,16 +8335,38 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 <span>Copiar</span>
               </button>
               {canFillNP && (
-                <button
-                  type="button"
-                  disabled={emptyNpCount === 0}
-                  onClick={() => triggerFillEmptyWithNP([col.id], col.title)}
-                  title="Rellena las celdas sin nota con 0 y el texto NP (las celdas que ya tienen nota no se modifican)"
-                  className="px-2.5 py-1 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-40 text-indigo-900 flex items-center gap-1 shrink-0 transition-colors"
-                >
-                  <FileX2 className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Rellenar vacías: 0 NP ({emptyNpCount})</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    data-col-batch-adjust-btn="true"
+                    disabled={visibleStudents.length === 0}
+                    onClick={() =>
+                      setBatchAdjustState({
+                        title: 'Ajustar notas y comentar',
+                        subtitle: `Columna: ${col.title} · ${visibleStudents.length} alumnos`,
+                        targets: visibleStudents.map((s) => ({
+                          studentId: s.id,
+                          columnId: col.id,
+                        })),
+                      })
+                    }
+                    title="Subir o bajar nota y añadir comentario a toda la columna"
+                    className="px-2.5 py-1 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 disabled:opacity-40 text-amber-900 flex items-center gap-1 shrink-0 transition-colors"
+                  >
+                    <ArrowDownUp className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>± Nota</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={emptyNpCount === 0}
+                    onClick={() => triggerFillEmptyWithNP([col.id], col.title)}
+                    title="Rellena las celdas sin nota con 0 y el texto NP (las celdas que ya tienen nota no se modifican)"
+                    className="px-2.5 py-1 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-40 text-indigo-900 flex items-center gap-1 shrink-0 transition-colors"
+                  >
+                    <FileX2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Rellenar vacías: 0 NP ({emptyNpCount})</span>
+                  </button>
+                </>
               )}
             </div>
           );
@@ -8757,6 +8915,21 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           </div>,
           document.body
         )}
+
+      <BatchAdjustGradeModal
+        targetState={batchAdjustState}
+        book={activeBook}
+        columns={visibleColumns}
+        onClose={() => setBatchAdjustState(null)}
+        onApply={(entries) => {
+          applyCellsBatch(entries);
+          showCopyToast(
+            entries.length === 1
+              ? '1 celda actualizada'
+              : `${entries.length} celdas actualizadas`
+          );
+        }}
+      />
     </div>
   );
 };

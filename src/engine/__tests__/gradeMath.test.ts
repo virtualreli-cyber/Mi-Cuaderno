@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createSeedWorkspace, DEFAULT_RUBRICS } from '../../data/seedData';
 import {
+  appendCellComment,
   applyCounterDelta,
   buildAlphabeticalColumnCopyText,
+  buildGradeAdjustmentBatch,
   COLUMN_SUMMARY_OPTIONS,
   computeColumnSummaryMetric,
   computeFolderFormulaValue,
@@ -798,5 +800,99 @@ describe('Weighted Averages, Cross-Tab Chaining, Rubrics & Folders', () => {
     }
     const noneOpt = COLUMN_SUMMARY_OPTIONS.find((o) => o.metric === 'NONE');
     expect(noneOpt?.symbol).toBe('');
+  });
+
+  it('appends comments cleanly with punto y seguido or punto y aparte without duplicating punctuation', () => {
+    expect(appendCellComment('', 'Mal comportamiento', 'SPACE')).toBe('Mal comportamiento');
+    expect(appendCellComment('Trabajo incompleto', 'No trabaja en clase', 'SPACE')).toBe(
+      'Trabajo incompleto. No trabaja en clase'
+    );
+    expect(appendCellComment('Trabajo incompleto.', 'No trabaja en clase', 'SPACE')).toBe(
+      'Trabajo incompleto. No trabaja en clase'
+    );
+    expect(appendCellComment('Trabajo incompleto', 'Baja 1 punto', 'NEWLINE')).toBe(
+      'Trabajo incompleto.\nBaja 1 punto'
+    );
+    expect(appendCellComment('Excelente exposición!', 'Sube 0,5', 'NEWLINE')).toBe(
+      'Excelente exposición!\nSube 0,5'
+    );
+    expect(appendCellComment('Nota previa', '   ', 'SPACE')).toBe('Nota previa');
+  });
+
+  it('adjusts selected or column grades by delta, respects bounds, and appends comments accurately', () => {
+    const ws = createSeedWorkspace();
+    const book = structuredClone(ws.classes[0]);
+    const tab = book.tabs[0];
+    const numCol = tab.columns.find((c) => c.type === 'NUMERIC' && !c.isLocked)!;
+    const [st0, st1, st2] = book.students;
+
+    book.cells[cellKey(st0.id, numCol.id)] = { grade: 8, comment: 'Buen cuaderno' };
+    book.cells[cellKey(st1.id, numCol.id)] = { grade: 0.5, comment: 'Falta material.' };
+    delete book.cells[cellKey(st2.id, numCol.id)];
+
+    const colMap = new Map([[numCol.id, numCol]]);
+
+    // 1. Only graded students (-1, punto y seguido)
+    const onlyGraded = buildGradeAdjustmentBatch({
+      book,
+      targets: [
+        { studentId: st0.id, columnId: numCol.id },
+        { studentId: st1.id, columnId: numCol.id },
+        { studentId: st2.id, columnId: numCol.id },
+      ],
+      colMap,
+      delta: -1,
+      comment: 'Mal comportamiento',
+      separator: 'SPACE',
+      includeEmpty: false,
+    });
+
+    expect(onlyGraded.adjustedCount).toBe(2);
+    expect(onlyGraded.skippedEmptyCount).toBe(1);
+    expect(onlyGraded.entries).toEqual([
+      {
+        studentId: st0.id,
+        columnId: numCol.id,
+        grade: 7,
+        comment: 'Buen cuaderno. Mal comportamiento',
+      },
+      {
+        studentId: st1.id,
+        columnId: numCol.id,
+        grade: numCol.minValue,
+        comment: 'Falta material. Mal comportamiento',
+      },
+    ]);
+
+    // 2. Include empty cell (+0.5, punto y aparte)
+    const withEmpty = buildGradeAdjustmentBatch({
+      book,
+      targets: [
+        { studentId: st0.id, columnId: numCol.id },
+        { studentId: st2.id, columnId: numCol.id },
+      ],
+      colMap,
+      delta: 0.5,
+      comment: 'Buen trabajo',
+      separator: 'NEWLINE',
+      includeEmpty: true,
+    });
+
+    expect(withEmpty.adjustedCount).toBe(2);
+    expect(withEmpty.skippedEmptyCount).toBe(0);
+    expect(withEmpty.entries).toEqual([
+      {
+        studentId: st0.id,
+        columnId: numCol.id,
+        grade: 8.5,
+        comment: 'Buen cuaderno.\nBuen trabajo',
+      },
+      {
+        studentId: st2.id,
+        columnId: numCol.id,
+        grade: 0.5,
+        comment: 'Buen trabajo',
+      },
+    ]);
   });
 });

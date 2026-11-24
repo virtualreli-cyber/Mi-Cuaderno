@@ -200,6 +200,90 @@ export function applyCounterDelta(
   return roundTo(clamped, Math.max(col.decimals, stepDecimals));
 }
 
+export type CommentAppendSeparator = 'SPACE' | 'NEWLINE';
+
+/**
+ * Appends `addition` to an existing cell comment after sentence-ending punctuation
+ * (".", "!", "?", "…", ":", ";") using either a space ("punto y seguido") or a
+ * newline ("punto y aparte").
+ */
+export function appendCellComment(
+  existingComment: string | undefined,
+  addition: string,
+  separator: CommentAppendSeparator = 'SPACE'
+): string {
+  const cleanAdd = addition.trim();
+  const cleanPrev = (existingComment ?? '').trim();
+  if (!cleanAdd) return cleanPrev;
+  if (!cleanPrev) return cleanAdd;
+
+  const base = /[.!?…:;]$/.test(cleanPrev) ? cleanPrev : `${cleanPrev}.`;
+  return separator === 'NEWLINE' ? `${base}\n${cleanAdd}` : `${base} ${cleanAdd}`;
+}
+
+export interface GradeAdjustmentEntry {
+  studentId: string;
+  columnId: string;
+  grade: number | null;
+  comment: string;
+}
+
+export function buildGradeAdjustmentBatch(options: {
+  book: ClassBook;
+  targets: Array<{ studentId: string; columnId: string }>;
+  colMap: Map<string, ColumnEntity>;
+  delta: number;
+  comment: string;
+  separator: CommentAppendSeparator;
+  includeEmpty: boolean;
+}): {
+  entries: GradeAdjustmentEntry[];
+  adjustedCount: number;
+  skippedEmptyCount: number;
+} {
+  const { book, targets, colMap, delta, comment, separator, includeEmpty } = options;
+  const entries: GradeAdjustmentEntry[] = [];
+  let skippedEmptyCount = 0;
+
+  for (const { studentId, columnId } of targets) {
+    const col = colMap.get(columnId);
+    if (!col || col.isLocked || col.type === 'AVERAGE') continue;
+
+    const existing = book.cells[cellKey(studentId, col.id)];
+    const hasGrade =
+      existing?.grade !== null &&
+      existing?.grade !== undefined &&
+      !Number.isNaN(existing.grade);
+
+    if (!hasGrade && !includeEmpty) {
+      skippedEmptyCount += 1;
+      continue;
+    }
+
+    const nextGrade =
+      delta !== 0
+        ? applyCounterDelta(hasGrade ? existing!.grade : null, delta, col)
+        : hasGrade
+          ? existing!.grade!
+          : null;
+
+    const nextComment = appendCellComment(existing?.comment, comment, separator);
+
+    entries.push({
+      studentId,
+      columnId: col.id,
+      grade: nextGrade,
+      comment: nextComment,
+    });
+  }
+
+  return {
+    entries,
+    adjustedCount: entries.length,
+    skippedEmptyCount,
+  };
+}
+
 export function computeRubricPercentage(
   rubric: RubricEntity,
   evalData: RubricCellEval | undefined
