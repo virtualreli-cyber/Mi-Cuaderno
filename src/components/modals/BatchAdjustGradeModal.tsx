@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDownUp, Check, MessageSquarePlus } from 'lucide-react';
+import { ArrowDownUp, Check, MessageSquarePlus, RotateCcw } from 'lucide-react';
 import {
   appendCellComment,
   buildGradeAdjustmentBatch,
+  buildRestoreOriginalGradeTargets,
   type CommentAppendSeparator,
 } from '../../engine/gradeMath';
 import { cellKey, type ClassBook, type ColumnEntity } from '../../types/gradebook';
@@ -26,9 +27,13 @@ interface BatchAdjustGradeModalProps {
       grade: number | null;
       comment: string;
       pendingAdjustment?: number;
+      appliedAdjustment?: number;
+      preAdjustmentGrade?: number;
+      keepRubricAuto?: boolean;
       hasExplicitPendingAdjustment?: boolean;
     }>
   ) => void;
+  onRestoreOriginal?: (targets: Array<{ studentId: string; columnId: string }>) => void;
 }
 
 const DELTA_PRESETS = [-2, -1, -0.5, -0.25, 0.25, 0.5, 1, 2];
@@ -46,6 +51,7 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
   columns,
   onClose,
   onApply,
+  onRestoreOriginal,
 }) => {
   const [deltaDraft, setDeltaDraft] = useState<string>('-1');
   const [comment, setComment] = useState('');
@@ -63,6 +69,7 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
         emptyCount: 0,
         sampleExistingComment: '',
         singleColumn: null as ColumnEntity | null,
+        restorableTargets: [] as Array<{ studentId: string; columnId: string }>,
       };
     }
 
@@ -87,6 +94,11 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
 
     const singleColumn =
       distinctColIds.size === 1 ? (colMap.get([...distinctColIds][0]) ?? null) : null;
+    const restorableTargets = buildRestoreOriginalGradeTargets(
+      book,
+      targetState.targets,
+      colMap
+    );
 
     return {
       total: gradedCount + emptyCount,
@@ -94,6 +106,7 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
       emptyCount,
       sampleExistingComment,
       singleColumn,
+      restorableTargets,
     };
   }, [targetState, book, colMap]);
 
@@ -358,26 +371,46 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold"
-            >
-              Cancelar
-            </button>
-            <button
-              type="submit"
-              data-batch-adjust-apply="true"
-              disabled={!canSubmit}
-              className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-bold flex items-center gap-1.5 shadow-sm transition-colors"
-            >
-              <Check className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>
-                Aplicar a {previewBatch.adjustedCount}{' '}
-                {previewBatch.adjustedCount === 1 ? 'celda' : 'celdas'}
-              </span>
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+            {onRestoreOriginal && stats.restorableTargets.length > 0 ? (
+              <button
+                type="button"
+                data-modal-restore-original-btn="true"
+                onClick={() => {
+                  onRestoreOriginal(stats.restorableTargets);
+                  onClose();
+                }}
+                title="Restaura la nota original previa a las subidas o bajadas"
+                className="px-3 py-2 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-900 font-semibold flex items-center gap-1.5 transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Restaurar original ({stats.restorableTargets.length})</span>
+              </button>
+            ) : (
+              <span />
+            )}
+
+            <div className="flex items-center gap-2 ml-auto">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                data-batch-adjust-apply="true"
+                disabled={!canSubmit}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-bold flex items-center gap-1.5 shadow-sm transition-colors"
+              >
+                <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>
+                  Aplicar a {previewBatch.adjustedCount}{' '}
+                  {previewBatch.adjustedCount === 1 ? 'celda' : 'celdas'}
+                </span>
+              </button>
+            </div>
           </div>
         </form>
       )}

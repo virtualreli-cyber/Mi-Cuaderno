@@ -247,6 +247,8 @@ export function findFirstChangedCellTarget(
         (a?.manualOverride ?? null) !== (b?.manualOverride ?? null) ||
         (a?.autoRecalcNotice ?? null) !== (b?.autoRecalcNotice ?? null) ||
         (a?.pendingAdjustment ?? null) !== (b?.pendingAdjustment ?? null) ||
+        (a?.appliedAdjustment ?? null) !== (b?.appliedAdjustment ?? null) ||
+        (a?.preAdjustmentGrade ?? null) !== (b?.preAdjustmentGrade ?? null) ||
         JSON.stringify(a?.rubricEval ?? null) !== JSON.stringify(b?.rubricEval ?? null)
       ) {
         const sepIdx = key.indexOf('::');

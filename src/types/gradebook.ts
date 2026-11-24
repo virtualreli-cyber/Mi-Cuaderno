@@ -147,6 +147,10 @@ export interface CellEntity {
   autoRecalcNotice?: boolean;
   /** Pending grade delta (+/-) queued on an ungraded cell to apply automatically when a grade is later entered */
   pendingAdjustment?: number;
+  /** Net +/- delta currently applied to a numeric/manual cell via batch adjustment */
+  appliedAdjustment?: number;
+  /** Original grade before any +/- batch adjustment so the original score can be restored cleanly */
+  preAdjustmentGrade?: number;
 }
 
 export interface AverageConfig {

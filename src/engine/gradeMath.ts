@@ -227,6 +227,28 @@ export interface GradeAdjustmentEntry {
   grade: number | null;
   comment: string;
   pendingAdjustment?: number;
+  appliedAdjustment?: number;
+  preAdjustmentGrade?: number;
+  keepRubricAuto?: boolean;
+}
+
+export function canCellRestoreOriginalGrade(cell: CellEntity | undefined): boolean {
+  if (!cell) return false;
+  if (
+    typeof cell.pendingAdjustment === 'number' &&
+    Number.isFinite(cell.pendingAdjustment) &&
+    cell.pendingAdjustment !== 0
+  ) {
+    return true;
+  }
+  if (
+    typeof cell.appliedAdjustment === 'number' &&
+    Number.isFinite(cell.appliedAdjustment) &&
+    cell.appliedAdjustment !== 0
+  ) {
+    return true;
+  }
+  return typeof cell.preAdjustmentGrade === 'number' && Number.isFinite(cell.preAdjustmentGrade);
 }
 
 export function buildGradeAdjustmentBatch(options: {
@@ -259,9 +281,34 @@ export function buildGradeAdjustmentBatch(options: {
 
     const nextComment = appendCellComment(existing?.comment, comment, separator);
 
-    if (hasGrade) {
+    if (col.type === 'RUBRIC' && existing?.rubricEval && !existing?.manualOverride && hasGrade) {
+      const nextPending = roundTo((existing.pendingAdjustment ?? 0) + delta, 3);
       const nextGrade =
-        delta !== 0 ? applyCounterDelta(existing!.grade, delta, col) : existing!.grade!;
+        delta !== 0 ? applyCounterDelta(existing.grade, delta, col) : existing.grade!;
+      immediateCount += 1;
+      entries.push({
+        studentId,
+        columnId: col.id,
+        grade: nextGrade,
+        comment: nextComment,
+        pendingAdjustment: nextPending !== 0 ? nextPending : undefined,
+        appliedAdjustment: undefined,
+        preAdjustmentGrade: undefined,
+        keepRubricAuto: true,
+      });
+    } else if (hasGrade) {
+      const origGrade =
+        typeof existing?.preAdjustmentGrade === 'number' &&
+        Number.isFinite(existing.preAdjustmentGrade)
+          ? existing.preAdjustmentGrade
+          : existing!.grade!;
+      const nextApplied = roundTo((existing?.appliedAdjustment ?? 0) + delta, 3);
+      const nextGrade =
+        nextApplied === 0
+          ? origGrade
+          : delta !== 0
+            ? applyCounterDelta(existing!.grade, delta, col)
+            : existing!.grade!;
       immediateCount += 1;
       entries.push({
         studentId,
@@ -269,6 +316,8 @@ export function buildGradeAdjustmentBatch(options: {
         grade: nextGrade,
         comment: nextComment,
         pendingAdjustment: undefined,
+        appliedAdjustment: nextApplied !== 0 ? nextApplied : undefined,
+        preAdjustmentGrade: nextApplied !== 0 ? origGrade : undefined,
       });
     } else {
       const nextPending = roundTo((existing?.pendingAdjustment ?? 0) + delta, 3);
@@ -279,6 +328,8 @@ export function buildGradeAdjustmentBatch(options: {
         grade: null,
         comment: nextComment,
         pendingAdjustment: nextPending !== 0 ? nextPending : undefined,
+        appliedAdjustment: undefined,
+        preAdjustmentGrade: undefined,
       });
     }
   }
@@ -289,6 +340,18 @@ export function buildGradeAdjustmentBatch(options: {
     immediateCount,
     queuedPendingCount,
   };
+}
+
+export function buildRestoreOriginalGradeTargets(
+  book: ClassBook,
+  targets: Array<{ studentId: string; columnId: string }>,
+  colMap: Map<string, ColumnEntity>
+): Array<{ studentId: string; columnId: string }> {
+  return targets.filter(({ studentId, columnId }) => {
+    const col = colMap.get(columnId);
+    if (!col || col.isLocked || col.type === 'AVERAGE') return false;
+    return canCellRestoreOriginalGrade(book.cells[cellKey(studentId, col.id)]);
+  });
 }
 
 export function computeRubricPercentage(

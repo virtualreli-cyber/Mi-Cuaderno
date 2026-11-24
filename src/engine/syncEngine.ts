@@ -60,6 +60,14 @@ function normalizeCell(cell: CellEntity | undefined): CellEntity | null {
     typeof cell.pendingAdjustment === 'number' &&
     Number.isFinite(cell.pendingAdjustment) &&
     cell.pendingAdjustment !== 0;
+  const hasAppliedAdj =
+    typeof cell.appliedAdjustment === 'number' &&
+    Number.isFinite(cell.appliedAdjustment) &&
+    cell.appliedAdjustment !== 0;
+  const hasPreAdjGrade =
+    hasAppliedAdj &&
+    typeof cell.preAdjustmentGrade === 'number' &&
+    Number.isFinite(cell.preAdjustmentGrade);
   if (!hasGrade && !cleanComment && !hasRubric && !hasNotice && !hasPending) return null;
   return {
     grade: hasGrade ? cell.grade : null,
@@ -71,6 +79,8 @@ function normalizeCell(cell: CellEntity | undefined): CellEntity | null {
       : {}),
     ...(hasNotice ? { autoRecalcNotice: true } : {}),
     ...(hasPending ? { pendingAdjustment: cell.pendingAdjustment } : {}),
+    ...(hasAppliedAdj ? { appliedAdjustment: cell.appliedAdjustment } : {}),
+    ...(hasPreAdjGrade ? { preAdjustmentGrade: cell.preAdjustmentGrade } : {}),
   };
 }
 

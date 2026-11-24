@@ -5,6 +5,8 @@ import {
   applyCounterDelta,
   buildAlphabeticalColumnCopyText,
   buildGradeAdjustmentBatch,
+  buildRestoreOriginalGradeTargets,
+  canCellRestoreOriginalGrade,
   COLUMN_SUMMARY_OPTIONS,
   computeColumnSummaryMetric,
   computeFolderFormulaValue,
@@ -859,6 +861,8 @@ describe('Weighted Averages, Cross-Tab Chaining, Rubrics & Folders', () => {
         grade: 7,
         comment: 'Buen cuaderno.\nMal comportamiento',
         pendingAdjustment: undefined,
+        appliedAdjustment: -1,
+        preAdjustmentGrade: 8,
       },
       {
         studentId: st1.id,
@@ -866,6 +870,8 @@ describe('Weighted Averages, Cross-Tab Chaining, Rubrics & Folders', () => {
         grade: numCol.minValue,
         comment: 'Falta material.\nMal comportamiento',
         pendingAdjustment: undefined,
+        appliedAdjustment: -1,
+        preAdjustmentGrade: 0.5,
       },
       {
         studentId: st2.id,
@@ -873,8 +879,46 @@ describe('Weighted Averages, Cross-Tab Chaining, Rubrics & Folders', () => {
         grade: null,
         comment: 'Mal comportamiento',
         pendingAdjustment: -1,
+        appliedAdjustment: undefined,
+        preAdjustmentGrade: undefined,
       },
     ]);
+
+    // Stacking a second adjustment keeps original preAdjustmentGrade (8) so original can be restored accurately
+    book.cells[cellKey(st0.id, numCol.id)] = {
+      grade: 7,
+      comment: 'Buen cuaderno.\nMal comportamiento',
+      appliedAdjustment: -1,
+      preAdjustmentGrade: 8,
+    };
+    const stackedBatch = buildGradeAdjustmentBatch({
+      book,
+      targets: [{ studentId: st0.id, columnId: numCol.id }],
+      colMap,
+      delta: -0.5,
+      comment: 'Reincidencia',
+    });
+    expect(stackedBatch.entries[0]).toEqual({
+      studentId: st0.id,
+      columnId: numCol.id,
+      grade: 6.5,
+      comment: 'Buen cuaderno.\nMal comportamiento.\nReincidencia',
+      pendingAdjustment: undefined,
+      appliedAdjustment: -1.5,
+      preAdjustmentGrade: 8,
+    });
+    expect(canCellRestoreOriginalGrade(book.cells[cellKey(st0.id, numCol.id)])).toBe(true);
+    expect(canCellRestoreOriginalGrade({ grade: 9, comment: '' })).toBe(false);
+    expect(
+      buildRestoreOriginalGradeTargets(
+        book,
+        [
+          { studentId: st0.id, columnId: numCol.id },
+          { studentId: st2.id, columnId: numCol.id },
+        ],
+        colMap
+      )
+    ).toEqual([{ studentId: st0.id, columnId: numCol.id }]);
 
     // Accumulate a second pending adjustment on st2 (+0.5, punto y seguido) before grading
     book.cells[cellKey(st2.id, numCol.id)] = {
@@ -896,6 +940,8 @@ describe('Weighted Averages, Cross-Tab Chaining, Rubrics & Folders', () => {
       grade: null,
       comment: 'Mal comportamiento. Recupera actitud',
       pendingAdjustment: -0.5,
+      appliedAdjustment: undefined,
+      preAdjustmentGrade: undefined,
     });
 
     // 2. Rubric empty cell gets -1 queued; later evaluating rubric applies -1 automatically via recalculateBook

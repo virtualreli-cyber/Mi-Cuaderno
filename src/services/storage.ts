@@ -122,6 +122,16 @@ function hydrateCells(rawCells: Record<string, CellEntity> | undefined): Record<
         cell.pendingAdjustment !== 0
           ? cell.pendingAdjustment
           : undefined,
+      appliedAdjustment:
+        typeof cell.appliedAdjustment === 'number' &&
+        Number.isFinite(cell.appliedAdjustment) &&
+        cell.appliedAdjustment !== 0
+          ? cell.appliedAdjustment
+          : undefined,
+      preAdjustmentGrade:
+        typeof cell.preAdjustmentGrade === 'number' && Number.isFinite(cell.preAdjustmentGrade)
+          ? cell.preAdjustmentGrade
+          : undefined,
     };
   }
   return out;

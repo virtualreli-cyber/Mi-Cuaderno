@@ -54,6 +54,7 @@ import { useTouchDoubleTap } from '../../hooks/useLongPress';
 import {
   applyCounterDelta,
   buildAlphabeticalColumnCopyText,
+  canCellRestoreOriginalGrade,
   clampGradeForColumn,
   COLUMN_SUMMARY_OPTIONS,
   computeColumnSummaryMetric,
@@ -279,6 +280,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setCellData,
     setMultipleCellsData,
     applyCellsBatch,
+    restoreOriginalGrades,
     setRubricCriterionForStudents,
     toggleColumnRubricExpanded,
     clearCell,
@@ -1276,6 +1278,13 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     [activeTab?.isLocked, selectedTargets]
   );
 
+  const restorableSelectionTargets = useMemo(() => {
+    if (!activeBook) return [];
+    return adjustableSelectionTargets.filter(({ studentId, columnId }) =>
+      canCellRestoreOriginalGrade(activeBook.cells[cellKey(studentId, columnId)])
+    );
+  }, [activeBook, adjustableSelectionTargets]);
+
   const openBatchAdjustForSelection = useCallback(() => {
     if (adjustableSelectionTargets.length === 0) return;
     const distinctColIds = [...new Set(adjustableSelectionTargets.map((t) => t.columnId))];
@@ -1614,6 +1623,19 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     if (copyToastTimerRef.current) window.clearTimeout(copyToastTimerRef.current);
     copyToastTimerRef.current = window.setTimeout(() => setCopyToast(null), 2400);
   }, []);
+
+  const handleRestoreOriginalSelection = useCallback(
+    (targets: Array<{ studentId: string; columnId: string }>) => {
+      if (targets.length === 0) return;
+      restoreOriginalGrades(targets);
+      showCopyToast(
+        targets.length === 1
+          ? 'Nota original restaurada'
+          : `${targets.length} notas originales restauradas`
+      );
+    },
+    [restoreOriginalGrades, showCopyToast]
+  );
 
   const copyColumnAlphabetical = useCallback(
     (target: SelectedColumnTarget) => {
@@ -5117,7 +5139,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           selectEntireStudentRow(student.id);
                         }
                       }}
-                      className="w-full h-full flex items-center justify-between gap-2 text-left hover:text-blue-700 transition-colors overflow-hidden focus:outline-none"
+                      style={{ height: Math.max(16, rowH - 8), maxHeight: Math.max(16, rowH - 8) }}
+                      className="w-full flex items-center justify-between gap-2 text-left hover:text-blue-700 transition-colors overflow-hidden focus:outline-none"
                     >
                       <div className="min-w-0 flex-1">
                         <div className="text-[1em] font-semibold text-slate-900 truncate">
@@ -5368,7 +5391,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             </span>
                           )}
 
-                          <div className="flex flex-col items-center justify-center gap-0 h-full w-full overflow-hidden leading-tight px-0">
+                          <div
+                            style={{ height: Math.max(16, rowH - 5), maxHeight: Math.max(16, rowH - 5) }}
+                            className="flex flex-col items-center justify-center gap-0 w-full overflow-hidden leading-tight px-0"
+                          >
                             {val !== null && (
                               <span
                                 style={{ fontSize: `${scaledGradeFs}px` }}
@@ -5585,7 +5611,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                                     : 'hover:brightness-97'
                           }`}
                         >
-                          <div className="flex flex-col items-center justify-center gap-0 h-full w-full overflow-hidden leading-tight px-0">
+                          <div
+                            style={{ height: Math.max(16, rowH - 5), maxHeight: Math.max(16, rowH - 5) }}
+                            className="flex flex-col items-center justify-center gap-0 w-full overflow-hidden leading-tight px-0"
+                          >
                             {critRes ? (
                               <>
                                 <span
@@ -5864,7 +5893,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           </span>
                         )}
 
-                        <div className="flex flex-col items-center justify-center gap-0 h-full w-full overflow-hidden leading-tight px-0">
+                        <div
+                          style={{ height: Math.max(16, rowH - 5), maxHeight: Math.max(16, rowH - 5) }}
+                          className="flex flex-col items-center justify-center gap-0 w-full overflow-hidden leading-tight px-0"
+                        >
                           {grade !== null ? (
                             <span
                               style={{ fontSize: `${scaledGradeFs}px` }}
@@ -7447,6 +7479,27 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       <ArrowDownUp className="w-3.5 h-3.5" aria-hidden="true" />
                       <span>± Nota</span>
                     </button>
+                    {visibleStudents.some((s) =>
+                      canCellRestoreOriginalGrade(activeBook.cells[cellKey(s.id, col.id)])
+                    ) && (
+                      <button
+                        type="button"
+                        data-col-restore-original-btn="true"
+                        onClick={() =>
+                          handleRestoreOriginalSelection(
+                            visibleStudents.map((s) => ({
+                              studentId: s.id,
+                              columnId: col.id,
+                            }))
+                          )
+                        }
+                        title="Restaura las notas originales de esta columna (sin subidas/bajadas)"
+                        className="min-h-[38px] px-2.5 rounded-xl border border-amber-300 bg-amber-50 text-amber-900 flex items-center gap-1 shrink-0"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>Restaurar</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       disabled={emptyNpCount === 0}
@@ -7849,6 +7902,19 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 </button>
               )}
 
+              {restorableSelectionTargets.length > 0 && (
+                <button
+                  type="button"
+                  data-restore-original-grade-btn="true"
+                  onClick={() => handleRestoreOriginalSelection(restorableSelectionTargets)}
+                  title="Restaurar nota original (sin subidas ni bajadas)"
+                  className="min-h-[38px] px-2.5 rounded-xl border border-amber-300 bg-amber-50 text-amber-900 flex items-center gap-1 shrink-0"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Restaurar</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => setTouchMultiSelect((v) => !v)}
@@ -8060,19 +8126,47 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               </button>
 
               {!activeTab.isLocked && !col.isLocked && col.type !== 'AVERAGE' && (
-                <button
-                  type="button"
-                  onClick={() => setTouchMultiSelect((v) => !v)}
-                  aria-pressed={touchMultiSelect}
-                  title="Activa para seleccionar varios alumnos tocando sus celdas"
-                  className={`min-h-[38px] px-2.5 rounded-xl border shrink-0 ${
-                    touchMultiSelect
-                      ? 'bg-blue-600 border-blue-700 text-white'
-                      : 'border-slate-200 bg-slate-50 text-slate-700'
-                  }`}
-                >
-                  {touchMultiSelect ? 'Añadiendo ✓' : '+ Varias'}
-                </button>
+                <>
+                  <button
+                    type="button"
+                    data-single-batch-adjust-btn="true"
+                    onClick={openBatchAdjustForSelection}
+                    title="Subir o bajar nota y añadir comentario"
+                    className="min-h-[38px] px-2.5 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 flex items-center gap-1 shrink-0"
+                  >
+                    <ArrowDownUp className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>± Nota</span>
+                  </button>
+                  {canCellRestoreOriginalGrade(cell) && (
+                    <button
+                      type="button"
+                      data-restore-original-grade-btn="true"
+                      onClick={() =>
+                        handleRestoreOriginalSelection([
+                          { studentId: st.id, columnId: col.id },
+                        ])
+                      }
+                      title="Restaurar nota original (sin subidas ni bajadas)"
+                      className="min-h-[38px] px-2.5 rounded-xl border border-amber-300 bg-amber-50 text-amber-900 flex items-center gap-1 shrink-0"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Restaurar</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setTouchMultiSelect((v) => !v)}
+                    aria-pressed={touchMultiSelect}
+                    title="Activa para seleccionar varios alumnos tocando sus celdas"
+                    className={`min-h-[38px] px-2.5 rounded-xl border shrink-0 ${
+                      touchMultiSelect
+                        ? 'bg-blue-600 border-blue-700 text-white'
+                        : 'border-slate-200 bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    {touchMultiSelect ? 'Añadiendo ✓' : '+ Varias'}
+                  </button>
+                </>
               )}
 
               {col.type === 'RUBRIC' && !col.isLocked && !activeTab.isLocked && (
@@ -8166,10 +8260,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         return null;
       })()}
 
-      {/* Desktop quick action pill when multiple cells are selected */}
+      {/* Desktop quick action pill when one or more cells are selected */}
       {!device.isTouch &&
         !inlineEdit &&
-        selectedKeys.size > 1 &&
+        selectedKeys.size >= 1 &&
         (sameRubricColSelection || sameCriterionSelection || adjustableSelectionTargets.length > 0) && (
         <div
           data-desktop-multi-rubric-bar="true"
@@ -8208,6 +8302,18 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 <ArrowDownUp className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>± Nota</span>
               </button>
+              {restorableSelectionTargets.length > 0 && (
+                <button
+                  type="button"
+                  data-restore-original-grade-btn="true"
+                  onClick={() => handleRestoreOriginalSelection(restorableSelectionTargets)}
+                  title="Restaurar nota original (sin subidas ni bajadas)"
+                  className="px-2.5 py-1 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 flex items-center gap-1 shrink-0 transition-colors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Restaurar nota</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -8259,25 +8365,58 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             </>
           ) : (
             <>
-              <span className="font-bold text-slate-900 pr-1">
-                {adjustableSelectionTargets.length} sel.
+              <span className="font-bold text-slate-900 pr-1 truncate max-w-[170px]">
+                {adjustableSelectionTargets.length === 1
+                  ? (() => {
+                      const t = adjustableSelectionTargets[0];
+                      const st = visibleStudents.find((s) => s.id === t.studentId);
+                      return st ? st.lastName : '1 sel.';
+                    })()
+                  : `${adjustableSelectionTargets.length} sel.`}
               </span>
               <button
                 type="button"
                 data-multi-batch-adjust-btn="true"
                 onClick={openBatchAdjustForSelection}
-                title="Subir o bajar nota y añadir comentario a las celdas seleccionadas"
+                title="Subir o bajar nota y añadir comentario"
                 className="px-2.5 py-1 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-900 flex items-center gap-1 shrink-0 transition-colors"
               >
                 <ArrowDownUp className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>± Nota ({adjustableSelectionTargets.length})</span>
+                <span>
+                  {adjustableSelectionTargets.length === 1
+                    ? '± Nota'
+                    : `± Nota (${adjustableSelectionTargets.length})`}
+                </span>
               </button>
-              {clearableTargets.length > 1 && (
+              {restorableSelectionTargets.length > 0 && (
+                <button
+                  type="button"
+                  data-restore-original-grade-btn="true"
+                  onClick={() => handleRestoreOriginalSelection(restorableSelectionTargets)}
+                  title="Restaurar nota original (sin subidas ni bajadas)"
+                  className="px-2.5 py-1 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 flex items-center gap-1 shrink-0 transition-colors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>
+                    {restorableSelectionTargets.length === 1
+                      ? 'Restaurar nota'
+                      : `Restaurar (${restorableSelectionTargets.length})`}
+                  </span>
+                </button>
+              )}
+              {clearableTargets.length >= 1 &&
+                clearableTargets.some(({ studentId, columnId }) =>
+                  Boolean(activeBook.cells[cellKey(studentId, columnId)])
+                ) && (
                 <button
                   type="button"
                   onClick={() => {
                     clearMultipleCells(clearableTargets);
-                    showCopyToast(`${clearableTargets.length} celdas borradas`);
+                    showCopyToast(
+                      clearableTargets.length === 1
+                        ? 'Celda borrada'
+                        : `${clearableTargets.length} celdas borradas`
+                    );
                   }}
                   className="px-2.5 py-1 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 flex items-center gap-1 shrink-0 transition-colors"
                 >
@@ -8384,6 +8523,27 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     <ArrowDownUp className="w-3.5 h-3.5" aria-hidden="true" />
                     <span>± Nota</span>
                   </button>
+                  {visibleStudents.some((s) =>
+                    canCellRestoreOriginalGrade(activeBook.cells[cellKey(s.id, col.id)])
+                  ) && (
+                    <button
+                      type="button"
+                      data-col-restore-original-btn="true"
+                      onClick={() =>
+                        handleRestoreOriginalSelection(
+                          visibleStudents.map((s) => ({
+                            studentId: s.id,
+                            columnId: col.id,
+                          }))
+                        )
+                      }
+                      title="Restaura las notas originales de esta columna (sin subidas ni bajadas)"
+                      className="px-2.5 py-1 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 flex items-center gap-1 shrink-0 transition-colors"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Restaurar notas</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     disabled={emptyNpCount === 0}
@@ -8500,7 +8660,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           <div
             onMouseDown={(e) => e.stopPropagation()}
             style={{
-              bottom: 'calc(0.75rem + var(--safe-bottom))',
+              bottom:
+                adjustableSelectionTargets.length > 0
+                  ? 'calc(3.75rem + var(--safe-bottom))'
+                  : 'calc(0.75rem + var(--safe-bottom))',
               left: 'max(0.75rem, var(--safe-left))',
             }}
             className={`absolute z-30 flex items-center gap-2 pl-3 pr-1.5 py-1.5 rounded-2xl border backdrop-blur-xs shadow-lg text-xs ${
@@ -8556,7 +8719,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           <div
             onMouseDown={(e) => e.stopPropagation()}
             style={{
-              bottom: 'calc(0.75rem + var(--safe-bottom))',
+              bottom:
+                adjustableSelectionTargets.length > 0
+                  ? 'calc(3.75rem + var(--safe-bottom))'
+                  : 'calc(0.75rem + var(--safe-bottom))',
               left: 'max(0.75rem, var(--safe-left))',
             }}
             className="absolute z-30 flex items-center gap-2 pl-3 pr-1.5 py-1.5 rounded-2xl border border-orange-200 bg-orange-50/95 backdrop-blur-xs shadow-lg text-xs text-orange-950"
@@ -8960,6 +9126,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 : `${entries.length} celdas actualizadas`
           );
         }}
+        onRestoreOriginal={(targets) => handleRestoreOriginalSelection(targets)}
       />
     </div>
   );

@@ -317,9 +317,13 @@ interface GradebookContextValue {
       grade: number | null;
       comment: string;
       pendingAdjustment?: number;
+      appliedAdjustment?: number;
+      preAdjustmentGrade?: number;
+      keepRubricAuto?: boolean;
       hasExplicitPendingAdjustment?: boolean;
     }>
   ) => void;
+  restoreOriginalGrades: (targets: Array<{ studentId: string; columnId: string }>) => void;
   setCellRubricEval: (
     studentId: string,
     columnId: string,
@@ -3075,6 +3079,9 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
       clearPendingAdjustment?: boolean;
       hasExplicitPendingAdjustment?: boolean;
       pendingAdjustment?: number;
+      appliedAdjustment?: number;
+      preAdjustmentGrade?: number;
+      keepRubricAuto?: boolean;
     }
   ) => {
     const targetId = normalizeCellTargetId(rawTargetId);
@@ -3114,7 +3121,16 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
       };
 
       if (col.type === 'RUBRIC') {
-        if (options?.hasExplicitPendingAdjustment && targetGrade === null) {
+        if (options?.hasExplicitPendingAdjustment && options?.keepRubricAuto && prev?.rubricEval) {
+          const nextPending = resolvePendingOutput(false);
+          nextCells[k] = {
+            grade: targetGrade,
+            comment: cleanComment,
+            rubricEval: prev.rubricEval,
+            manualOverride: undefined,
+            pendingAdjustment: nextPending,
+          };
+        } else if (options?.hasExplicitPendingAdjustment && targetGrade === null) {
           const nextPending = resolvePendingOutput(false);
           if (!prev?.rubricEval && !cleanComment && !nextPending) {
             delete nextCells[k];
@@ -3138,14 +3154,25 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
               rubricEval: prev?.rubricEval,
               manualOverride: prev?.manualOverride,
               pendingAdjustment: nextPending,
+              appliedAdjustment: prev?.appliedAdjustment,
+              preAdjustmentGrade: prev?.preAdjustmentGrade,
             };
           }
         } else if (targetGrade !== null) {
+          const clampedBase = clampGradeForColumn(targetGrade, col);
           const adjustedTarget =
             !options?.hasExplicitPendingAdjustment && prevPending
               ? applyCounterDelta(targetGrade, prevPending, col)
               : targetGrade;
           const finalGrade = clampGradeForColumn(adjustedTarget, col);
+          const nextApplied = options?.hasExplicitPendingAdjustment
+            ? options.appliedAdjustment
+            : prevPending;
+          const nextPre = options?.hasExplicitPendingAdjustment
+            ? options.preAdjustmentGrade
+            : prevPending && clampedBase !== null
+              ? clampedBase
+              : undefined;
           const unchangedRubricGrade =
             Boolean(prev?.rubricEval) &&
             !prev?.manualOverride &&
@@ -3159,6 +3186,8 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
             rubricEval: prev?.rubricEval,
             manualOverride: unchangedRubricGrade ? undefined : true,
             pendingAdjustment: resolvePendingOutput(true),
+            appliedAdjustment: nextApplied,
+            preAdjustmentGrade: nextPre,
           };
         } else {
           delete nextCells[k];
@@ -3167,12 +3196,27 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
       }
 
       // NUMERIC column
+      const clampedBaseNumeric = targetGrade !== null ? clampGradeForColumn(targetGrade, col) : null;
       const adjustedNumeric =
         !options?.hasExplicitPendingAdjustment && targetGrade !== null && prevPending
           ? applyCounterDelta(targetGrade, prevPending, col)
           : targetGrade;
       const finalGrade = adjustedNumeric !== null ? clampGradeForColumn(adjustedNumeric, col) : null;
       const nextPending = resolvePendingOutput(finalGrade !== null);
+      const nextAppliedNumeric =
+        finalGrade !== null
+          ? options?.hasExplicitPendingAdjustment
+            ? options.appliedAdjustment
+            : prevPending
+          : undefined;
+      const nextPreNumeric =
+        finalGrade !== null
+          ? options?.hasExplicitPendingAdjustment
+            ? options.preAdjustmentGrade
+            : prevPending && clampedBaseNumeric !== null
+              ? clampedBaseNumeric
+              : undefined
+          : undefined;
       if (finalGrade === null && !cleanComment && !nextPending) {
         delete nextCells[k];
       } else {
@@ -3181,6 +3225,8 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
           grade: finalGrade,
           comment: cleanComment,
           pendingAdjustment: nextPending,
+          appliedAdjustment: nextAppliedNumeric,
+          preAdjustmentGrade: nextPreNumeric,
         };
       }
       return;
@@ -3498,6 +3544,9 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
                 ? {
                     hasExplicitPendingAdjustment: true,
                     pendingAdjustment: entry.pendingAdjustment,
+                    appliedAdjustment: entry.appliedAdjustment,
+                    preAdjustmentGrade: entry.preAdjustmentGrade,
+                    keepRubricAuto: entry.keepRubricAuto,
                   }
                 : undefined
             );
@@ -3507,6 +3556,73 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
         },
         true,
         { studentId: entries[0].studentId, columnId: entries[0].columnId }
+      );
+    },
+    [mutateActiveBook]
+  );
+
+  const restoreOriginalGrades = useCallback<GradebookContextValue['restoreOriginalGrades']>(
+    (targets) => {
+      if (targets.length === 0) return;
+      mutateActiveBook(
+        (book, ws) => {
+          const { colMap } = buildBookColumnAndFolderMaps(book);
+          const nextCells = { ...book.cells };
+          let changed = false;
+
+          for (const { studentId, columnId } of targets) {
+            const col = colMap.get(columnId);
+            if (!col || col.isLocked || col.type === 'AVERAGE') continue;
+            const k = cellKey(studentId, col.id);
+            const prev = nextCells[k];
+            if (!prev) continue;
+
+            const hasPending =
+              typeof prev.pendingAdjustment === 'number' &&
+              Number.isFinite(prev.pendingAdjustment) &&
+              prev.pendingAdjustment !== 0;
+            const hasApplied =
+              typeof prev.appliedAdjustment === 'number' &&
+              Number.isFinite(prev.appliedAdjustment) &&
+              prev.appliedAdjustment !== 0;
+            const hasPre =
+              typeof prev.preAdjustmentGrade === 'number' &&
+              Number.isFinite(prev.preAdjustmentGrade);
+
+            if (!hasPending && !hasApplied && !hasPre) continue;
+
+            changed = true;
+            if (col.type === 'RUBRIC' && prev.rubricEval && !prev.manualOverride) {
+              nextCells[k] = {
+                grade: prev.grade,
+                comment: prev.comment ?? '',
+                rubricEval: prev.rubricEval,
+              };
+            } else if (hasPre) {
+              const restoredGrade = clampGradeForColumn(prev.preAdjustmentGrade!, col);
+              nextCells[k] = {
+                grade: restoredGrade,
+                comment: prev.comment ?? '',
+                ...(prev.rubricEval ? { rubricEval: prev.rubricEval } : {}),
+                ...(prev.manualOverride ? { manualOverride: true } : {}),
+              };
+            } else if ((prev.comment ?? '').trim() || prev.rubricEval) {
+              nextCells[k] = {
+                grade: prev.grade,
+                comment: prev.comment ?? '',
+                ...(prev.rubricEval ? { rubricEval: prev.rubricEval } : {}),
+                ...(prev.manualOverride ? { manualOverride: true } : {}),
+              };
+            } else {
+              delete nextCells[k];
+            }
+          }
+
+          if (!changed) return book;
+          return recalculateBook({ ...book, cells: nextCells }, ws.rubrics);
+        },
+        true,
+        targets[0]
       );
     },
     [mutateActiveBook]
@@ -4156,6 +4272,7 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
     setCellData,
     setMultipleCellsData,
     applyCellsBatch,
+    restoreOriginalGrades,
     setCellRubricEval,
     toggleColumnRubricExpanded,
     setRubricCriterionForStudents,
