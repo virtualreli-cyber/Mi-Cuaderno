@@ -275,6 +275,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setColumnGroupSummaryOverride,
     reorderStudents,
     selectGroupCategory,
+    upsertStudentGroup,
     toggleGroupCollapsed,
     setCellData,
     setMultipleCellsData,
@@ -410,6 +411,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   } | null>(null);
   const [cellQuickAction, setCellQuickAction] = useState<CellQuickActionTarget | null>(null);
   const [touchMultiSelect, setTouchMultiSelect] = useState(false);
+  const [editingGroup, setEditingGroup] = useState<{
+    key: string;
+    originalName: string;
+    color: string;
+    draft: string;
+  } | null>(null);
   const cellTooltipTimerRef = useRef<number | null>(null);
   const clearCellTooltip = useCallback(() => {
     if (cellTooltipTimerRef.current !== null) {
@@ -742,6 +749,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setEducamosMenu(null);
     setCellQuickAction(null);
     setTouchMultiSelect(false);
+    setEditingGroup(null);
   }, [activeBook?.id, activeTab?.id]);
 
   // Clear stale selectedColumnTarget if that column/folder was deleted
@@ -2889,6 +2897,21 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             return;
           }
           e.stopPropagation();
+          if (
+            !e.shiftKey &&
+            !e.metaKey &&
+            !e.ctrlKey &&
+            touchDoubleTap.handleTouchClick(
+              `hdr-col:${col.id}`,
+              () => {
+                selectEntireColumn(col);
+                onEditColumn(col);
+              },
+              device.isTouch
+            )
+          ) {
+            return;
+          }
           selectEntireColumn(col);
         }}
         onDoubleClick={(e) => {
@@ -3709,6 +3732,18 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       return;
                     }
                     e.stopPropagation();
+                    if (
+                      !e.shiftKey &&
+                      !e.metaKey &&
+                      !e.ctrlKey &&
+                      touchDoubleTap.handleTouchClick(
+                        `hdr-fld:${folder.id}`,
+                        () => toggleFolderCollapse(activeTab.id, folder.id),
+                        device.isTouch
+                      )
+                    ) {
+                      return;
+                    }
                     selectFolderSummaryColumn(folder, childCols);
                   }}
                   onDoubleClick={(e) => {
@@ -4375,34 +4410,164 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       style={{ backgroundColor: blendWithWhite(bucket.color, 0.28), height: groupRowH }}
                       className="sticky left-0 z-20 border-r-2 border-b border-t border-slate-300 px-2 py-0.5 text-left"
                     >
-                      <div className="flex items-center justify-between gap-1.5">
+                      <div className="flex items-center justify-between gap-1 h-full">
+                        {/* Left chevron button ONLY collapses/expands the group */}
                         <button
                           type="button"
-                          onClick={() => toggleGroupCollapsed(bucket.key)}
-                          className="flex items-center gap-1.5 min-w-0 text-left hover:text-slate-950 text-slate-800 font-bold text-[0.98em]"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onDoubleClick={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleGroupCollapsed(bucket.key);
+                          }}
+                          title={bucket.isCollapsed ? 'Desplegar grupo' : 'Plegar grupo'}
+                          aria-label={
+                            bucket.isCollapsed
+                              ? `Desplegar grupo ${bucket.name}`
+                              : `Plegar grupo ${bucket.name}`
+                          }
+                          className="p-1.5 -ml-1 rounded-lg hover:bg-white/70 text-slate-700 hover:text-slate-950 shrink-0 transition-colors"
                         >
                           {bucket.isCollapsed ? (
-                            <ChevronRight style={smallIconStyle} className="shrink-0" />
+                            <ChevronRight style={smallIconStyle} />
                           ) : (
-                            <ChevronDown style={smallIconStyle} className="shrink-0" />
+                            <ChevronDown style={smallIconStyle} />
                           )}
-                          <span className="font-extrabold text-slate-600 tabular-nums text-[0.92em] shrink-0">
-                            {bucketIdx + 1}
-                          </span>
-                          <span
-                            className="w-2.5 h-2.5 rounded-full border border-black/15 shrink-0"
-                            style={{ backgroundColor: bucket.color }}
-                          />
-                          <span className="truncate">{bucket.name}</span>
-                          <span className="px-1.5 py-0.2 rounded-full bg-white/80 text-slate-700 text-[0.78em] font-bold tabular-nums shrink-0 border border-black/5">
-                            {bucket.students.length}
-                          </span>
                         </button>
+
+                        {/* Center & right area: inline rename on double-click / double-tap */}
+                        {editingGroup?.key === bucket.key ? (
+                          <input
+                            type="text"
+                            autoFocus
+                            value={editingGroup.draft}
+                            aria-label={`Nuevo nombre para el grupo ${bucket.name}`}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => e.stopPropagation()}
+                            onDoubleClick={(e) => e.stopPropagation()}
+                            onFocus={(e) => e.currentTarget.select()}
+                            onChange={(e) =>
+                              setEditingGroup((prev) =>
+                                prev ? { ...prev, draft: e.target.value } : null
+                              )
+                            }
+                            onBlur={() => {
+                              const nextName = editingGroup.draft.trim();
+                              if (nextName && nextName !== editingGroup.originalName) {
+                                upsertStudentGroup(
+                                  nextName,
+                                  editingGroup.color,
+                                  editingGroup.originalName
+                                );
+                                showCopyToast(`Grupo renombrado a "${nextName}"`);
+                              }
+                              setEditingGroup(null);
+                            }}
+                            onKeyDown={(e) => {
+                              e.stopPropagation();
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                const nextName = editingGroup.draft.trim();
+                                if (nextName && nextName !== editingGroup.originalName) {
+                                  upsertStudentGroup(
+                                    nextName,
+                                    editingGroup.color,
+                                    editingGroup.originalName
+                                  );
+                                  showCopyToast(`Grupo renombrado a "${nextName}"`);
+                                }
+                                setEditingGroup(null);
+                              } else if (e.key === 'Escape') {
+                                e.preventDefault();
+                                setEditingGroup(null);
+                              }
+                            }}
+                            className="flex-1 min-w-0 px-2 py-0.5 rounded-lg border border-blue-500 bg-white text-slate-900 font-bold text-[0.95em] focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                          />
+                        ) : (
+                          <div
+                            data-group-rename-area={bucket.key}
+                            onPointerDown={(e) => {
+                              touchDoubleTap.start(e, `grp-name:${bucket.key}`);
+                            }}
+                            onPointerMove={touchDoubleTap.move}
+                            onPointerUp={(e) => {
+                              touchDoubleTap.end(e, `grp-name:${bucket.key}`, () => {
+                                if (bucket.isUnassigned) {
+                                  onOpenGroupsManager?.();
+                                } else {
+                                  setEditingGroup({
+                                    key: bucket.key,
+                                    originalName: bucket.name,
+                                    color: bucket.color,
+                                    draft: bucket.name,
+                                  });
+                                }
+                              });
+                            }}
+                            onPointerCancel={touchDoubleTap.cancel}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              touchDoubleTap.handleTouchClick(
+                                `grp-name:${bucket.key}`,
+                                () => {
+                                  if (bucket.isUnassigned) {
+                                    onOpenGroupsManager?.();
+                                  } else {
+                                    setEditingGroup({
+                                      key: bucket.key,
+                                      originalName: bucket.name,
+                                      color: bucket.color,
+                                      draft: bucket.name,
+                                    });
+                                  }
+                                },
+                                device.isTouch
+                              );
+                            }}
+                            onDoubleClick={(e) => {
+                              if (touchDoubleTap.wasDoubleTapJustHandled()) return;
+                              e.stopPropagation();
+                              if (bucket.isUnassigned) {
+                                onOpenGroupsManager?.();
+                              } else {
+                                setEditingGroup({
+                                  key: bucket.key,
+                                  originalName: bucket.name,
+                                  color: bucket.color,
+                                  draft: bucket.name,
+                                });
+                              }
+                            }}
+                            title={
+                              bucket.isUnassigned
+                                ? 'Doble clic: asignar alumnos a un grupo'
+                                : `Doble clic: cambiar nombre de "${bucket.name}" · Pulsa la flecha izquierda para plegar/desplegar`
+                            }
+                            className="flex-1 min-w-0 h-full flex items-center gap-1.5 cursor-text text-slate-800 font-bold text-[0.98em]"
+                          >
+                            <span className="font-extrabold text-slate-600 tabular-nums text-[0.92em] shrink-0">
+                              {bucketIdx + 1}
+                            </span>
+                            <span
+                              className="w-2.5 h-2.5 rounded-full border border-black/15 shrink-0"
+                              style={{ backgroundColor: bucket.color }}
+                            />
+                            <span className="truncate">{bucket.name}</span>
+                            <span className="px-1.5 py-0.2 rounded-full bg-white/80 text-slate-700 text-[0.78em] font-bold tabular-nums shrink-0 border border-black/5">
+                              {bucket.students.length}
+                            </span>
+                          </div>
+                        )}
+
                         <div className="flex items-center gap-0.5 shrink-0">
                           {groupSummaryRows.length === 0 && (
                             <button
                               type="button"
                               onMouseDown={(e) => e.stopPropagation()}
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onDoubleClick={(e) => e.stopPropagation()}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -4420,7 +4585,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           {!bucket.isUnassigned && onOpenGroupsManager && (
                             <button
                               type="button"
-                              onClick={() => onOpenGroupsManager(bucket.name)}
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onDoubleClick={(e) => e.stopPropagation()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onOpenGroupsManager(bucket.name);
+                              }}
                               title={`Editar grupo "${bucket.name}" y asignar alumnos`}
                               className="p-1 rounded hover:bg-white/70 text-slate-600 hover:text-blue-700 shrink-0"
                             >
@@ -4673,6 +4843,21 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         return;
                       }
                       e.stopPropagation();
+                      if (
+                        !e.shiftKey &&
+                        !e.metaKey &&
+                        !e.ctrlKey &&
+                        touchDoubleTap.handleTouchClick(
+                          `st:${student.id}`,
+                          () => {
+                            selectEntireStudentRow(student.id);
+                            onEditStudent(student);
+                          },
+                          device.isTouch
+                        )
+                      ) {
+                        return;
+                      }
                       selectEntireStudentRow(student.id);
                     }}
                     onDoubleClick={() => {
@@ -4827,7 +5012,26 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             }
                             clearCellTooltip();
                             const clicked = { studentId: student.id, columnId: slot.key };
-                            const isMod = e.metaKey || e.ctrlKey;
+                            const isMod =
+                              e.metaKey || e.ctrlKey || (device.isTouch && touchMultiSelect);
+                            if (
+                              !e.shiftKey &&
+                              !isMod &&
+                              touchDoubleTap.handleTouchClick(
+                                fCellKey,
+                                () => {
+                                  selectSingleCell(student.id, slot.key);
+                                  ensureCellVisible(student.id, slot.key, 'auto');
+                                  onOpenCellModal(
+                                    student,
+                                    makeVirtualFolderCol(slot.folder, slot.childCols)
+                                  );
+                                },
+                                device.isTouch
+                              )
+                            ) {
+                              return;
+                            }
                             if (e.shiftKey) {
                               const anchor = anchorCoord ?? selectedCoord ?? clicked;
                               selectRangeToCell(anchor, clicked, isMod);
@@ -5119,6 +5323,27 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             const clicked = { studentId: student.id, columnId: critSlotKey };
                             const isMod =
                               e.metaKey || e.ctrlKey || (device.isTouch && touchMultiSelect);
+                            if (
+                              !e.shiftKey &&
+                              !isMod &&
+                              touchDoubleTap.handleTouchClick(
+                                critCellKey,
+                                () => {
+                                  const cellEl = getCellNode(student.id, critSlotKey);
+                                  const rect = cellEl?.getBoundingClientRect();
+                                  const keepMulti =
+                                    selectedKeys.size > 1 && selectedKeys.has(critCellKey);
+                                  if (!keepMulti) {
+                                    selectSingleCell(student.id, critSlotKey);
+                                    ensureCellVisible(student.id, critSlotKey, 'auto');
+                                  }
+                                  if (rect) openCritEditor(rect);
+                                },
+                                device.isTouch
+                              )
+                            ) {
+                              return;
+                            }
                             if (e.shiftKey) {
                               const anchor = anchorCoord ?? selectedCoord ?? clicked;
                               selectRangeToCell(anchor, clicked, isMod);
@@ -5336,6 +5561,19 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           const clicked = { studentId: student.id, columnId: col.id };
                           const isMod =
                             e.metaKey || e.ctrlKey || (device.isTouch && touchMultiSelect);
+                          if (
+                            !e.shiftKey &&
+                            !isMod &&
+                            touchDoubleTap.handleTouchClick(
+                              key,
+                              () => {
+                                triggerPrimaryColEdit();
+                              },
+                              device.isTouch
+                            )
+                          ) {
+                            return;
+                          }
                           if (e.shiftKey) {
                             const anchor = anchorCoord ?? selectedCoord ?? clicked;
                             selectRangeToCell(anchor, clicked, isMod);

@@ -83,6 +83,7 @@ export function useTouchLongPress(delayMs = 480, moveTolerancePx = 10) {
 
 interface DoubleTapState {
   pointerId: number | null;
+  pointerType: string;
   activeKey: string | null;
   startX: number;
   startY: number;
@@ -92,17 +93,21 @@ interface DoubleTapState {
   lastTapAt: number;
   lastTapX: number;
   lastTapY: number;
+  lastClickKey: string | null;
+  lastClickAt: number;
   handledDoubleTapAt: number;
 }
 
 /**
  * Reliable touch/pen double-tap detector for grid cells and interactive rows/headers.
  * iPadOS/iOS Safari frequently suppresses or delays native `dblclick` on table cells;
- * this fires cleanly on the second fast tap while preserving immediate single-tap selection.
+ * supports both pointer-based taps AND `onClick`-based consecutive touch taps so
+ * double-tap never misfires on iPad Safari while preserving immediate 1-tap selection.
  */
-export function useTouchDoubleTap(maxDelayMs = 520, maxDistancePx = 56) {
+export function useTouchDoubleTap(maxDelayMs = 540, maxDistancePx = 56) {
   const stateRef = useRef<DoubleTapState>({
     pointerId: null,
+    pointerType: '',
     activeKey: null,
     startX: 0,
     startY: 0,
@@ -112,6 +117,8 @@ export function useTouchDoubleTap(maxDelayMs = 520, maxDistancePx = 56) {
     lastTapAt: 0,
     lastTapX: 0,
     lastTapY: 0,
+    lastClickKey: null,
+    lastClickAt: 0,
     handledDoubleTapAt: 0,
   });
 
@@ -121,7 +128,12 @@ export function useTouchDoubleTap(maxDelayMs = 520, maxDistancePx = 56) {
     stateRef.current.moved = false;
   }, []);
 
+  const recordPointerDown = useCallback((e: React.PointerEvent) => {
+    stateRef.current.pointerType = e.pointerType || '';
+  }, []);
+
   const start = useCallback((e: React.PointerEvent, key: string) => {
+    stateRef.current.pointerType = e.pointerType || '';
     if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
     if (!e.isPrimary) {
       stateRef.current.moved = true;
@@ -140,7 +152,7 @@ export function useTouchDoubleTap(maxDelayMs = 520, maxDistancePx = 56) {
     if (s.pointerId !== e.pointerId || s.moved) return;
     const dx = Math.abs(e.clientX - s.startX);
     const dy = Math.abs(e.clientY - s.startY);
-    if (dx > 12 || dy > 12) {
+    if (dx > 16 || dy > 16) {
       s.moved = true;
     }
   }, []);
@@ -161,7 +173,7 @@ export function useTouchDoubleTap(maxDelayMs = 520, maxDistancePx = 56) {
       s.activeKey = null;
       s.moved = false;
 
-      if (!isMatching || skip || moved || pressDuration > 460) {
+      if (!isMatching || skip || moved || pressDuration > 470) {
         s.lastKey = null;
         s.lastTapAt = 0;
         return false;
@@ -172,9 +184,10 @@ export function useTouchDoubleTap(maxDelayMs = 520, maxDistancePx = 56) {
       if (s.lastKey === key && now - s.lastTapAt <= maxDelayMs && dist <= maxDistancePx) {
         s.lastKey = null;
         s.lastTapAt = 0;
+        s.lastClickKey = null;
+        s.lastClickAt = 0;
         s.handledDoubleTapAt = now;
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        // Yield a tick so Safari finishes the synthetic click on the <td> before opening a <dialog>
         window.setTimeout(() => {
           onDoubleTap(rect);
         }, 0);
@@ -190,14 +203,55 @@ export function useTouchDoubleTap(maxDelayMs = 520, maxDistancePx = 56) {
     [maxDelayMs, maxDistancePx]
   );
 
+  /**
+   * Reliable iPadOS click-level fallback for touch/pen taps.
+   * Because Safari always dispatches `click` on every valid tap (never on scroll),
+   * consecutive taps on the same target within `maxDelayMs` reliably trigger edit even
+   * if WebKit absorbed or shifted pointerup. Mouse clicks are untouched (`pointerType === 'mouse'`).
+   */
+  const handleTouchClick = useCallback(
+    (
+      key: string,
+      onDoubleTap: () => void,
+      isTouchDevice: boolean
+    ): boolean => {
+      const s = stateRef.current;
+      if (s.pointerType === 'mouse') return false;
+      if (!isTouchDevice && s.pointerType !== 'touch' && s.pointerType !== 'pen') {
+        return false;
+      }
+      const now = Date.now();
+      if (now - s.handledDoubleTapAt < 450) {
+        return true;
+      }
+      if (s.lastClickKey === key && now - s.lastClickAt <= maxDelayMs) {
+        s.lastClickKey = null;
+        s.lastClickAt = 0;
+        s.lastKey = null;
+        s.lastTapAt = 0;
+        s.handledDoubleTapAt = now;
+        window.setTimeout(() => {
+          onDoubleTap();
+        }, 0);
+        return true;
+      }
+      s.lastClickKey = key;
+      s.lastClickAt = now;
+      return false;
+    },
+    [maxDelayMs]
+  );
+
   const wasDoubleTapJustHandled = useCallback(() => {
     return Date.now() - stateRef.current.handledDoubleTapAt < 450;
   }, []);
 
   return {
+    recordPointerDown,
     start,
     move,
     end,
+    handleTouchClick,
     cancel,
     wasDoubleTapJustHandled,
   };
