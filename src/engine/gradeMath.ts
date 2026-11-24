@@ -1284,20 +1284,21 @@ export const COLUMN_SUMMARY_OPTIONS: Array<{
   metric: ColumnSummaryMetric;
   label: string;
   shortLabel: string;
+  symbol: string;
 }> = [
-  { metric: 'MEAN', label: 'Media aritmética', shortLabel: 'Media' },
-  { metric: 'PASS_PCT', label: '% Aprobados', shortLabel: '% Aprob.' },
-  { metric: 'PASS_COUNT', label: 'N.º Aprobados', shortLabel: 'Aprob.' },
-  { metric: 'FAIL_COUNT', label: 'N.º Suspensos', shortLabel: 'Susp.' },
-  { metric: 'FAIL_PCT', label: '% Suspensos', shortLabel: '% Susp.' },
-  { metric: 'EMPTY_COUNT', label: 'Celdas vacías', shortLabel: 'Vacías' },
-  { metric: 'FILLED_COUNT', label: 'Celdas evaluadas', shortLabel: 'Evaluad.' },
-  { metric: 'MEDIAN', label: 'Mediana', shortLabel: 'Mediana' },
-  { metric: 'MAX', label: 'Nota máxima', shortLabel: 'Máx.' },
-  { metric: 'MIN', label: 'Nota mínima', shortLabel: 'Mín.' },
-  { metric: 'SUM', label: 'Suma total', shortLabel: 'Suma' },
-  { metric: 'STD_DEV', label: 'Desviación típica', shortLabel: 'Desv.' },
-  { metric: 'NONE', label: 'Ocultar (vacío)', shortLabel: '—' },
+  { metric: 'MEAN', label: 'Media aritmética', shortLabel: 'Media', symbol: 'x̄' },
+  { metric: 'PASS_PCT', label: '% Aprobados', shortLabel: '% Aprob.', symbol: '✓' },
+  { metric: 'PASS_COUNT', label: 'N.º Aprobados', shortLabel: 'Aprob.', symbol: '✓' },
+  { metric: 'FAIL_COUNT', label: 'N.º Suspensos', shortLabel: 'Susp.', symbol: '✕' },
+  { metric: 'FAIL_PCT', label: '% Suspensos', shortLabel: '% Susp.', symbol: '✕' },
+  { metric: 'EMPTY_COUNT', label: 'Celdas vacías', shortLabel: 'Vacías', symbol: '○' },
+  { metric: 'FILLED_COUNT', label: 'Celdas evaluadas', shortLabel: 'Eval.', symbol: '●' },
+  { metric: 'MEDIAN', label: 'Mediana', shortLabel: 'Mediana', symbol: '~' },
+  { metric: 'MAX', label: 'Nota máxima', shortLabel: 'Máx.', symbol: '↑' },
+  { metric: 'MIN', label: 'Nota mínima', shortLabel: 'Mín.', symbol: '↓' },
+  { metric: 'SUM', label: 'Suma total', shortLabel: 'Suma', symbol: 'Σ' },
+  { metric: 'STD_DEV', label: 'Desviación típica', shortLabel: 'Desv.', symbol: 'σ' },
+  { metric: 'NONE', label: 'Ocultar (vacío)', shortLabel: '—', symbol: '' },
 ];
 
 export function computeColumnSummaryMetric(

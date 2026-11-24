@@ -332,6 +332,9 @@ export function hydrateWorkspace(raw: Partial<GradebookWorkspace>): GradebookWor
         raw.settings?.collapsedSchools && typeof raw.settings.collapsedSchools === 'object'
           ? raw.settings.collapsedSchools
           : {},
+      globalSummaryRows: raw.settings?.globalSummaryRows
+        ? toArray<ColumnSummaryMetric>(raw.settings.globalSummaryRows)
+        : undefined,
     },
     updatedAt: raw.updatedAt ?? new Date().toISOString(),
   };

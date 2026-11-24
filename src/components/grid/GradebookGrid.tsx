@@ -2810,7 +2810,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   const groupSpacerRows = activeBook.groupSpacerRows ?? 1;
   const groupSpacerH = Math.max(10, Math.round((workspace.settings.groupSpacerHeight ?? 24) * gridZoom));
   const summaryRowH = Math.max(18, Math.round((workspace.settings.summaryRowHeight ?? 32) * gridZoom));
-  const summaryRows: ColumnSummaryMetric[] = activeBook.summaryRows ?? ['MEAN', 'PASS_PCT'];
+  const summaryRows: ColumnSummaryMetric[] =
+    workspace.settings.globalSummaryRows ?? activeBook.summaryRows ?? ['MEAN', 'PASS_PCT'];
   const groupSummaryRows: ColumnSummaryMetric[] = activeBook.groupSummaryRows ?? ['MEAN'];
   const scaledSlotsWidth = displaySlots.reduce(
     (sum, s) => sum + s.width * gridZoom,
@@ -6099,9 +6100,20 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             <div className="font-bold text-slate-900 tabular-nums text-[0.88em] leading-tight truncate">
                               {formatted || '—'}
                             </div>
-                            {effectiveMetric !== 'NONE' && (
-                              <div className="text-[0.68em] font-medium text-slate-500 leading-none truncate">
-                                {metricOpt?.shortLabel}
+                            {effectiveMetric !== 'NONE' && metricOpt && (
+                              <div
+                                data-group-summary-metric-hint={effectiveMetric}
+                                style={{ fontSize: `${Math.max(8, Math.round(9 * gridZoom))}px` }}
+                                className={`leading-none truncate mt-0.5 select-none ${
+                                  overrideMetric && overrideMetric !== globalGrpMetric
+                                    ? 'font-semibold text-indigo-600/85'
+                                    : 'font-normal text-slate-400'
+                                }`}
+                              >
+                                {metricOpt.symbol && (
+                                  <span className="opacity-85 mr-0.5">{metricOpt.symbol}</span>
+                                )}
+                                <span>{metricOpt.shortLabel}</span>
                               </div>
                             )}
                           </td>
@@ -6214,7 +6226,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       onMouseDown={(e) => e.stopPropagation()}
                       onClick={(e) => {
                         e.stopPropagation();
-                        setSummaryCellPicker(null);
+                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                         setGroupColAction(null);
                         setAddGroupSummaryMenu(null);
                         setSelectedGroupColCell(null);
@@ -6222,20 +6234,22 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         setSelectedKeys(new Set());
                         setSelectedColumnTarget(null);
                         setSelectedSummaryCell(`table::header::${rowIdx}`);
+                        setSummaryCellPicker((prev) =>
+                          prev &&
+                          prev.scope === 'TABLE' &&
+                          prev.target.kind === 'GLOBAL' &&
+                          prev.rowIndex === rowIdx
+                            ? null
+                            : {
+                                scope: 'TABLE',
+                                rowIndex: rowIdx,
+                                target: { kind: 'GLOBAL' },
+                                top: Math.max(12, Math.min(window.innerHeight - 320, rect.top - 120)),
+                                left: Math.min(window.innerWidth - 240, rect.left),
+                              }
+                        );
                       }}
-                      onDoubleClick={(e) => {
-                        e.stopPropagation();
-                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                        setSelectedSummaryCell(`table::header::${rowIdx}`);
-                        setSummaryCellPicker({
-                          scope: 'TABLE',
-                          rowIndex: rowIdx,
-                          target: { kind: 'GLOBAL' },
-                          top: Math.max(12, Math.min(window.innerHeight - 320, rect.top - 120)),
-                          left: Math.min(window.innerWidth - 240, rect.left),
-                        });
-                      }}
-                      title="Doble clic para cambiar resumen de esta fila (extensible a todas las columnas)"
+                      title="Cambiar estadística de esta fila en todas las clases y pestañas"
                       className="inline-flex items-center gap-1 px-1.5 py-0 rounded-md bg-white/90 hover:bg-white border border-slate-200 text-[0.84em] font-bold text-slate-700 hover:text-blue-700 truncate max-w-[165px]"
                     >
                       <Sigma style={smallIconStyle} className="text-blue-600 shrink-0" />
@@ -6384,12 +6398,25 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             : ''
                       }`}
                     >
-                      <div className="truncate">{formatted || '—'}</div>
-                      {overrideMetric && overrideMetric !== globalMetric && overrideMetric !== 'NONE' && (
-                        <div className="text-[0.72em] font-semibold text-blue-700 leading-none truncate">
-                          {metricOpt?.shortLabel}
-                        </div>
-                      )}
+                      <div className="flex flex-col items-center justify-center leading-tight min-w-0">
+                        <div className="truncate leading-none">{formatted || '—'}</div>
+                        {effectiveMetric !== 'NONE' && metricOpt && (
+                          <div
+                            data-summary-metric-hint={effectiveMetric}
+                            style={{ fontSize: `${Math.max(8, Math.round(9 * gridZoom))}px` }}
+                            className={`leading-none truncate max-w-full mt-0.5 select-none ${
+                              overrideMetric && overrideMetric !== globalMetric
+                                ? 'font-semibold text-blue-600/85'
+                                : 'font-normal text-slate-400'
+                            }`}
+                          >
+                            {metricOpt.symbol && (
+                              <span className="opacity-85 mr-0.5">{metricOpt.symbol}</span>
+                            )}
+                            <span>{metricOpt.shortLabel}</span>
+                          </div>
+                        )}
+                      </div>
                     </td>
                   );
                 })}
@@ -6419,8 +6446,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               <div className="relative flex items-center justify-between gap-1" onMouseDown={(e) => e.stopPropagation()}>
                 <button
                   type="button"
+                  data-add-summary-row-btn="true"
                   onClick={() => setShowAddSummaryMenu((v) => !v)}
-                  title="Añadir fila de resumen extensible a todas las columnas"
+                  title="Añadir fila de resumen global para todas las clases y pestañas"
                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white hover:bg-blue-50 border border-slate-300 hover:border-blue-400 text-[11px] font-semibold text-slate-700 hover:text-blue-700 transition-colors"
                 >
                   <Plus className="w-3 h-3" />
@@ -6485,7 +6513,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 summaryRows.length === 0 ? 'border-t-2 border-t-slate-300' : ''
               }`}
             >
-              Pulsa en cualquier casilla de resumen para personalizar esa columna o en la fila izquierda para aplicarlo a todas.
+              Pulsa en el selector izquierdo para cambiar estas filas en todas las clases y pestañas, o doble clic en una celda para personalizar esa columna.
             </td>
           </tr>
         </tfoot>
@@ -6589,7 +6617,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   ? `Estadística de grupo ${summaryCellPicker.rowIndex + 1} (Todos)`
                   : `Grupo · ${summaryCellPicker.target.title}`
               ) : summaryCellPicker.target.kind === 'GLOBAL' ? (
-                `Fila resumen ${summaryCellPicker.rowIndex + 1} (Todas)`
+                `Fila resumen ${summaryCellPicker.rowIndex + 1} (Todas las clases)`
               ) : (
                 `Resumen · ${summaryCellPicker.target.title}`
               )}
@@ -6598,8 +6626,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               {summaryCellPicker.scope === 'GROUP'
                 ? 'Se configura igual en todos los grupos'
                 : summaryCellPicker.target.kind === 'GLOBAL'
-                  ? 'Se aplica a todas las columnas de esta fila'
-                  : 'Personaliza esta columna o extiéndelo a todas'}
+                  ? 'Se aplica globalmente a todas las clases y pestañas'
+                  : 'Personaliza esta columna o aplícalo a toda la app'}
             </div>
           </div>
 
@@ -6670,7 +6698,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       }
                       setSummaryCellPicker(null);
                     }}
-                    title="Aplicar esta métrica a TODAS las columnas en esta fila"
+                    title="Aplicar esta métrica a todas las columnas, clases y pestañas en esta fila"
                     className="px-1.5 py-0.5 rounded bg-slate-100 hover:bg-blue-600 hover:text-white text-[10px] font-semibold text-slate-600 shrink-0"
                   >
                     Todas

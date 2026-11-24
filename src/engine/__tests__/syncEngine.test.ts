@@ -335,4 +335,23 @@ describe('syncEngine — 3-way offline multi-device merge', () => {
       mergedBook.groupCategories?.find((c) => c.id === 'cat-debates')?.assignments[st0.id]
     ).toBe('A favor');
   });
+
+  it('syncs globalSummaryRows from merged books across devices', () => {
+    const base = createSeedWorkspace();
+    const local = structuredClone(base);
+    const remote = structuredClone(base);
+
+    const updatedRows = ['MEDIAN', 'MAX', 'PASS_PCT'] as const;
+    remote.updatedAt = '2026-11-24T13:30:00.000Z';
+    remote.classes = remote.classes.map((c) => ({ ...c, summaryRows: [...updatedRows] }));
+    remote.templates = remote.templates.map((t) => ({ ...t, summaryRows: [...updatedRows] }));
+    remote.settings = { ...remote.settings, globalSummaryRows: [...updatedRows] };
+
+    const merged = mergeWorkspaces3Way(base, local, remote);
+    expect(merged.workspace.classes.every((c) => c.summaryRows?.join(',') === updatedRows.join(','))).toBe(true);
+    expect(merged.workspace.settings.globalSummaryRows).toEqual([...updatedRows]);
+
+    const preserved = preserveDeviceLocalLayoutAndNav(remote, local);
+    expect(preserved.settings.globalSummaryRows).toEqual([...updatedRows]);
+  });
 });

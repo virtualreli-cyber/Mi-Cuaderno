@@ -916,6 +916,11 @@ export function preserveDeviceLocalLayoutAndNav(
       collapsedSchools: local.settings.collapsedSchools ?? {},
       gridZoom: local.settings.gridZoom ?? 1,
       rubricZoom: local.settings.rubricZoom ?? 1,
+      globalSummaryRows:
+        remote.settings?.globalSummaryRows ??
+        classes.find((c) => c.id === activeClassId)?.summaryRows ??
+        classes[0]?.summaryRows ??
+        local.settings.globalSummaryRows,
     },
   };
 }
@@ -1026,7 +1031,22 @@ export function mergeWorkspaces3Way(
       curriculaMerge.items.length > 0
         ? curriculaMerge.items
         : (remote.lomloeCurricula ?? local.lomloeCurricula),
-    settings: mergeSettings(base?.settings, local.settings, remote.settings, preferLocal),
+    settings: (() => {
+      const mergedSettings = mergeSettings(
+        base?.settings,
+        local.settings,
+        remote.settings,
+        preferLocal
+      );
+      const syncedSummaryRows =
+        mergedClasses.find((c) => c.id === activeClassId)?.summaryRows ??
+        mergedClasses.find((c) => c.summaryRows !== undefined)?.summaryRows ??
+        remote.settings?.globalSummaryRows ??
+        local.settings.globalSummaryRows;
+      return syncedSummaryRows
+        ? { ...mergedSettings, globalSummaryRows: syncedSummaryRows }
+        : mergedSettings;
+    })(),
     updatedAt: new Date().toISOString(),
   };
 

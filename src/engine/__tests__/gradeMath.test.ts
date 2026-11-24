@@ -3,6 +3,7 @@ import { createSeedWorkspace, DEFAULT_RUBRICS } from '../../data/seedData';
 import {
   applyCounterDelta,
   buildAlphabeticalColumnCopyText,
+  COLUMN_SUMMARY_OPTIONS,
   computeColumnSummaryMetric,
   computeFolderFormulaValue,
   computeFolderSourceSignature,
@@ -786,5 +787,16 @@ describe('Weighted Averages, Cross-Tab Chaining, Rubrics & Folders', () => {
     if (missingCrit) {
       expect(computeRubricCriterionResult(rubric, missingCrit.id, evalData)).toBeNull();
     }
+  });
+
+  it('provides concise symbol and shortLabel metadata for every non-NONE bottom summary metric', () => {
+    const activeMetrics = COLUMN_SUMMARY_OPTIONS.filter((o) => o.metric !== 'NONE');
+    expect(activeMetrics.length).toBeGreaterThanOrEqual(12);
+    for (const opt of activeMetrics) {
+      expect(opt.shortLabel.trim().length).toBeGreaterThan(0);
+      expect(opt.symbol.trim().length).toBeGreaterThan(0);
+    }
+    const noneOpt = COLUMN_SUMMARY_OPTIONS.find((o) => o.metric === 'NONE');
+    expect(noneOpt?.symbol).toBe('');
   });
 });

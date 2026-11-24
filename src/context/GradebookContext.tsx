@@ -1144,6 +1144,23 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   }, [hydrated, commit]);
 
+const DEFAULT_GLOBAL_SUMMARY_ROWS: ColumnSummaryMetric[] = ['MEAN', 'PASS_PCT'];
+
+function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[] {
+  if (ws.settings.globalSummaryRows) {
+    return [...ws.settings.globalSummaryRows];
+  }
+  const currentId =
+    ws.activeMode === 'TEMPLATE'
+      ? (ws.activeTemplateId ?? ws.templates[0]?.id)
+      : (ws.activeClassId ?? ws.classes[0]?.id);
+  const active =
+    ws.classes.find((c) => c.id === currentId) ??
+    ws.templates.find((t) => t.id === currentId) ??
+    ws.classes[0];
+  return [...(active?.summaryRows ?? DEFAULT_GLOBAL_SUMMARY_ROWS)];
+}
+
   const createBook = useCallback<GradebookContextValue['createBook']>(
     (kind, data) => {
       const isTpl = kind === 'TEMPLATE';
@@ -1201,15 +1218,21 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         cells: {},
       };
 
-      commit((prev) => ({
-        ...prev,
-        activeMode: kind,
-        activeClassId: isTpl ? prev.activeClassId : bookId,
-        activeTemplateId: isTpl ? bookId : prev.activeTemplateId,
-        activeTabByBook: { ...prev.activeTabByBook, [bookId]: tabId },
-        classes: isTpl ? prev.classes : [...prev.classes, newBook],
-        templates: isTpl ? [...prev.templates, newBook] : prev.templates,
-      }));
+      commit((prev) => {
+        const syncedNewBook: ClassBook = {
+          ...newBook,
+          summaryRows: resolveGlobalSummaryRows(prev),
+        };
+        return {
+          ...prev,
+          activeMode: kind,
+          activeClassId: isTpl ? prev.activeClassId : bookId,
+          activeTemplateId: isTpl ? bookId : prev.activeTemplateId,
+          activeTabByBook: { ...prev.activeTabByBook, [bookId]: tabId },
+          classes: isTpl ? prev.classes : [...prev.classes, syncedNewBook],
+          templates: isTpl ? [...prev.templates, syncedNewBook] : prev.templates,
+        };
+      });
       return newBook;
     },
     [commit]
@@ -1284,7 +1307,7 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         activeMode: 'CLASS',
         activeClassId: newCls.id,
         activeTabByBook: { ...prev.activeTabByBook, [newCls.id]: newCls.tabs[0]?.id ?? '' },
-        classes: [...prev.classes, newCls],
+        classes: [...prev.classes, { ...newCls, summaryRows: resolveGlobalSummaryRows(prev) }],
       }));
     },
     [workspace.templates, commit]
@@ -1321,7 +1344,7 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         activeMode: 'TEMPLATE',
         activeTemplateId: tpl.id,
         activeTabByBook: { ...prev.activeTabByBook, [tpl.id]: tpl.tabs[0]?.id ?? '' },
-        templates: [...prev.templates, tpl],
+        templates: [...prev.templates, { ...tpl, summaryRows: resolveGlobalSummaryRows(prev) }],
       }));
       return tpl;
     },
@@ -2001,63 +2024,75 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   );
 
   // =====================================================================
-  // Bottom Summary Rows (as many as desired / all summary options)
+  // Bottom Summary Rows (global across all classes, templates, and tabs)
   // =====================================================================
   const addSummaryRow = useCallback<GradebookContextValue['addSummaryRow']>(
     (metric) => {
-      mutateActiveBook((book) => {
-        const current = book.summaryRows ?? (['MEAN', 'PASS_PCT'] as ColumnSummaryMetric[]);
-        if (current.length >= 25) return book;
+      commit((prev) => {
+        const current = resolveGlobalSummaryRows(prev);
+        if (current.length >= 25) return prev;
+        const nextRows = [...current, metric];
         return {
-          ...book,
-          summaryRows: [...current, metric],
+          ...prev,
+          settings: { ...prev.settings, globalSummaryRows: nextRows },
+          classes: prev.classes.map((b) => ({ ...b, summaryRows: nextRows })),
+          templates: prev.templates.map((b) => ({ ...b, summaryRows: nextRows })),
         };
       });
     },
-    [mutateActiveBook]
+    [commit]
   );
 
   const updateGlobalSummaryRow = useCallback<GradebookContextValue['updateGlobalSummaryRow']>(
     (rowIndex, metric, clearColumnOverrides = false) => {
-      mutateActiveBook((book) => {
-        const current = [...(book.summaryRows ?? (['MEAN', 'PASS_PCT'] as ColumnSummaryMetric[]))];
-        if (rowIndex < 0 || rowIndex >= 25) return book;
+      commit((prev) => {
+        const current = resolveGlobalSummaryRows(prev);
+        if (rowIndex < 0 || rowIndex >= 25) return prev;
         while (current.length <= rowIndex) current.push('NONE');
         current[rowIndex] = metric;
 
-        const nextTabs = clearColumnOverrides
-          ? book.tabs.map((t) => ({
-              ...t,
-              columns: t.columns.map((c) => {
-                if (!c.summaryRowOverrides || !(rowIndex in c.summaryRowOverrides)) return c;
-                const copy = { ...c.summaryRowOverrides };
-                delete copy[rowIndex];
-                return { ...c, summaryRowOverrides: copy };
-              }),
-              folders: t.folders.map((f) => {
-                if (!f.summaryRowOverrides || !(rowIndex in f.summaryRowOverrides)) return f;
-                const copy = { ...f.summaryRowOverrides };
-                delete copy[rowIndex];
-                return { ...f, summaryRowOverrides: copy };
-              }),
-            }))
-          : book.tabs;
+        const applyBookSummaryUpdate = (book: ClassBook): ClassBook => {
+          const nextTabs = clearColumnOverrides
+            ? book.tabs.map((t) => ({
+                ...t,
+                columns: t.columns.map((c) => {
+                  if (!c.summaryRowOverrides || !(rowIndex in c.summaryRowOverrides)) return c;
+                  const copy = { ...c.summaryRowOverrides };
+                  delete copy[rowIndex];
+                  return { ...c, summaryRowOverrides: copy };
+                }),
+                folders: t.folders.map((f) => {
+                  if (!f.summaryRowOverrides || !(rowIndex in f.summaryRowOverrides)) return f;
+                  const copy = { ...f.summaryRowOverrides };
+                  delete copy[rowIndex];
+                  return { ...f, summaryRowOverrides: copy };
+                }),
+              }))
+            : book.tabs;
+
+          return {
+            ...book,
+            summaryRows: current,
+            tabs: nextTabs,
+          };
+        };
 
         return {
-          ...book,
-          summaryRows: current,
-          tabs: nextTabs,
+          ...prev,
+          settings: { ...prev.settings, globalSummaryRows: current },
+          classes: prev.classes.map(applyBookSummaryUpdate),
+          templates: prev.templates.map(applyBookSummaryUpdate),
         };
       });
     },
-    [mutateActiveBook]
+    [commit]
   );
 
   const removeSummaryRow = useCallback<GradebookContextValue['removeSummaryRow']>(
     (rowIndex) => {
-      mutateActiveBook((book) => {
-        const current = [...(book.summaryRows ?? (['MEAN', 'PASS_PCT'] as ColumnSummaryMetric[]))];
-        if (rowIndex < 0 || rowIndex >= current.length) return book;
+      commit((prev) => {
+        const current = resolveGlobalSummaryRows(prev);
+        if (rowIndex < 0 || rowIndex >= current.length) return prev;
         current.splice(rowIndex, 1);
 
         const shiftOverrides = (
@@ -2073,7 +2108,7 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           return Object.keys(next).length > 0 ? next : undefined;
         };
 
-        return {
+        const applyBookSummaryRemoval = (book: ClassBook): ClassBook => ({
           ...book,
           summaryRows: current,
           tabs: book.tabs.map((t) => ({
@@ -2087,10 +2122,17 @@ export const GradebookProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               summaryRowOverrides: shiftOverrides(f.summaryRowOverrides),
             })),
           })),
+        });
+
+        return {
+          ...prev,
+          settings: { ...prev.settings, globalSummaryRows: current },
+          classes: prev.classes.map(applyBookSummaryRemoval),
+          templates: prev.templates.map(applyBookSummaryRemoval),
         };
       });
     },
-    [mutateActiveBook]
+    [commit]
   );
 
   const setColumnSummaryOverride = useCallback<GradebookContextValue['setColumnSummaryOverride']>(

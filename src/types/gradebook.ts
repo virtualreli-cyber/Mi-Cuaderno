@@ -300,6 +300,8 @@ export interface ViewSettings {
   showLomloeRow?: boolean;
   /** Estado plegado/abierto de las secciones/centros del panel lateral de clases */
   collapsedSchools?: Record<string, boolean>;
+  /** Filas de estadísticas inferiores compartidas globalmente entre todas las clases y pestañas */
+  globalSummaryRows?: ColumnSummaryMetric[];
 }
 
 export interface GradebookWorkspace {
