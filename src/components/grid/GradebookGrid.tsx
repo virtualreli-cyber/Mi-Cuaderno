@@ -50,7 +50,7 @@ import {
 import { DEFAULT_LOMLOE_KEY_COMPETENCES } from '../../data/lomloeReligion';
 import { useGradebook } from '../../context/GradebookContext';
 import { useDeviceProfile } from '../../hooks/useDeviceProfile';
-import { useTouchDoubleTap, useTouchLongPress } from '../../hooks/useLongPress';
+import { useTouchDoubleTap } from '../../hooks/useLongPress';
 import {
   applyCounterDelta,
   buildAlphabeticalColumnCopyText,
@@ -103,10 +103,6 @@ import {
 } from '../common/ZoomControls';
 import { LomloeCompetenceBadge } from '../lomloe/LomloeCompetenceBadge';
 import { LomloeCriteriaPickerPopover } from '../lomloe/LomloeCriteriaPickerPopover';
-import {
-  CellQuickActionsModal,
-  type CellQuickActionTarget,
-} from '../modals/CellQuickActionsModal';
 
 interface GradebookGridProps {
   searchQuery: string;
@@ -247,7 +243,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   onOpenLomloeManager,
 }) => {
   const device = useDeviceProfile();
-  const longPress = useTouchLongPress();
   const touchDoubleTap = useTouchDoubleTap();
   const {
     workspace,
@@ -409,7 +404,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     text: string;
     rect: { top: number; bottom: number; left: number; width: number };
   } | null>(null);
-  const [cellQuickAction, setCellQuickAction] = useState<CellQuickActionTarget | null>(null);
   const [touchMultiSelect, setTouchMultiSelect] = useState(false);
   const [editingGroup, setEditingGroup] = useState<{
     key: string;
@@ -704,7 +698,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   // Close menus on outside click
   useEffect(() => {
     const close = (e: MouseEvent) => {
-      if (longPress.wasJustTriggered() || touchDoubleTap.wasDoubleTapJustHandled()) {
+      if (touchDoubleTap.wasDoubleTapJustHandled()) {
         return;
       }
       setShowAddColMenu(false);
@@ -747,7 +741,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setCriterionPicker(null);
     setLomloePicker(null);
     setEducamosMenu(null);
-    setCellQuickAction(null);
     setTouchMultiSelect(false);
     setEditingGroup(null);
   }, [activeBook?.id, activeTab?.id]);
@@ -1504,6 +1497,53 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setAnchorCoord(null);
     wrapperRef.current?.focus({ preventScroll: true });
   }, []);
+
+  useEffect(() => {
+    const onHighlightStudent = (e: Event) => {
+      const studentId = (e as CustomEvent<{ studentId?: string }>).detail?.studentId;
+      if (!studentId) return;
+      selectEntireStudentRow(studentId);
+      requestAnimationFrame(() => {
+        const rowEl = wrapperRef.current?.querySelector(
+          `[data-student-row="${CSS.escape(studentId)}"]`
+        );
+        rowEl?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+      });
+    };
+
+    const onHighlightGroup = (e: Event) => {
+      const groupName = (e as CustomEvent<{ groupName?: string }>).detail?.groupName;
+      if (!groupName) return;
+      if (activeBook && !activeBook.groupByGroups) {
+        updateBook(activeBook.id, { groupByGroups: true });
+      }
+      if (activeBook?.collapsedGroups?.includes(groupName)) {
+        toggleGroupCollapsed(groupName);
+      }
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const grpEl = wrapperRef.current?.querySelector(
+            `[data-group-header="${CSS.escape(groupName)}"]`
+          );
+          grpEl?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        });
+      });
+    };
+
+    window.addEventListener('cuaderno:highlight-student', onHighlightStudent);
+    window.addEventListener('cuaderno:highlight-group', onHighlightGroup);
+    return () => {
+      window.removeEventListener('cuaderno:highlight-student', onHighlightStudent);
+      window.removeEventListener('cuaderno:highlight-group', onHighlightGroup);
+    };
+  }, [
+    activeBook?.collapsedGroups,
+    activeBook?.groupByGroups,
+    activeBook?.id,
+    selectEntireStudentRow,
+    toggleGroupCollapsed,
+    updateBook,
+  ]);
 
   const selectStudentColHeader = useCallback(() => {
     setSelectedStudentColHeader(true);
@@ -2848,32 +2888,16 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         draggable={!activeTab.isLocked && !device.isTouch}
         onPointerDown={(e) => {
           touchDoubleTap.start(e, `hdr-col:${col.id}`);
-          longPress.start(e, () => {
+        }}
+        onPointerMove={touchDoubleTap.move}
+        onPointerUp={(e) => {
+          touchDoubleTap.end(e, `hdr-col:${col.id}`, () => {
+            if (justResizedRef.current) return;
             selectEntireColumn(col);
             onEditColumn(col);
           });
         }}
-        onPointerMove={(e) => {
-          longPress.move(e);
-          touchDoubleTap.move(e);
-        }}
-        onPointerUp={(e) => {
-          longPress.cancel();
-          touchDoubleTap.end(
-            e,
-            `hdr-col:${col.id}`,
-            () => {
-              if (justResizedRef.current) return;
-              selectEntireColumn(col);
-              onEditColumn(col);
-            },
-            longPress.wasJustTriggered()
-          );
-        }}
-        onPointerCancel={() => {
-          longPress.cancel();
-          touchDoubleTap.cancel();
-        }}
+        onPointerCancel={touchDoubleTap.cancel}
         onDragStart={(e) => {
           const payload: DragItemPayload = { kind: 'COL', id: col.id };
           setDragItem({ kind: 'COL', id: col.id, folderId: col.folderId });
@@ -2913,11 +2937,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           clearDrag();
         }}
         onClick={(e) => {
-          if (
-            justResizedRef.current ||
-            longPress.wasJustTriggered() ||
-            touchDoubleTap.wasDoubleTapJustHandled()
-          ) {
+          if (justResizedRef.current || touchDoubleTap.wasDoubleTapJustHandled()) {
             return;
           }
           e.stopPropagation();
@@ -3709,31 +3729,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   draggable={!activeTab.isLocked && !device.isTouch}
                   onPointerDown={(e) => {
                     touchDoubleTap.start(e, `hdr-fld:${folder.id}`);
-                    longPress.start(e, () => {
-                      selectFolderSummaryColumn(folder, childCols);
-                      onEditFolder(activeTab.id, folder);
+                  }}
+                  onPointerMove={touchDoubleTap.move}
+                  onPointerUp={(e) => {
+                    touchDoubleTap.end(e, `hdr-fld:${folder.id}`, () => {
+                      if (justResizedRef.current) return;
+                      toggleFolderCollapse(activeTab.id, folder.id);
                     });
                   }}
-                  onPointerMove={(e) => {
-                    longPress.move(e);
-                    touchDoubleTap.move(e);
-                  }}
-                  onPointerUp={(e) => {
-                    longPress.cancel();
-                    touchDoubleTap.end(
-                      e,
-                      `hdr-fld:${folder.id}`,
-                      () => {
-                        if (justResizedRef.current) return;
-                        toggleFolderCollapse(activeTab.id, folder.id);
-                      },
-                      longPress.wasJustTriggered()
-                    );
-                  }}
-                  onPointerCancel={() => {
-                    longPress.cancel();
-                    touchDoubleTap.cancel();
-                  }}
+                  onPointerCancel={touchDoubleTap.cancel}
                   onDragStart={(e) => {
                     const payload: DragItemPayload = { kind: 'FOLDER', id: folder.id };
                     setDragItem({ kind: 'FOLDER', id: folder.id });
@@ -3775,11 +3779,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     clearDrag();
                   }}
                   onClick={(e) => {
-                    if (
-                      justResizedRef.current ||
-                      longPress.wasJustTriggered() ||
-                      touchDoubleTap.wasDoubleTapJustHandled()
-                    ) {
+                    if (justResizedRef.current || touchDoubleTap.wasDoubleTapJustHandled()) {
                       return;
                     }
                     e.stopPropagation();
@@ -4067,17 +4067,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   <th
                     key={key}
                     rowSpan={fldRowSpan > 1 ? fldRowSpan : undefined}
-                    onPointerDown={(e) => {
-                      longPress.start(e, () => {
-                        selectFolderSummaryColumn(folder, childCols);
-                        onEditFolder(activeTab.id, folder);
-                      });
-                    }}
-                    onPointerMove={longPress.move}
-                    onPointerUp={longPress.cancel}
-                    onPointerCancel={longPress.cancel}
                     onClick={(e) => {
-                      if (justResizedRef.current || longPress.wasJustTriggered()) return;
+                      if (justResizedRef.current) return;
                       e.stopPropagation();
                       selectFolderSummaryColumn(folder, childCols);
                     }}
@@ -5027,36 +5018,17 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     style={{ backgroundColor: rowBg, height: rowH }}
                     onPointerDown={(e) => {
                       touchDoubleTap.start(e, `st:${student.id}`);
-                      longPress.start(e, () => {
+                    }}
+                    onPointerMove={touchDoubleTap.move}
+                    onPointerUp={(e) => {
+                      touchDoubleTap.end(e, `st:${student.id}`, () => {
                         selectEntireStudentRow(student.id);
                         onEditStudent(student);
                       });
                     }}
-                    onPointerMove={(e) => {
-                      longPress.move(e);
-                      touchDoubleTap.move(e);
-                    }}
-                    onPointerUp={(e) => {
-                      longPress.cancel();
-                      touchDoubleTap.end(
-                        e,
-                        `st:${student.id}`,
-                        () => {
-                          selectEntireStudentRow(student.id);
-                          onEditStudent(student);
-                        },
-                        longPress.wasJustTriggered()
-                      );
-                    }}
-                    onPointerCancel={() => {
-                      longPress.cancel();
-                      touchDoubleTap.cancel();
-                    }}
+                    onPointerCancel={touchDoubleTap.cancel}
                     onClick={(e) => {
-                      if (
-                        longPress.wasJustTriggered() ||
-                        touchDoubleTap.wasDoubleTapJustHandled()
-                      ) {
+                      if (touchDoubleTap.wasDoubleTapJustHandled()) {
                         return;
                       }
                       e.stopPropagation();
@@ -5178,53 +5150,26 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           onPointerDown={(e) => {
                             if (isFolderInline) return;
                             touchDoubleTap.start(e, fCellKey);
-                            longPress.start(e, () => {
-                              clearCellTooltip();
-                              selectSingleCell(student.id, slot.key);
-                              ensureCellVisible(student.id, slot.key, 'auto');
-                              setCellQuickAction({
-                                kind: 'FOLDER_SUMMARY',
-                                student,
-                                folder: slot.folder,
-                                childCols: slot.childCols,
-                              });
-                            });
                           }}
-                          onPointerMove={(e) => {
-                            longPress.move(e);
-                            touchDoubleTap.move(e);
-                          }}
+                          onPointerMove={touchDoubleTap.move}
                           onPointerUp={(e) => {
-                            longPress.cancel();
                             if (isFolderInline) {
                               touchDoubleTap.cancel();
                               return;
                             }
-                            touchDoubleTap.end(
-                              e,
-                              fCellKey,
-                              () => {
-                                clearCellTooltip();
-                                selectSingleCell(student.id, slot.key);
-                                ensureCellVisible(student.id, slot.key, 'auto');
-                                onOpenCellModal(
-                                  student,
-                                  makeVirtualFolderCol(slot.folder, slot.childCols)
-                                );
-                              },
-                              longPress.wasJustTriggered()
-                            );
+                            touchDoubleTap.end(e, fCellKey, () => {
+                              clearCellTooltip();
+                              selectSingleCell(student.id, slot.key);
+                              ensureCellVisible(student.id, slot.key, 'auto');
+                              onOpenCellModal(
+                                student,
+                                makeVirtualFolderCol(slot.folder, slot.childCols)
+                              );
+                            });
                           }}
-                          onPointerCancel={() => {
-                            longPress.cancel();
-                            touchDoubleTap.cancel();
-                          }}
+                          onPointerCancel={touchDoubleTap.cancel}
                           onClick={(e) => {
-                            if (
-                              isFolderInline ||
-                              longPress.wasJustTriggered() ||
-                              touchDoubleTap.wasDoubleTapJustHandled()
-                            ) {
+                            if (isFolderInline || touchDoubleTap.wasDoubleTapJustHandled()) {
                               return;
                             }
                             clearCellTooltip();
@@ -5293,16 +5238,13 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             if (isFolderInline) return;
                             e.preventDefault();
                             e.stopPropagation();
-                            if (longPress.wasJustTriggered()) return;
                             clearCellTooltip();
                             selectSingleCell(student.id, slot.key);
                             ensureCellVisible(student.id, slot.key, 'auto');
-                            setCellQuickAction({
-                              kind: 'FOLDER_SUMMARY',
+                            onOpenCellModal(
                               student,
-                              folder: slot.folder,
-                              childCols: slot.childCols,
-                            });
+                              makeVirtualFolderCol(slot.folder, slot.childCols)
+                            );
                           }}
                           onMouseEnter={(e) => {
                             if (isFolderInline) return;
@@ -5489,51 +5431,23 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           }}
                           onPointerDown={(e) => {
                             touchDoubleTap.start(e, critCellKey);
-                            longPress.start(e, () => {
-                              clearCellTooltip();
-                              selectSingleCell(student.id, critSlotKey);
-                              ensureCellVisible(student.id, critSlotKey, 'auto');
-                              setCellQuickAction({
-                                kind: 'RUBRIC_CRITERION',
-                                student,
-                                col: slot.col,
-                                rubric,
-                                criterion,
-                                criterionIndex,
-                              });
-                            });
                           }}
-                          onPointerMove={(e) => {
-                            longPress.move(e);
-                            touchDoubleTap.move(e);
-                          }}
+                          onPointerMove={touchDoubleTap.move}
                           onPointerUp={(e) => {
                             const rect = e.currentTarget.getBoundingClientRect();
-                            longPress.cancel();
-                            touchDoubleTap.end(
-                              e,
-                              critCellKey,
-                              () => {
-                                const keepMulti =
-                                  selectedKeys.size > 1 && selectedKeys.has(critCellKey);
-                                if (!keepMulti) {
-                                  selectSingleCell(student.id, critSlotKey);
-                                  ensureCellVisible(student.id, critSlotKey, 'auto');
-                                }
-                                openCritEditor(rect);
-                              },
-                              longPress.wasJustTriggered()
-                            );
+                            touchDoubleTap.end(e, critCellKey, () => {
+                              const keepMulti =
+                                selectedKeys.size > 1 && selectedKeys.has(critCellKey);
+                              if (!keepMulti) {
+                                selectSingleCell(student.id, critSlotKey);
+                                ensureCellVisible(student.id, critSlotKey, 'auto');
+                              }
+                              openCritEditor(rect);
+                            });
                           }}
-                          onPointerCancel={() => {
-                            longPress.cancel();
-                            touchDoubleTap.cancel();
-                          }}
+                          onPointerCancel={touchDoubleTap.cancel}
                           onClick={(e) => {
-                            if (
-                              longPress.wasJustTriggered() ||
-                              touchDoubleTap.wasDoubleTapJustHandled()
-                            ) {
+                            if (touchDoubleTap.wasDoubleTapJustHandled()) {
                               return;
                             }
                             clearCellTooltip();
@@ -5603,18 +5517,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           onContextMenu={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            if (longPress.wasJustTriggered()) return;
                             clearCellTooltip();
-                            selectSingleCell(student.id, critSlotKey);
-                            ensureCellVisible(student.id, critSlotKey, 'auto');
-                            setCellQuickAction({
-                              kind: 'RUBRIC_CRITERION',
-                              student,
-                              col: slot.col,
-                              rubric,
-                              criterion,
-                              criterionIndex,
-                            });
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const keepMulti =
+                              selectedKeys.size > 1 && selectedKeys.has(critCellKey);
+                            if (!keepMulti) {
+                              selectSingleCell(student.id, critSlotKey);
+                              ensureCellVisible(student.id, critSlotKey, 'auto');
+                            }
+                            openCritEditor(rect);
                           }}
                           title={`${criterion.title} · ${
                             critRes
@@ -5736,42 +5647,20 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         onPointerDown={(e) => {
                           if (isInline) return;
                           touchDoubleTap.start(e, key);
-                          longPress.start(e, () => {
-                            clearCellTooltip();
-                            selectSingleCell(student.id, col.id);
-                            ensureCellVisible(student.id, col.id, 'auto');
-                            setCellQuickAction({ kind: 'COL', student, col });
-                          });
                         }}
-                        onPointerMove={(e) => {
-                          longPress.move(e);
-                          touchDoubleTap.move(e);
-                        }}
+                        onPointerMove={touchDoubleTap.move}
                         onPointerUp={(e) => {
-                          longPress.cancel();
                           if (isInline) {
                             touchDoubleTap.cancel();
                             return;
                           }
-                          touchDoubleTap.end(
-                            e,
-                            key,
-                            () => {
-                              triggerPrimaryColEdit();
-                            },
-                            longPress.wasJustTriggered()
-                          );
+                          touchDoubleTap.end(e, key, () => {
+                            triggerPrimaryColEdit();
+                          });
                         }}
-                        onPointerCancel={() => {
-                          longPress.cancel();
-                          touchDoubleTap.cancel();
-                        }}
+                        onPointerCancel={touchDoubleTap.cancel}
                         onClick={(e) => {
-                          if (
-                            isInline ||
-                            longPress.wasJustTriggered() ||
-                            touchDoubleTap.wasDoubleTapJustHandled()
-                          ) {
+                          if (isInline || touchDoubleTap.wasDoubleTapJustHandled()) {
                             return;
                           }
                           clearCellTooltip();
@@ -5832,11 +5721,19 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           if (isInline) return;
                           e.preventDefault();
                           e.stopPropagation();
-                          if (longPress.wasJustTriggered()) return;
                           clearCellTooltip();
-                          selectSingleCell(student.id, col.id);
-                          ensureCellVisible(student.id, col.id, 'auto');
-                          setCellQuickAction({ kind: 'COL', student, col });
+                          const keepMulti = selectedKeys.size > 1 && selectedKeys.has(key);
+                          if (!keepMulti) {
+                            selectSingleCell(student.id, col.id);
+                            ensureCellVisible(student.id, col.id, 'auto');
+                          }
+                          if (col.type === 'RUBRIC') {
+                            onOpenRubricGrader(student, col);
+                          } else if (col.type === 'AVERAGE') {
+                            onEditColumn(col);
+                          } else {
+                            onOpenCellModal(student, col);
+                          }
                         }}
                         onMouseEnter={(e) => {
                           if (isInline || !comment || !comment.trim()) return;
@@ -8832,21 +8729,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           </div>,
           document.body
         )}
-
-      {/* Long-press / Right-click Cell Quick Actions Modal */}
-      <CellQuickActionsModal
-        target={cellQuickAction}
-        onClose={() => setCellQuickAction(null)}
-        onEditCell={onOpenCellModal}
-        onEditColumn={onEditColumn}
-        onEditFolder={onEditFolder}
-        onOpenRubricGrader={(student, col, groupBatch) =>
-          onOpenRubricGrader(student, col, groupBatch)
-        }
-        onOpenQuickCounter={(colId) => setQuickCounterColumnId(colId)}
-        onShowToast={showCopyToast}
-        makeVirtualFolderCol={makeVirtualFolderCol}
-      />
     </div>
   );
 };

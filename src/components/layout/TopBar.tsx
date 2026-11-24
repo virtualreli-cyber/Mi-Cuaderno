@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Cloud,
   CloudOff,
+  Dices,
   Download,
   FileSpreadsheet,
   GraduationCap,
@@ -20,17 +21,52 @@ import {
   Sparkles,
   Undo2,
   UserCheck,
+  Users,
   WifiOff,
   X,
 } from 'lucide-react';
 import { blendWithWhite, SCHOOL_DEFAULT_COLORS } from '../../constants/colors';
 import { useGradebook } from '../../context/GradebookContext';
+import { getEffectiveBookGroups, getStudentActiveGroup } from '../../engine/gradeMath';
+import { drawNextFromCycle } from '../../engine/randomPicker';
 import { useDeviceProfile } from '../../hooks/useDeviceProfile';
 import { usePwaInstall } from '../../hooks/usePwaInstall';
 import { usePwaUpdateStatus } from '../../services/pwaUpdater';
 import type { ClassBook } from '../../types/gradebook';
+import { Modal } from '../common/Modal';
 
 const CLASS_MENU_COLLAPSED_STORAGE_KEY = 'cuaderno_topbar_collapsed_sections_v1';
+const RANDOM_DECKS_STORAGE_KEY = 'cuaderno_random_decks_v1';
+
+interface RandomDeckEntry {
+  remainingIds: string[];
+  lastPickedId: string | null;
+}
+
+type RandomDeckStore = Record<string, RandomDeckEntry>;
+
+function loadRandomDeckStore(): RandomDeckStore {
+  try {
+    const raw = localStorage.getItem(RANDOM_DECKS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return parsed as RandomDeckStore;
+      }
+    }
+  } catch {
+    // ignore storage read errors
+  }
+  return {};
+}
+
+function saveRandomDeckStore(store: RandomDeckStore): void {
+  try {
+    localStorage.setItem(RANDOM_DECKS_STORAGE_KEY, JSON.stringify(store));
+  } catch {
+    // ignore storage write errors
+  }
+}
 
 function loadCollapsedMenuSections(): Set<string> {
   try {
@@ -112,6 +148,140 @@ export const TopBar: React.FC<TopBarProps> = ({
   };
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const [randomModal, setRandomModal] = useState<
+    | {
+        kind: 'STUDENT';
+        pickedId: string;
+        pickedLabel: string;
+        groupName?: string;
+        roundIndex: number;
+        totalCount: number;
+        remainingAfterDraw: number;
+        cycleCompleted: boolean;
+      }
+    | {
+        kind: 'GROUP';
+        pickedId: string;
+        pickedLabel: string;
+        color: string;
+        members: string[];
+        roundIndex: number;
+        totalCount: number;
+        remainingAfterDraw: number;
+        cycleCompleted: boolean;
+      }
+    | null
+  >(null);
+
+  const pickRandomStudent = (forceReset = false) => {
+    if (!activeBook) return;
+    const activeStudents = activeBook.students.filter((s) => !s.isHidden);
+    if (activeStudents.length === 0) {
+      window.alert('No hay alumnos visibles en esta clase para elegir al azar.');
+      return;
+    }
+    const deckKey = `student::${activeBook.id}`;
+    const store = loadRandomDeckStore();
+    const prevEntry = !forceReset ? store[deckKey] : undefined;
+    const draw = drawNextFromCycle(
+      activeStudents,
+      prevEntry?.remainingIds ?? [],
+      prevEntry?.lastPickedId ?? undefined
+    );
+    if (!draw) return;
+
+    store[deckKey] = {
+      remainingIds: draw.remainingIds,
+      lastPickedId: draw.picked.id,
+    };
+    saveRandomDeckStore(store);
+
+    const picked = draw.picked;
+    const pickedLabel =
+      workspace.settings.nameFormat === 'FIRST_LAST'
+        ? `${picked.firstName} ${picked.lastName}`
+        : `${picked.lastName}, ${picked.firstName}`;
+    const groupName = getStudentActiveGroup(picked, activeBook);
+
+    window.dispatchEvent(
+      new CustomEvent('cuaderno:highlight-student', { detail: { studentId: picked.id } })
+    );
+
+    setRandomModal({
+      kind: 'STUDENT',
+      pickedId: picked.id,
+      pickedLabel,
+      groupName,
+      roundIndex: draw.positionInCycle,
+      totalCount: draw.cycleTotal,
+      remainingAfterDraw: draw.remainingIds.length,
+      cycleCompleted: draw.remainingIds.length === 0,
+    });
+  };
+
+  const pickRandomGroup = (forceReset = false) => {
+    if (!activeBook) return;
+    const activeStudents = activeBook.students.filter((s) => !s.isHidden);
+    const effectiveGroups = getEffectiveBookGroups(activeBook);
+    const membersByGroup = new Map<string, string[]>();
+    for (const st of activeStudents) {
+      const grp = getStudentActiveGroup(st, activeBook);
+      if (!grp) continue;
+      const label =
+        workspace.settings.nameFormat === 'FIRST_LAST'
+          ? `${st.firstName} ${st.lastName}`
+          : `${st.lastName}, ${st.firstName}`;
+      const list = membersByGroup.get(grp) ?? [];
+      list.push(label);
+      membersByGroup.set(grp, list);
+    }
+
+    const candidates = effectiveGroups
+      .filter((g) => (membersByGroup.get(g.name)?.length ?? 0) > 0)
+      .map((g) => ({
+        id: g.name,
+        name: g.name,
+        color: g.color,
+        members: membersByGroup.get(g.name) ?? [],
+      }));
+
+    if (candidates.length === 0) {
+      window.alert('No hay grupos con alumnos asignados en esta clase.');
+      return;
+    }
+
+    const deckKey = `group::${activeBook.id}::${activeBook.activeGroupCategoryId ?? 'default'}`;
+    const store = loadRandomDeckStore();
+    const prevEntry = !forceReset ? store[deckKey] : undefined;
+    const draw = drawNextFromCycle(
+      candidates,
+      prevEntry?.remainingIds ?? [],
+      prevEntry?.lastPickedId ?? undefined
+    );
+    if (!draw) return;
+
+    store[deckKey] = {
+      remainingIds: draw.remainingIds,
+      lastPickedId: draw.picked.id,
+    };
+    saveRandomDeckStore(store);
+
+    window.dispatchEvent(
+      new CustomEvent('cuaderno:highlight-group', { detail: { groupName: draw.picked.name } })
+    );
+
+    setRandomModal({
+      kind: 'GROUP',
+      pickedId: draw.picked.id,
+      pickedLabel: draw.picked.name,
+      color: draw.picked.color,
+      members: draw.picked.members,
+      roundIndex: draw.positionInCycle,
+      totalCount: draw.cycleTotal,
+      remainingAfterDraw: draw.remainingIds.length,
+      cycleCompleted: draw.remainingIds.length === 0,
+    });
+  };
   const [menuPos, setMenuPos] = useState<{ top: number; left: number }>({ top: 56, left: 60 });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -223,6 +393,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   const syncHasAlert = syncConflicts.length > 0 || !isOnline || (hasPendingSync && Boolean(user));
 
   return (
+    <>
     <header
       style={{
         paddingTop: 'var(--safe-top)',
@@ -639,6 +810,34 @@ export const TopBar: React.FC<TopBarProps> = ({
                 <button
                   type="button"
                   role="menuitem"
+                  disabled={!activeBook}
+                  data-random-student-btn="topbar-mobile"
+                  onClick={() => {
+                    setMobileMoreOpen(false);
+                    pickRandomStudent();
+                  }}
+                  className="w-full min-h-[44px] px-3.5 flex items-center gap-3 hover:bg-slate-50 disabled:opacity-40 text-left"
+                >
+                  <Dices className="w-4 h-4 text-amber-600 shrink-0" aria-hidden="true" />
+                  <span>Alumno al azar</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={!activeBook}
+                  data-random-group-btn="topbar-mobile"
+                  onClick={() => {
+                    setMobileMoreOpen(false);
+                    pickRandomGroup();
+                  }}
+                  className="w-full min-h-[44px] px-3.5 flex items-center gap-3 hover:bg-slate-50 disabled:opacity-40 text-left"
+                >
+                  <Users className="w-4 h-4 text-teal-600 shrink-0" aria-hidden="true" />
+                  <span>Grupo al azar</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
                   onClick={() => {
                     setMobileMoreOpen(false);
                     onOpenLomloeManager();
@@ -758,6 +957,30 @@ export const TopBar: React.FC<TopBarProps> = ({
             className={`${iconBtnSize} shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 disabled:opacity-35 text-indigo-600 flex items-center justify-center transition-colors`}
           >
             <History className="w-4 h-4 shrink-0" aria-hidden="true" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => pickRandomStudent()}
+            disabled={!activeBook}
+            title="Elegir alumno al azar (sin repetir hasta completar la vuelta)"
+            aria-label="Alumno al azar"
+            data-random-student-btn="topbar"
+            className={`${iconBtnSize} shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-amber-50 hover:border-amber-300 disabled:opacity-35 text-amber-600 flex items-center justify-center transition-colors`}
+          >
+            <Dices className="w-4 h-4 shrink-0" aria-hidden="true" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => pickRandomGroup()}
+            disabled={!activeBook}
+            title="Elegir grupo al azar (sin repetir hasta completar la vuelta)"
+            aria-label="Grupo al azar"
+            data-random-group-btn="topbar"
+            className={`${iconBtnSize} shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-teal-50 hover:border-teal-300 disabled:opacity-35 text-teal-600 flex items-center justify-center transition-colors`}
+          >
+            <Users className="w-4 h-4 shrink-0" aria-hidden="true" />
           </button>
 
           <button
@@ -905,5 +1128,133 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
       )}
     </header>
+
+    <Modal
+      open={Boolean(randomModal)}
+      onClose={() => setRandomModal(null)}
+      title={randomModal?.kind === 'GROUP' ? 'Grupo al azar' : 'Alumno al azar'}
+      subtitle={
+        randomModal
+          ? `Vuelta actual: ${randomModal.roundIndex} de ${randomModal.totalCount}`
+          : undefined
+      }
+      maxWidthClass="max-w-md"
+    >
+      {randomModal && (
+        <div className="p-5 space-y-4">
+          <div
+            data-random-picked-card="true"
+            className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-5 text-center shadow-sm"
+          >
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider bg-slate-100 text-slate-600 mb-2">
+              {randomModal.kind === 'GROUP' ? (
+                <>
+                  <Users className="w-3.5 h-3.5 text-teal-600" />
+                  <span>Grupo seleccionado</span>
+                </>
+              ) : (
+                <>
+                  <Dices className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Alumno seleccionado</span>
+                </>
+              )}
+            </div>
+
+            <div className="flex items-center justify-center gap-2.5">
+              {randomModal.kind === 'GROUP' && (
+                <span
+                  className="w-4 h-4 rounded-full border border-black/15 shrink-0"
+                  style={{ backgroundColor: randomModal.color }}
+                />
+              )}
+              <div
+                data-random-picked-name="true"
+                className="text-xl sm:text-2xl font-extrabold text-slate-900 break-words"
+              >
+                {randomModal.pickedLabel}
+              </div>
+            </div>
+
+            {randomModal.kind === 'STUDENT' && randomModal.groupName && (
+              <div className="mt-2 text-xs font-semibold text-slate-500">
+                Grupo: <span className="text-slate-700">{randomModal.groupName}</span>
+              </div>
+            )}
+
+            {randomModal.kind === 'GROUP' && randomModal.members.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-slate-100 text-left">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                  Integrantes ({randomModal.members.length})
+                </div>
+                <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto">
+                  {randomModal.members.map((memberName, idx) => (
+                    <span
+                      key={`${memberName}-${idx}`}
+                      className="px-2 py-0.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-medium"
+                    >
+                      {memberName}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between text-xs text-slate-600 px-1">
+            <span>
+              Turno <strong data-random-round-progress="true">{randomModal.roundIndex} / {randomModal.totalCount}</strong>
+            </span>
+            {randomModal.cycleCompleted ? (
+              <span className="font-semibold text-emerald-700">
+                ¡Vuelta completa! El próximo sorteo inicia nueva vuelta.
+              </span>
+            ) : (
+              <span>
+                Quedan <strong>{randomModal.remainingAfterDraw}</strong> por salir sin repetir
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              data-random-reset-btn="true"
+              onClick={() =>
+                randomModal.kind === 'GROUP' ? pickRandomGroup(true) : pickRandomStudent(true)
+              }
+              className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 flex items-center gap-1.5"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Reiniciar vuelta
+            </button>
+            <div className="flex items-center gap-2 ml-auto">
+              <button
+                type="button"
+                onClick={() => setRandomModal(null)}
+                className="px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Cerrar
+              </button>
+              <button
+                type="button"
+                data-random-next-btn="true"
+                onClick={() =>
+                  randomModal.kind === 'GROUP' ? pickRandomGroup(false) : pickRandomStudent(false)
+                }
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-sm flex items-center gap-1.5"
+              >
+                {randomModal.kind === 'GROUP' ? (
+                  <Users className="w-3.5 h-3.5" />
+                ) : (
+                  <Dices className="w-3.5 h-3.5" />
+                )}
+                Sacar otro
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Modal>
+    </>
   );
 };
