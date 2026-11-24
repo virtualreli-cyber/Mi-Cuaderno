@@ -100,7 +100,7 @@ interface DoubleTapState {
  * iPadOS/iOS Safari frequently suppresses or delays native `dblclick` on table cells;
  * this fires cleanly on the second fast tap while preserving immediate single-tap selection.
  */
-export function useTouchDoubleTap(maxDelayMs = 380, maxDistancePx = 32) {
+export function useTouchDoubleTap(maxDelayMs = 520, maxDistancePx = 56) {
   const stateRef = useRef<DoubleTapState>({
     pointerId: null,
     activeKey: null,
@@ -161,7 +161,7 @@ export function useTouchDoubleTap(maxDelayMs = 380, maxDistancePx = 32) {
       s.activeKey = null;
       s.moved = false;
 
-      if (!isMatching || skip || moved || pressDuration > 450) {
+      if (!isMatching || skip || moved || pressDuration > 460) {
         s.lastKey = null;
         s.lastTapAt = 0;
         return false;
@@ -173,7 +173,11 @@ export function useTouchDoubleTap(maxDelayMs = 380, maxDistancePx = 32) {
         s.lastKey = null;
         s.lastTapAt = 0;
         s.handledDoubleTapAt = now;
-        onDoubleTap((e.currentTarget as HTMLElement).getBoundingClientRect());
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        // Yield a tick so Safari finishes the synthetic click on the <td> before opening a <dialog>
+        window.setTimeout(() => {
+          onDoubleTap(rect);
+        }, 0);
         return true;
       }
 

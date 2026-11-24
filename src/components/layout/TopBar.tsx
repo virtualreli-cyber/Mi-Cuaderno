@@ -26,6 +26,7 @@ import { blendWithWhite, SCHOOL_DEFAULT_COLORS } from '../../constants/colors';
 import { useGradebook } from '../../context/GradebookContext';
 import { useDeviceProfile } from '../../hooks/useDeviceProfile';
 import { usePwaInstall } from '../../hooks/usePwaInstall';
+import { usePwaUpdateStatus } from '../../services/pwaUpdater';
 import type { ClassBook } from '../../types/gradebook';
 
 interface TopBarProps {
@@ -72,6 +73,7 @@ export const TopBar: React.FC<TopBarProps> = ({
     loadDemoData,
   } = useGradebook();
 
+  const pwaUpdate = usePwaUpdateStatus();
   const sidebarOpen = device.isOverlaySidebar ? drawerOpen : workspace.settings.sidebarVisible;
   const [classMenuOpen, setClassMenuOpen] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
@@ -763,6 +765,19 @@ export const TopBar: React.FC<TopBarProps> = ({
           >
             <RotateCcw className="w-4 h-4 shrink-0" aria-hidden="true" />
           </button>
+
+          {pwaUpdate.updateAvailable && (
+            <button
+              type="button"
+              onClick={() => void pwaUpdate.applyUpdateNow()}
+              disabled={pwaUpdate.updating}
+              title="Hay una nueva versión disponible en GitHub Pages — pulsa para actualizar ahora"
+              className="h-8 px-2.5 shrink-0 rounded-xl border border-indigo-300 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1 shadow-xs animate-pulse"
+            >
+              <Download className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span>{pwaUpdate.updating ? 'Actualizando...' : 'Actualizar'}</span>
+            </button>
+          )}
 
           <button
             type="button"

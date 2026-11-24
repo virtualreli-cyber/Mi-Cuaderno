@@ -4437,8 +4437,14 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             setSummaryCellPicker(null);
                             setAddGroupSummaryMenu(null);
                             setCriterionPicker(null);
-                            setGroupColAction(null);
                             setSelectedGroupColCell({ bucketKey: bucket.key, slotKey: slot.key });
+                            if (device.isTouch) {
+                              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                              setGroupColGradeDraft('');
+                              setGroupColAction(buildGroupActionPayload(rect));
+                            } else {
+                              setGroupColAction(null);
+                            }
                           }}
                           onDoubleClick={(e) => {
                             if (touchDoubleTap.wasDoubleTapJustHandled()) return;
@@ -6351,6 +6357,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         return (
           <div
             onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
             style={{ top: groupColAction.top, left: groupColAction.left }}
             role="dialog"
             aria-label={`Acciones del grupo ${groupColAction.bucketName} en ${title}`}
@@ -6618,6 +6625,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       {criterionPicker && (
         <div
           onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
           style={{ top: criterionPicker.top, left: criterionPicker.left }}
           role="dialog"
           aria-label={`Valorar criterio ${criterionPicker.criterion.title}`}
@@ -6749,10 +6757,16 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             const emptyNpCount = canFillNP
               ? countEmptyGradesInColumns(activeBook, [col.id])
               : 0;
+            const colRubric =
+              col.type === 'RUBRIC' && col.rubricId
+                ? workspace.rubrics.find((r) => r.id === col.rubricId) ?? null
+                : null;
+            const firstGrpBucket = groupBuckets.find((b) => b.key !== '__UNGROUPED__' && b.students.length > 0) ?? groupBuckets[0];
             return (
               <div
                 data-touch-action-bar="column"
                 onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
                 style={{
                   bottom: 'calc(0.75rem + var(--safe-bottom))',
                   left: 'max(0.75rem, var(--safe-left))',
@@ -6768,6 +6782,35 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>Editar</span>
                 </button>
+                {col.type === 'RUBRIC' && colRubric && colRubric.criteria.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => toggleColumnRubricExpanded(col.id)}
+                    className={`min-h-[38px] px-2.5 rounded-xl border flex items-center gap-1 shrink-0 ${
+                      col.rubricExpanded
+                        ? 'border-purple-700 bg-purple-600 text-white'
+                        : 'border-purple-200 bg-purple-50 text-purple-900'
+                    }`}
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>{col.rubricExpanded ? 'Plegar criterios' : `Subcolumnas (${colRubric.criteria.length})`}</span>
+                  </button>
+                )}
+                {col.type === 'RUBRIC' && effectiveGroups.length > 0 && firstGrpBucket && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOpenRubricGrader(null, col, {
+                        groupName: firstGrpBucket.name,
+                        studentIds: firstGrpBucket.students.map((s) => s.id),
+                      })
+                    }
+                    className="min-h-[38px] px-2.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-900 flex items-center gap-1 shrink-0"
+                  >
+                    <Users className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Grupo ({firstGrpBucket.name})</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => copyColumnAlphabetical({ kind: 'COL', col })}
@@ -7300,6 +7343,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           const emptyNpCount = canFillNP
             ? countEmptyGradesInColumns(activeBook, [col.id])
             : 0;
+          const colRubric =
+            col.type === 'RUBRIC' && col.rubricId
+              ? workspace.rubrics.find((r) => r.id === col.rubricId) ?? null
+              : null;
           return (
             <div
               data-desktop-column-bar="column"
@@ -7321,6 +7368,24 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Editar</span>
               </button>
+              {col.type === 'RUBRIC' && colRubric && colRubric.criteria.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => toggleColumnRubricExpanded(col.id)}
+                  className={`px-2.5 py-1 rounded-xl border flex items-center gap-1 shrink-0 transition-colors ${
+                    col.rubricExpanded
+                      ? 'border-purple-700 bg-purple-600 hover:bg-purple-700 text-white'
+                      : 'border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-900'
+                  }`}
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>
+                    {col.rubricExpanded
+                      ? 'Plegar criterios'
+                      : `Subcolumnas (${colRubric.criteria.length})`}
+                  </span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => copyColumnAlphabetical({ kind: 'COL', col })}
@@ -7896,7 +7961,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         onEditCell={onOpenCellModal}
         onEditColumn={onEditColumn}
         onEditFolder={onEditFolder}
-        onOpenRubricGrader={(student, col) => onOpenRubricGrader(student, col)}
+        onOpenRubricGrader={(student, col, groupBatch) =>
+          onOpenRubricGrader(student, col, groupBatch)
+        }
         onOpenQuickCounter={(colId) => setQuickCounterColumnId(colId)}
         onShowToast={showCopyToast}
         makeVirtualFolderCol={makeVirtualFolderCol}

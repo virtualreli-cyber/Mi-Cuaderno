@@ -14,6 +14,7 @@ import {
   RefreshCw,
   RotateCcw,
   Settings2,
+  Users,
 } from 'lucide-react';
 import { useGradebook } from '../../context/GradebookContext';
 import { getEducamosSnappedGrade, isCellOutdatedForEducamos } from '../../engine/educamos';
@@ -26,6 +27,7 @@ import {
   countFolderOverridesAndNotices,
   formatCellDisplayGrade,
   formatGrade,
+  getStudentActiveGroup,
 } from '../../engine/gradeMath';
 import {
   cellKey,
@@ -64,7 +66,11 @@ interface CellQuickActionsModalProps {
   onEditCell: (student: StudentEntity, col: ColumnEntity) => void;
   onEditColumn: (col: ColumnEntity) => void;
   onEditFolder: (tabId: string, folder: FolderEntity) => void;
-  onOpenRubricGrader: (student: StudentEntity, col: ColumnEntity) => void;
+  onOpenRubricGrader: (
+    student: StudentEntity | null,
+    col: ColumnEntity,
+    groupBatch?: { groupName: string; studentIds: string[] } | null
+  ) => void;
   onOpenQuickCounter: (columnId: string) => void;
   onShowToast: (msg: string) => void;
   makeVirtualFolderCol: (folder: FolderEntity, childCols: ColumnEntity[]) => ColumnEntity;
@@ -107,6 +113,13 @@ export const CellQuickActionsModal: React.FC<CellQuickActionsModalProps> = ({
   const student = target.student;
   const studentName = `${student.lastName}, ${student.firstName}`;
   const isTabLocked = Boolean(activeTab.isLocked);
+
+  const studentGroupName = getStudentActiveGroup(student, activeBook) ?? null;
+  const studentGroupIds = studentGroupName
+    ? activeBook.students
+        .filter((s) => !s.isHidden && getStudentActiveGroup(s, activeBook) === studentGroupName)
+        .map((s) => s.id)
+    : [];
 
   const copyGradeValue = (text: string | null) => {
     if (!text) return;
@@ -396,6 +409,25 @@ export const CellQuickActionsModal: React.FC<CellQuickActionsModalProps> = ({
               <span>Abrir rúbrica completa</span>
             </button>
 
+            {!isLocked && studentGroupName && studentGroupIds.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenRubricGrader(null, col, {
+                    groupName: studentGroupName,
+                    studentIds: studentGroupIds,
+                  });
+                }}
+                className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+              >
+                <Users className="w-4 h-4 text-indigo-700" />
+                <span>
+                  Evaluar rúbrica para grupo «{studentGroupName}» ({studentGroupIds.length})
+                </span>
+              </button>
+            )}
+
             {!isLocked && critRes && (
               <button
                 type="button"
@@ -562,6 +594,25 @@ export const CellQuickActionsModal: React.FC<CellQuickActionsModalProps> = ({
                 <LayoutGrid className="w-4 h-4" />
                 <span>Evaluar con rúbrica</span>
               </button>
+
+              {!isLocked && studentGroupName && studentGroupIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenRubricGrader(null, col, {
+                      groupName: studentGroupName,
+                      studentIds: studentGroupIds,
+                    });
+                  }}
+                  className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+                >
+                  <Users className="w-4 h-4 text-indigo-700" />
+                  <span>
+                    Evaluar rúbrica para grupo «{studentGroupName}» ({studentGroupIds.length})
+                  </span>
+                </button>
+              )}
 
               {!isLocked && cell?.manualOverride && (
                 <button
