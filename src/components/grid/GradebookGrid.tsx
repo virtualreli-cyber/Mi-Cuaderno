@@ -13,6 +13,7 @@ import {
   ArrowDownUp,
   ArrowLeft,
   ArrowRight,
+  ArrowRightLeft,
   ArrowUp,
   Ban,
   BarChart3,
@@ -112,6 +113,10 @@ import {
   BatchAdjustGradeModal,
   type BatchAdjustTargetState,
 } from '../modals/BatchAdjustGradeModal';
+import {
+  HeaderContextMenu,
+  type HeaderContextMenuTarget,
+} from './HeaderContextMenu';
 
 interface GradebookGridProps {
   searchQuery: string;
@@ -266,7 +271,13 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     stepColumn,
     stepFolder,
     moveItemInActiveTab,
+    updateColumn,
+    duplicateColumn,
+    deleteColumn,
+    moveColumnToFolder,
+    moveColumnsToTab,
     addFolder,
+    deleteFolder,
     toggleFolderCollapse,
     setColumnLomloeCriteria,
     setColumnEducamosStatus,
@@ -349,7 +360,20 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   const inlineCursorInitKeyRef = useRef<string | null>(null);
 
   const [showAddColMenu, setShowAddColMenu] = useState(false);
-  const [addMenuPos, setAddMenuPos] = useState<{ top: number; left: number }>({ top: 120, left: 200 });
+  const [addMenuPos, setAddMenuPos] = useState<{ top: number; left: number; openAbove?: boolean }>({
+    top: 120,
+    left: 200,
+  });
+  const [headerContextMenu, setHeaderContextMenu] = useState<
+    | { kind: 'COL'; colId: string; x: number; y: number }
+    | { kind: 'FOLDER'; folderId: string; x: number; y: number }
+    | null
+  >(null);
+  const [moveTabPopover, setMoveTabPopover] = useState<{
+    columnIds: string[];
+    bottom: number;
+    left: number;
+  } | null>(null);
   const [showSortMenu, setShowSortMenu] = useState(false);
   const [showCategoryMenu, setShowCategoryMenu] = useState(false);
   const [showAddSummaryMenu, setShowAddSummaryMenu] = useState(false);
@@ -406,6 +430,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   const [dragItem, setDragItem] = useState<ActiveDragState | null>(null);
   const [dropHint, setDropHint] = useState<DropHint | null>(null);
   const [dragStudentId, setDragStudentId] = useState<string | null>(null);
+  const dragPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const dragAutoScrollRafRef = useRef<number | null>(null);
   const [lomloePicker, setLomloePicker] = useState<{
     colId: string;
     rect: { top: number; left: number; width: number; bottom: number };
@@ -718,7 +744,30 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       if (touchDoubleTap.wasDoubleTapJustHandled()) {
         return;
       }
-      setShowAddColMenu(false);
+      if (
+        !(
+          e.target instanceof Element &&
+          e.target.closest('[data-add-col-menu="true"]')
+        )
+      ) {
+        setShowAddColMenu(false);
+      }
+      if (
+        !(
+          e.target instanceof Element &&
+          e.target.closest('[data-header-context-menu="true"]')
+        )
+      ) {
+        setHeaderContextMenu(null);
+      }
+      if (
+        !(
+          e.target instanceof Element &&
+          e.target.closest('[data-move-tab-popover="true"]')
+        )
+      ) {
+        setMoveTabPopover(null);
+      }
       setShowSortMenu(false);
       setShowCategoryMenu(false);
       setShowAddSummaryMenu(false);
@@ -758,6 +807,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setCriterionPicker(null);
     setLomloePicker(null);
     setEducamosMenu(null);
+    setHeaderContextMenu(null);
+    setMoveTabPopover(null);
     setBatchAdjustState(null);
     setTouchMultiSelect(false);
     setEditingGroup(null);
@@ -1107,7 +1158,97 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   const clearDrag = () => {
     setDragItem(null);
     setDropHint(null);
+    dragPointerRef.current = null;
   };
+
+  // Smooth horizontal/vertical auto-scroll while dragging columns, folders, or students near grid edges
+  useEffect(() => {
+    if (!dragItem && !dragStudentId) {
+      dragPointerRef.current = null;
+      if (dragAutoScrollRafRef.current !== null) {
+        window.cancelAnimationFrame(dragAutoScrollRafRef.current);
+        dragAutoScrollRafRef.current = null;
+      }
+      return;
+    }
+
+    const onWindowDragOver = (e: DragEvent) => {
+      if (e.clientX === 0 && e.clientY === 0) return;
+      dragPointerRef.current = { x: e.clientX, y: e.clientY };
+    };
+
+    const onWindowDragEnd = () => {
+      dragPointerRef.current = null;
+    };
+
+    const step = () => {
+      const wrapper = wrapperRef.current;
+      const ptr = dragPointerRef.current;
+      if (wrapper && ptr) {
+        const rect = wrapper.getBoundingClientRect();
+
+        if (dragItem) {
+          const stickyHeader = wrapper.querySelector('thead th');
+          const stickyW = stickyHeader
+            ? stickyHeader.getBoundingClientRect().width
+            : workspace.settings.studentColWidth * gridZoom;
+          const leftEdge = rect.left + stickyW;
+          const rightEdge = rect.right;
+          const edgeZone = Math.min(110, Math.max(64, (rightEdge - leftEdge) * 0.16));
+
+          if (ptr.x > rightEdge - edgeZone) {
+            const ratio = Math.min(1.5, Math.max(0.15, (ptr.x - (rightEdge - edgeZone)) / edgeZone));
+            const maxScrollLeft = Math.max(0, wrapper.scrollWidth - wrapper.clientWidth);
+            if (wrapper.scrollLeft < maxScrollLeft) {
+              wrapper.scrollLeft = Math.min(maxScrollLeft, wrapper.scrollLeft + Math.round(5 + ratio * 20));
+            }
+          } else if (ptr.x < leftEdge + edgeZone) {
+            const ratio = Math.min(1.5, Math.max(0.15, ((leftEdge + edgeZone) - ptr.x) / edgeZone));
+            if (wrapper.scrollLeft > 0) {
+              wrapper.scrollLeft = Math.max(0, wrapper.scrollLeft - Math.round(5 + ratio * 20));
+            }
+          }
+        }
+
+        if (dragStudentId) {
+          const thead = wrapper.querySelector('thead');
+          const theadH = thead ? thead.getBoundingClientRect().height : 96;
+          const topEdge = rect.top + theadH;
+          const bottomEdge = rect.bottom;
+          const vZone = 72;
+
+          if (ptr.y > bottomEdge - vZone) {
+            const ratio = Math.min(1.4, Math.max(0.15, (ptr.y - (bottomEdge - vZone)) / vZone));
+            const maxScrollTop = Math.max(0, wrapper.scrollHeight - wrapper.clientHeight);
+            if (wrapper.scrollTop < maxScrollTop) {
+              wrapper.scrollTop = Math.min(maxScrollTop, wrapper.scrollTop + Math.round(4 + ratio * 16));
+            }
+          } else if (ptr.y < topEdge + vZone) {
+            const ratio = Math.min(1.4, Math.max(0.15, ((topEdge + vZone) - ptr.y) / vZone));
+            if (wrapper.scrollTop > 0) {
+              wrapper.scrollTop = Math.max(0, wrapper.scrollTop - Math.round(4 + ratio * 16));
+            }
+          }
+        }
+      }
+      dragAutoScrollRafRef.current = window.requestAnimationFrame(step);
+    };
+
+    window.addEventListener('dragover', onWindowDragOver, true);
+    window.addEventListener('dragend', onWindowDragEnd, true);
+    window.addEventListener('drop', onWindowDragEnd, true);
+    dragAutoScrollRafRef.current = window.requestAnimationFrame(step);
+
+    return () => {
+      window.removeEventListener('dragover', onWindowDragOver, true);
+      window.removeEventListener('dragend', onWindowDragEnd, true);
+      window.removeEventListener('drop', onWindowDragEnd, true);
+      if (dragAutoScrollRafRef.current !== null) {
+        window.cancelAnimationFrame(dragAutoScrollRafRef.current);
+        dragAutoScrollRafRef.current = null;
+      }
+    };
+  }, [dragItem, dragStudentId, workspace.settings.studentColWidth, gridZoom]);
 
   const getPointerHalf = (e: React.DragEvent): 'BEFORE' | 'AFTER' => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -2369,6 +2510,16 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       }
 
       if (!selectedCoord) {
+        if (e.key === 'Escape') {
+          if (showAddColMenu || moveTabPopover || headerContextMenu || educamosMenu) {
+            e.preventDefault();
+            setShowAddColMenu(false);
+            setMoveTabPopover(null);
+            setHeaderContextMenu(null);
+            setEducamosMenu(null);
+            return;
+          }
+        }
         if (selectedStudentRowId) {
           if (e.key === 'Escape') {
             e.preventDefault();
@@ -2555,6 +2706,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         }
       } else if (e.key === 'Escape') {
         e.preventDefault();
+        setShowAddColMenu(false);
+        setMoveTabPopover(null);
+        setHeaderContextMenu(null);
         setLomloePicker(null);
         setEducamosMenu(null);
         setCriterionPicker(null);
@@ -3153,8 +3307,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           if (justResizedRef.current) return;
           e.preventDefault();
           e.stopPropagation();
-          selectEntireColumn(col);
-          onEditColumn(col);
+          if (!isColumnIdSelected(col.id)) {
+            selectEntireColumn(col);
+          }
+          setHeaderContextMenu({
+            kind: 'COL',
+            colId: col.id,
+            x: e.clientX,
+            y: e.clientY,
+          });
         }}
         style={{
           height: cellHeight,
@@ -3166,7 +3327,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 ? 'inset -3px 0 0 #2563EB'
                 : undefined,
         }}
-        title={`${col.title} — 1 clic: seleccionar · Cmd/Ctrl o Shift+clic: seleccionar varias · Doble clic o clic derecho: editar`}
+        title={`${col.title} — 1 clic: seleccionar · Cmd/Ctrl o Shift+clic: varias · Doble clic: editar · Clic derecho: menú rápido`}
         className={`border-r border-b border-slate-300 ${
           inExpandedRubricFolder
             ? 'border-t-0'
@@ -3201,6 +3362,18 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             onDoubleClick={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
+              if (educamosSummary.state === 'PENDING') {
+                setColumnEducamosStatus(col.id, 'DONE');
+                setEducamosMenu(null);
+                showCopyToast('Columna marcada como subida a Educamos');
+                return;
+              }
+              if (educamosSummary.state === 'SYNCED') {
+                setColumnEducamosStatus(col.id, 'PENDING');
+                setEducamosMenu(null);
+                showCopyToast('Columna desmarcada de Educamos');
+                return;
+              }
               const r = e.currentTarget.getBoundingClientRect();
               setEducamosMenu((prev) =>
                 prev?.colId === col.id
@@ -3218,17 +3391,17 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             }}
             title={
               educamosSummary.state === 'SYNCED'
-                ? 'Educamos: columna pasada y al día · Pulsa para opciones'
+                ? 'Educamos: columna subida y al día · 1 clic para desmarcar'
                 : educamosSummary.state === 'OUTDATED'
-                  ? `Educamos: ${educamosSummary.dirtyCount} celda(s) modificada(s) desde la última pasada · Pulsa para actualizar`
-                  : 'Educamos: pendiente de pasar · Pulsa para marcar como pasada'
+                  ? `Educamos: ${educamosSummary.dirtyCount} celda(s) modificada(s) · Pulsa para actualizar toda la columna o celdas sueltas`
+                  : 'Educamos: pendiente · 1 clic para marcar como subida'
             }
             aria-label={
               educamosSummary.state === 'SYNCED'
-                ? `Educamos: ${col.title} pasada`
+                ? `Educamos: ${col.title} subida (pulsar para desmarcar)`
                 : educamosSummary.state === 'OUTDATED'
                   ? `Educamos: ${col.title} con ${educamosSummary.dirtyCount} cambios pendientes`
-                  : `Educamos: marcar ${col.title}`
+                  : `Educamos: marcar ${col.title} como subida`
             }
             className={`absolute top-1 left-1 z-20 h-5 px-1.5 rounded-md border flex items-center justify-center gap-0.5 text-[10px] font-extrabold leading-none shadow-2xs transition-all ${
               educamosSummary.state === 'SYNCED'
@@ -3398,6 +3571,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         role="region"
         aria-label={`Cuaderno: ${activeBook.name} - ${activeTab.title}`}
         onScroll={clearCellTooltip}
+        onDragOver={(e) => {
+          if (dragItem) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+          }
+        }}
         onCopy={(e) => {
           if (inlineEdit) return;
           const text = buildSelectionCopyText();
@@ -3423,6 +3602,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       >
       <div
         data-grid-scroll-canvas="true"
+        onDrop={(e) => {
+          if (!dragItem || e.target !== e.currentTarget) return;
+          e.preventDefault();
+          const payload = readDragPayload(e);
+          if (payload) {
+            moveItemInActiveTab(payload, { kind: 'END_OUTSIDE' });
+          }
+          clearDrag();
+        }}
         style={{
           width: totalTableWidth + 200,
           minWidth: '100%',
@@ -3850,8 +4038,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       if (justResizedRef.current) return;
                       e.preventDefault();
                       e.stopPropagation();
-                      selectEntireColumn(col);
-                      onEditColumn(col);
+                      if (!isColumnIdSelected(col.id)) {
+                        selectEntireColumn(col);
+                      }
+                      setHeaderContextMenu({
+                        kind: 'COL',
+                        colId: col.id,
+                        x: e.clientX,
+                        y: e.clientY,
+                      });
                     }}
                     style={{
                       height: canopyH,
@@ -3997,7 +4192,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     e.preventDefault();
                     e.stopPropagation();
                     selectFolderSummaryColumn(folder, childCols);
-                    onEditFolder(activeTab.id, folder);
+                    setHeaderContextMenu({
+                      kind: 'FOLDER',
+                      folderId: folder.id,
+                      x: e.clientX,
+                      y: e.clientY,
+                    });
                   }}
                   style={{
                     height: canopyH,
@@ -4126,117 +4326,131 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     if (!showAddColMenu && addBtnRef.current) {
                       const rect = addBtnRef.current.getBoundingClientRect();
                       const menuW = 248;
-                      const left = Math.max(
-                        12,
-                        Math.min(window.innerWidth - menuW - 12, rect.right - menuW)
-                      );
-                      const top = Math.min(window.innerHeight - 280, rect.bottom + 8);
-                      setAddMenuPos({ top, left });
+                      const menuH = 260;
+                      const pad = 12;
+                      // Prefer right-aligned or left-aligned right next to the + button without clipping
+                      let left = rect.left;
+                      if (left + menuW > window.innerWidth - pad) {
+                        left = rect.right - menuW;
+                      }
+                      left = Math.max(pad, Math.min(window.innerWidth - menuW - pad, left));
+                      const spaceBelow = window.innerHeight - rect.bottom - pad;
+                      const openAbove = spaceBelow < menuH && rect.top > spaceBelow;
+                      const top = openAbove
+                        ? Math.max(pad, rect.top - menuH - 6)
+                        : Math.max(pad, Math.min(window.innerHeight - menuH - pad, rect.bottom + 6));
+                      setAddMenuPos({ top, left, openAbove });
                     }
                     setShowAddColMenu((v) => !v);
                     setNewFolderMode(false);
                   }}
                   aria-label="Añadir columna o carpeta"
+                  aria-expanded={showAddColMenu}
                   className="w-8 h-8 rounded-xl bg-white border border-slate-300 hover:border-blue-400 hover:text-blue-700 text-slate-700 flex items-center justify-center mx-auto shadow-2xs disabled:opacity-40"
                 >
                   <Plus className="w-4 h-4" />
                 </button>
               )}
 
-              {showAddColMenu && (
-                <div
-                  onMouseDown={(e) => e.stopPropagation()}
-                  style={{ top: addMenuPos.top, left: addMenuPos.left }}
-                  className="fixed w-62 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-50 text-left text-xs font-normal"
-                >
-                  <div className="px-3.5 py-1.5 font-bold text-slate-900 border-b border-slate-100">
-                    Añadir al cuaderno
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAddColMenu(false);
-                      onNewColumn('NUMERIC', null);
-                    }}
-                    className="w-full px-3.5 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-800"
+              {showAddColMenu &&
+                typeof document !== 'undefined' &&
+                createPortal(
+                  <div
+                    data-add-col-menu="true"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    style={{ top: addMenuPos.top, left: addMenuPos.left }}
+                    className="fixed w-62 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-[90] text-left text-xs font-normal"
                   >
-                    <Pencil className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Columna Nota Numérica</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAddColMenu(false);
-                      onNewColumn('AVERAGE', null);
-                    }}
-                    className="w-full px-3.5 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-800"
-                  >
-                    <Calculator className="w-3.5 h-3.5 text-amber-600" />
-                    <span>Columna Media / Ponderada</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAddColMenu(false);
-                      onNewColumn('RUBRIC', null);
-                    }}
-                    className="w-full px-3.5 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-800"
-                  >
-                    <LayoutGrid className="w-3.5 h-3.5 text-purple-600" />
-                    <span>Columna Rúbrica</span>
-                  </button>
-                  <hr className="my-1.5 border-slate-100" />
-                  {!newFolderMode ? (
+                    <div className="px-3.5 py-1.5 font-bold text-slate-900 border-b border-slate-100">
+                      Añadir al cuaderno
+                    </div>
                     <button
                       type="button"
-                      onClick={() => setNewFolderMode(true)}
-                      className="w-full px-3.5 py-2 hover:bg-slate-50 flex items-center gap-2 font-semibold text-slate-800"
-                    >
-                      <FolderPlus className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Nueva Carpeta</span>
-                    </button>
-                  ) : (
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const trimmed = newFolderTitle.trim();
-                        if (!trimmed) return;
-                        addFolder(
-                          trimmed,
-                          PASTEL_SWATCHES[(activeTab.folders.length + 2) % PASTEL_SWATCHES.length].hex
-                        );
-                        setNewFolderTitle('');
-                        setNewFolderMode(false);
+                      onClick={() => {
                         setShowAddColMenu(false);
-                        requestAnimationFrame(() => {
-                          if (wrapperRef.current) {
-                            wrapperRef.current.scrollTo({
-                              left: wrapperRef.current.scrollWidth,
-                              behavior: 'smooth',
-                            });
-                          }
-                        });
+                        onNewColumn('NUMERIC', null);
                       }}
-                      className="px-3 py-1.5 space-y-1.5"
+                      className="w-full px-3.5 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-800"
                     >
-                      <input
-                        type="text"
-                        autoFocus
-                        value={newFolderTitle}
-                        onChange={(e) => setNewFolderTitle(e.target.value)}
-                        placeholder="Nombre carpeta..."
-                        className="w-full border border-slate-300 rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-blue-500"
-                      />
+                      <Pencil className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Columna Nota Numérica</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAddColMenu(false);
+                        onNewColumn('AVERAGE', null);
+                      }}
+                      className="w-full px-3.5 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-800"
+                    >
+                      <Calculator className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Columna Media / Ponderada</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAddColMenu(false);
+                        onNewColumn('RUBRIC', null);
+                      }}
+                      className="w-full px-3.5 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-800"
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5 text-purple-600" />
+                      <span>Columna Rúbrica</span>
+                    </button>
+                    <hr className="my-1.5 border-slate-100" />
+                    {!newFolderMode ? (
                       <button
-                        type="submit"
-                        className="w-full py-1 rounded-lg bg-blue-600 text-white font-semibold text-xs hover:bg-blue-700"
+                        type="button"
+                        onClick={() => setNewFolderMode(true)}
+                        className="w-full px-3.5 py-2 hover:bg-slate-50 flex items-center gap-2 font-semibold text-slate-800"
                       >
-                        Crear carpeta
+                        <FolderPlus className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Nueva Carpeta</span>
                       </button>
-                    </form>
-                  )}
-                </div>
-              )}
+                    ) : (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          const trimmed = newFolderTitle.trim();
+                          if (!trimmed) return;
+                          addFolder(
+                            trimmed,
+                            PASTEL_SWATCHES[(activeTab.folders.length + 2) % PASTEL_SWATCHES.length].hex
+                          );
+                          setNewFolderTitle('');
+                          setNewFolderMode(false);
+                          setShowAddColMenu(false);
+                          requestAnimationFrame(() => {
+                            if (wrapperRef.current) {
+                              wrapperRef.current.scrollTo({
+                                left: wrapperRef.current.scrollWidth,
+                                behavior: 'smooth',
+                              });
+                            }
+                          });
+                        }}
+                        className="px-3 py-1.5 space-y-1.5"
+                      >
+                        <input
+                          type="text"
+                          autoFocus
+                          value={newFolderTitle}
+                          onChange={(e) => setNewFolderTitle(e.target.value)}
+                          placeholder="Nombre carpeta..."
+                          className="w-full border border-slate-300 rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-blue-500"
+                        />
+                        <button
+                          type="submit"
+                          className="w-full py-1 rounded-lg bg-blue-600 text-white font-semibold text-xs hover:bg-blue-700"
+                        >
+                          Crear carpeta
+                        </button>
+                      </form>
+                    )}
+                  </div>,
+                  document.body
+                )}
             </th>
           </tr>
 
@@ -4272,7 +4486,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       e.preventDefault();
                       e.stopPropagation();
                       selectFolderSummaryColumn(folder, childCols);
-                      onEditFolder(activeTab.id, folder);
+                      setHeaderContextMenu({
+                        kind: 'FOLDER',
+                        folderId: folder.id,
+                        x: e.clientX,
+                        y: e.clientY,
+                      });
                     }}
                     onDragOver={(e) => {
                       if (!dragItem || dragItem.kind !== 'COL') return;
@@ -4517,8 +4736,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       if (justResizedRef.current) return;
                       e.preventDefault();
                       e.stopPropagation();
-                      selectEntireColumn(col);
-                      onEditColumn(col);
+                      if (!isColumnIdSelected(col.id)) {
+                        selectEntireColumn(col);
+                      }
+                      setHeaderContextMenu({
+                        kind: 'COL',
+                        colId: col.id,
+                        x: e.clientX,
+                        y: e.clientY,
+                      });
                     }}
                     style={{
                       height: subCanopyH,
@@ -7611,6 +7837,27 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       <span>Copiar a...</span>
                     </button>
                   )}
+                  {activeBook.tabs.length > 1 && !activeTab.isLocked && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        const r = e.currentTarget.getBoundingClientRect();
+                        setMoveTabPopover((prev) =>
+                          prev
+                            ? null
+                            : {
+                                columnIds: selectedColumnIds,
+                                bottom: window.innerHeight - r.top + 8,
+                                left: Math.max(12, Math.min(window.innerWidth - 230, r.left)),
+                              }
+                        );
+                      }}
+                      className="min-h-[38px] px-2.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-900 flex items-center gap-1 shrink-0"
+                    >
+                      <ArrowRightLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Mover pestaña</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => setTouchColMultiSelect((v) => !v)}
@@ -7716,6 +7963,27 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   >
                     <Send className="w-3.5 h-3.5" aria-hidden="true" />
                     <span>Copiar a...</span>
+                  </button>
+                )}
+                {activeBook.tabs.length > 1 && !activeTab.isLocked && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      const r = e.currentTarget.getBoundingClientRect();
+                      setMoveTabPopover((prev) =>
+                        prev
+                          ? null
+                          : {
+                              columnIds: [col.id],
+                              bottom: window.innerHeight - r.top + 8,
+                              left: Math.max(12, Math.min(window.innerWidth - 230, r.left)),
+                            }
+                      );
+                    }}
+                    className="min-h-[38px] px-2.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-900 flex items-center gap-1 shrink-0"
+                  >
+                    <ArrowRightLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Mover pestaña</span>
                   </button>
                 )}
                 <button
@@ -8877,6 +9145,28 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     <span>Copiar a clase o pestaña...</span>
                   </button>
                 )}
+                {activeBook.tabs.length > 1 && !activeTab.isLocked && (
+                  <button
+                    type="button"
+                    data-multi-col-move-tab-btn="true"
+                    onClick={(e) => {
+                      const r = e.currentTarget.getBoundingClientRect();
+                      setMoveTabPopover((prev) =>
+                        prev
+                          ? null
+                          : {
+                              columnIds: selectedColumnIds,
+                              bottom: window.innerHeight - r.top + 8,
+                              left: Math.max(12, Math.min(window.innerWidth - 230, r.left)),
+                            }
+                      );
+                    }}
+                    className="px-2.5 py-1 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 flex items-center gap-1 shrink-0 transition-colors"
+                  >
+                    <ArrowRightLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Mover a pestaña</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -8961,6 +9251,29 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 >
                   <Send className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>Copiar a...</span>
+                </button>
+              )}
+              {activeBook.tabs.length > 1 && !activeTab.isLocked && (
+                <button
+                  type="button"
+                  data-col-move-tab-btn="true"
+                  onClick={(e) => {
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setMoveTabPopover((prev) =>
+                      prev
+                        ? null
+                        : {
+                            columnIds: [col.id],
+                            bottom: window.innerHeight - r.top + 8,
+                            left: Math.max(12, Math.min(window.innerWidth - 230, r.left)),
+                          }
+                    );
+                  }}
+                  title="Mover esta columna a otra pestaña de la clase"
+                  className="px-2.5 py-1 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 flex items-center gap-1 shrink-0 transition-colors"
+                >
+                  <ArrowRightLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Mover pestaña</span>
                 </button>
               )}
               {canFillNP && (
@@ -9236,6 +9549,181 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           {copyToast}
         </div>
       )}
+
+      {/* Quick Move-to-Tab Popover from floating column bar */}
+      {moveTabPopover &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            data-move-tab-popover="true"
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            style={{
+              position: 'fixed',
+              bottom: moveTabPopover.bottom,
+              left: moveTabPopover.left,
+              zIndex: 90,
+            }}
+            className="w-56 rounded-2xl border border-slate-200 bg-white shadow-2xl p-2 text-xs space-y-1"
+          >
+            <div className="px-2 py-1 text-[10.5px] font-bold uppercase tracking-wider text-slate-500">
+              Mover {moveTabPopover.columnIds.length > 1 ? `${moveTabPopover.columnIds.length} columnas` : 'columna'} a:
+            </div>
+            <div className="max-h-56 overflow-y-auto space-y-0.5">
+              {[...activeBook.tabs]
+                .sort((a, b) => a.orderIndex - b.orderIndex)
+                .filter((t) => t.id !== activeTab.id)
+                .map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => {
+                      const count = moveTabPopover.columnIds.length;
+                      moveColumnsToTab(moveTabPopover.columnIds, t.id);
+                      setMoveTabPopover(null);
+                      setSelectedColumnTarget(null);
+                      setSelectedColumnIds([]);
+                      showCopyToast(
+                        count > 1
+                          ? `${count} columnas movidas a «${t.title}»`
+                          : `Columna movida a «${t.title}»`
+                      );
+                    }}
+                    className="w-full px-2.5 py-1.5 rounded-xl hover:bg-indigo-50 text-left flex items-center gap-2 font-semibold text-slate-800 hover:text-indigo-950 transition-colors"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="color-swatch-essential w-2.5 h-2.5 rounded-full border border-black/15 shrink-0"
+                      style={{ backgroundColor: t.color }}
+                    />
+                    <span className="truncate">{t.title}</span>
+                  </button>
+                ))}
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* iDoceo-style Right-Click Quick Context Menu for Columns & Folders */}
+      {headerContextMenu && (() => {
+        const otherTabs = [...activeBook.tabs]
+          .sort((a, b) => a.orderIndex - b.orderIndex)
+          .filter((t) => t.id !== activeTab.id);
+
+        let resolvedTarget: HeaderContextMenuTarget | null = null;
+        if (headerContextMenu.kind === 'COL') {
+          const col = activeTab.columns.find((c) => c.id === headerContextMenu.colId);
+          if (col) {
+            const canEditGrades =
+              col.type !== 'AVERAGE' && !col.isLocked && !activeTab.isLocked;
+            const emptyNpCount = canEditGrades
+              ? countEmptyGradesInColumns(activeBook, [col.id])
+              : 0;
+            const colSelIds =
+              selectedColumnIds.length > 1 && selectedColumnIds.includes(col.id)
+                ? selectedColumnIds
+                : [col.id];
+            resolvedTarget = {
+              kind: 'COL',
+              col,
+              selectedColIds: colSelIds,
+              emptyNpCount,
+              canEditGrades,
+              x: headerContextMenu.x,
+              y: headerContextMenu.y,
+            };
+          }
+        } else {
+          const folder = activeTab.folders.find((f) => f.id === headerContextMenu.folderId);
+          if (folder) {
+            const childCols = activeTab.columns
+              .filter((c) => c.folderId === folder.id)
+              .sort((a, b) => a.orderIndex - b.orderIndex);
+            const editableChildColIds = activeTab.isLocked
+              ? []
+              : childCols
+                  .filter((c) => c.type !== 'AVERAGE' && !c.isLocked)
+                  .map((c) => c.id);
+            const emptyFolderNpCount =
+              editableChildColIds.length > 0
+                ? countEmptyGradesInColumns(activeBook, editableChildColIds)
+                : 0;
+            resolvedTarget = {
+              kind: 'FOLDER',
+              folder,
+              childCols,
+              emptyFolderNpCount,
+              editableChildColIds,
+              x: headerContextMenu.x,
+              y: headerContextMenu.y,
+            };
+          }
+        }
+
+        if (!resolvedTarget) return null;
+
+        return (
+          <HeaderContextMenu
+            target={resolvedTarget}
+            activeTab={activeTab}
+            otherTabs={otherTabs}
+            isTabLocked={Boolean(activeTab.isLocked)}
+            onClose={() => setHeaderContextMenu(null)}
+            onNewColumn={(presetType, folderId) => onNewColumn(presetType, folderId)}
+            onEditColumn={(col) => onEditColumn(col)}
+            onCopyColumnsToClass={onCopyColumnsToClass}
+            onMoveColumnsToTab={(colIds, targetTabId) => {
+              const targetTab = activeBook.tabs.find((t) => t.id === targetTabId);
+              moveColumnsToTab(colIds, targetTabId);
+              setSelectedColumnTarget(null);
+              setSelectedColumnIds([]);
+              showCopyToast(
+                colIds.length > 1
+                  ? `${colIds.length} columnas movidas a «${targetTab?.title ?? 'otra pestaña'}»`
+                  : `Columna movida a «${targetTab?.title ?? 'otra pestaña'}»`
+              );
+            }}
+            onDuplicateColumn={(colId) => {
+              duplicateColumn(colId, false);
+              showCopyToast('Columna duplicada');
+            }}
+            onCopyColumnGrades={(col) => copyColumnAlphabetical({ kind: 'COL', col })}
+            onBatchAdjustColumn={(col) =>
+              setBatchAdjustState({
+                title: 'Ajustar notas y comentar',
+                subtitle: `Columna: ${col.title} · ${visibleStudents.length} alumnos`,
+                targets: visibleStudents.map((s) => ({
+                  studentId: s.id,
+                  columnId: col.id,
+                })),
+              })
+            }
+            onFillEmptyWithNP={(colIds, label) => triggerFillEmptyWithNP(colIds, label)}
+            onRemoveFromFolder={(colId) => {
+              moveColumnToFolder(colId, null);
+              showCopyToast('Columna sacada de la carpeta');
+            }}
+            onToggleColumnLock={(col) => {
+              updateColumn(col.id, { isLocked: !col.isLocked });
+              showCopyToast(col.isLocked ? 'Columna desbloqueada' : 'Columna bloqueada');
+            }}
+            onDeleteColumn={(col) => {
+              if (window.confirm(`¿Eliminar la columna "${col.title}" y sus notas?`)) {
+                deleteColumn(col.id);
+              }
+            }}
+            onEditFolder={(folder) => onEditFolder(activeTab.id, folder)}
+            onToggleFolderCollapse={(folder) => toggleFolderCollapse(activeTab.id, folder.id)}
+            onCopyFolderGrades={(folder, childCols) =>
+              copyColumnAlphabetical({ kind: 'FOLDER', folder, childCols })
+            }
+            onDeleteFolder={(folder) => {
+              deleteFolder(activeTab.id, folder.id);
+              showCopyToast(`Carpeta «${folder.title}» deshecha`);
+            }}
+          />
+        );
+      })()}
 
       {/* iDoceo-style LOMLOE Criteria Picker Popover */}
       {lomloePicker && (() => {

@@ -4,6 +4,11 @@ import { useGradebook } from '../../context/GradebookContext';
 import { findCopyConflicts } from '../../engine/copyConflictEngine';
 import type { ClassBook, ColumnEntity } from '../../types/gradebook';
 import { Modal } from '../common/Modal';
+import {
+  MultiClassTargetPicker,
+  resolveDefaultTabIdForBook,
+  type TargetClassSelection,
+} from '../common/MultiClassTargetPicker';
 import { TabColumnPicker } from '../common/TabColumnPicker';
 import { CopyConflictModal, type PendingCopyConflict } from './CopyConflictModal';
 
@@ -15,17 +20,29 @@ interface CopyColumnsModalProps {
   initialColumnIds: string[];
 }
 
-interface BatchColumnDecision {
+interface TargetQueueItem {
+  targetBook: ClassBook;
+  targetTabId: string;
+  targetTabTitle: string;
+  targetFolderId: string | null;
+  col: ColumnEntity;
+  sourceTabId: string;
+}
+
+interface ResolvedDecision {
+  targetClassId: string;
+  targetTabId: string;
+  targetFolderId: string | null;
   columnId: string;
   mode: 'ADD' | 'REPLACE';
   replaceColumnId?: string;
 }
 
-interface PendingColumnBatchState {
-  remaining: Array<{ col: ColumnEntity; sourceTabId: string }>;
-  resolved: BatchColumnDecision[];
+interface PendingMultiBatchState {
+  remaining: TargetQueueItem[];
+  resolved: ResolvedDecision[];
   totalCount: number;
-  currentCol: ColumnEntity;
+  currentItem: TargetQueueItem;
   conflict: PendingCopyConflict;
 }
 
@@ -36,15 +53,13 @@ export const CopyColumnsModal: React.FC<CopyColumnsModalProps> = ({
   activeTabId = null,
   initialColumnIds,
 }) => {
-  const { workspace, copyColumnsToTarget } = useGradebook();
+  const { workspace, copyColumnsToTargets } = useGradebook();
 
   const [selectedSourceBookId, setSelectedSourceBookId] = useState('');
   const [selectedColIds, setSelectedColIds] = useState<string[]>([]);
-  const [targetClassId, setTargetClassId] = useState('');
-  const [targetTabId, setTargetTabId] = useState('');
-  const [targetFolderId, setTargetFolderId] = useState('');
+  const [selectedTargets, setSelectedTargets] = useState<Record<string, TargetClassSelection>>({});
   const [feedback, setFeedback] = useState<string | null>(null);
-  const [pendingBatch, setPendingBatch] = useState<PendingColumnBatchState | null>(null);
+  const [pendingBatch, setPendingBatch] = useState<PendingMultiBatchState | null>(null);
 
   const allSourceBooks = useMemo(() => {
     const list: ClassBook[] = [...workspace.classes, ...workspace.templates];
@@ -72,17 +87,15 @@ export const CopyColumnsModal: React.FC<CopyColumnsModalProps> = ({
   );
 
   const sourceColMap = useMemo(() => {
-    const map = new Map<string, { col: ColumnEntity; tabId: string }>();
+    const map = new Map<string, { col: ColumnEntity; tabId: string; tabTitle: string }>();
     for (const tab of sortedSourceTabs) {
       for (const col of tab.columns) {
-        map.set(col.id, { col, tabId: tab.id });
+        map.set(col.id, { col, tabId: tab.id, tabTitle: tab.title });
       }
     }
     return map;
   }, [sortedSourceTabs]);
 
-  // All valid target books: current book first (so same-class / cross-tab / same-tab copy is 1 click),
-  // followed by all other classes (and templates if copying from a template)
   const orderedTargetBooks = useMemo(() => {
     const list: ClassBook[] = [...workspace.classes];
     if (effectiveSourceBook?.isTemplate && !list.some((b) => b.id === effectiveSourceBook.id)) {
@@ -94,6 +107,15 @@ export const CopyColumnsModal: React.FC<CopyColumnsModalProps> = ({
     return [...current, ...others];
   }, [workspace.classes, effectiveSourceBook]);
 
+  const preferredTabTitle = useMemo(() => {
+    const firstSel = selectedColIds[0] ? sourceColMap.get(selectedColIds[0]) : null;
+    if (firstSel) return firstSel.tabTitle;
+    if (sourceBook && activeTabId) {
+      return sourceBook.tabs.find((t) => t.id === activeTabId)?.title ?? null;
+    }
+    return sortedSourceTabs[0]?.title ?? null;
+  }, [selectedColIds, sourceColMap, sourceBook, activeTabId, sortedSourceTabs]);
+
   useEffect(() => {
     if (!open || !sourceBook) return;
     setFeedback(null);
@@ -103,33 +125,32 @@ export const CopyColumnsModal: React.FC<CopyColumnsModalProps> = ({
     const validIds = new Set(sourceBook.tabs.flatMap((t) => t.columns.map((c) => c.id)));
     setSelectedColIds(initialColumnIds.filter((id) => validIds.has(id)));
 
-    // Default target: if user opened from a class and has other classes, keep current class easily selectable,
-    // or default to current class if there is only 1 class / or another tab exists.
-    // Let's default to current class when only 1 class, or other class when multiple classes?
-    // Even better: default to current class (with activeTabId) so user immediately sees all options,
-    // OR if sourceBook is a template, default to first class.
-    const defaultTarget =
-      sourceBook.isTemplate
-        ? (workspace.classes[0] ?? sourceBook)
-        : sourceBook;
-    setTargetClassId(defaultTarget.id);
-    setTargetTabId(
-      defaultTarget.id === sourceBook.id
-        ? (activeTabId ?? defaultTarget.tabs[0]?.id ?? '')
-        : (defaultTarget.tabs[0]?.id ?? '')
-    );
-    setTargetFolderId('');
+    const activeTabTitle =
+      sourceBook.tabs.find((t) => t.id === activeTabId)?.title ?? sourceBook.tabs[0]?.title ?? null;
+    const defaultTarget = sourceBook.isTemplate
+      ? (workspace.classes[0] ?? sourceBook)
+      : sourceBook;
+
+    setSelectedTargets({
+      [defaultTarget.id]: {
+        tabId: resolveDefaultTabIdForBook(defaultTarget, sourceBook.id, activeTabId, activeTabTitle),
+        folderId: '',
+      },
+    });
     // Initialize only when opening modal or changing source/initial selection
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, sourceBook?.id, initialColumnIds.join(',')]);
 
   if (!effectiveSourceBook) return null;
 
-  const targetClass =
-    orderedTargetBooks.find((c) => c.id === targetClassId) ??
-    workspace.classes.find((c) => c.id === targetClassId) ??
-    null;
-  const targetTab = targetClass?.tabs.find((t) => t.id === targetTabId) ?? null;
+  const chosenTargetsList = orderedTargetBooks
+    .filter((b) => Boolean(selectedTargets[b.id]))
+    .map((book) => {
+      const sel = selectedTargets[book.id]!;
+      const tab = book.tabs.find((t) => t.id === sel.tabId) ?? book.tabs[0];
+      return tab ? { book, tab, folderId: sel.folderId || null } : null;
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
 
   const toggleColId = (colId: string) => {
     setFeedback(null);
@@ -153,88 +174,121 @@ export const CopyColumnsModal: React.FC<CopyColumnsModalProps> = ({
     });
   };
 
-  const commitBatch = (decisions: BatchColumnDecision[]) => {
-    if (!targetClass || !targetTab || decisions.length === 0) return;
-    copyColumnsToTarget(effectiveSourceBook.id, decisions, targetClass.id, targetTab.id, {
-      targetFolderId: targetFolderId || null,
-    });
-    const replacedCount = decisions.filter((d) => d.mode === 'REPLACE').length;
-    const addedCount = decisions.length - replacedCount;
-    const targetFolderTitle = targetFolderId
-      ? targetTab.folders.find((f) => f.id === targetFolderId)?.title
-      : null;
-    const destLabel = targetFolderTitle
-      ? `«${targetClass.name}» (${targetTab.title} · ${targetFolderTitle})`
-      : `«${targetClass.name}» (${targetTab.title})`;
+  const commitResolved = (decisions: ResolvedDecision[]) => {
+    if (decisions.length === 0) return;
 
-    if (decisions.length === 1) {
-      setFeedback(
-        replacedCount === 1
-          ? `Columna sustituida en ${destLabel}.`
-          : `Columna copiada a ${destLabel}.`
-      );
-    } else if (replacedCount === 0) {
-      setFeedback(`${addedCount} columnas copiadas a ${destLabel}.`);
-    } else if (addedCount === 0) {
-      setFeedback(`${replacedCount} columnas sustituidas en ${destLabel}.`);
+    const grouped = new Map<
+      string,
+      {
+        targetClassId: string;
+        targetTabId: string;
+        targetFolderId: string | null;
+        items: Array<{
+          columnId: string;
+          mode: 'ADD' | 'REPLACE';
+          replaceColumnId?: string;
+        }>;
+      }
+    >();
+
+    for (const d of decisions) {
+      const key = `${d.targetClassId}::${d.targetTabId}::${d.targetFolderId ?? ''}`;
+      const entry = grouped.get(key) ?? {
+        targetClassId: d.targetClassId,
+        targetTabId: d.targetTabId,
+        targetFolderId: d.targetFolderId,
+        items: [],
+      };
+      entry.items.push({
+        columnId: d.columnId,
+        mode: d.mode,
+        replaceColumnId: d.replaceColumnId,
+      });
+      grouped.set(key, entry);
+    }
+
+    copyColumnsToTargets(effectiveSourceBook.id, Array.from(grouped.values()));
+
+    const uniqueClassIds = new Set(decisions.map((d) => d.targetClassId));
+    const uniqueColIds = new Set(decisions.map((d) => d.columnId));
+    const replacedCount = decisions.filter((d) => d.mode === 'REPLACE').length;
+
+    if (uniqueClassIds.size === 1) {
+      const onlyBook = orderedTargetBooks.find((b) => uniqueClassIds.has(b.id));
+      const onlyTab = onlyBook?.tabs.find((t) => t.id === decisions[0].targetTabId);
+      const destLabel = onlyBook
+        ? `«${onlyBook.name}»${onlyTab ? ` (${onlyTab.title})` : ''}`
+        : 'la clase destino';
+      if (decisions.length === 1) {
+        setFeedback(
+          replacedCount === 1
+            ? `Columna sustituida en ${destLabel}.`
+            : `Columna copiada a ${destLabel}.`
+        );
+      } else {
+        setFeedback(`${decisions.length} columnas copiadas a ${destLabel}.`);
+      }
     } else {
       setFeedback(
-        `${addedCount} ${addedCount === 1 ? 'columna copiada' : 'columnas copiadas'} y ${replacedCount} ${
-          replacedCount === 1 ? 'sustituida' : 'sustituidas'
-        } en ${destLabel}.`
+        `${uniqueColIds.size} ${uniqueColIds.size === 1 ? 'columna copiada' : 'columnas copiadas'} en ${uniqueClassIds.size} clases a la vez.`
       );
     }
   };
 
   const processQueue = (
-    queue: Array<{ col: ColumnEntity; sourceTabId: string }>,
-    resolved: BatchColumnDecision[],
+    queue: TargetQueueItem[],
+    resolved: ResolvedDecision[],
     totalCount: number
   ) => {
-    if (!targetClass || !targetTab) return;
     const nextResolved = [...resolved];
 
     for (let i = 0; i < queue.length; i++) {
-      const entry = queue[i];
-      const { col, sourceTabId } = entry;
+      const item = queue[i];
       const isSameTabInSameBook =
-        targetClass.id === effectiveSourceBook.id && targetTab.id === sourceTabId;
+        item.targetBook.id === effectiveSourceBook.id && item.targetTabId === item.sourceTabId;
       const matches = findCopyConflicts(
-        targetClass,
+        item.targetBook,
         'COLUMN',
-        col.title,
-        targetTab.id,
-        isSameTabInSameBook ? col.id : undefined
+        item.col.title,
+        item.targetTabId,
+        isSameTabInSameBook ? item.col.id : undefined
       );
       if (matches.length > 0) {
-        const positionPrefix =
+        const prefix =
           totalCount > 1 ? `(${nextResolved.length + 1} de ${totalCount}) ` : '';
         setPendingBatch({
           remaining: queue.slice(i + 1),
           resolved: nextResolved,
           totalCount,
-          currentCol: col,
+          currentItem: item,
           conflict: {
             kind: 'COLUMN',
-            sourceTitle: `${positionPrefix}${col.title}`,
-            targetClassName: targetClass.name,
-            targetTabTitle: targetTab.title,
+            sourceTitle: `${prefix}${item.col.title}`,
+            targetClassName: item.targetBook.name,
+            targetTabTitle: item.targetTabTitle,
             matches,
           },
         });
         return;
       }
-      nextResolved.push({ columnId: col.id, mode: 'ADD' });
+
+      nextResolved.push({
+        targetClassId: item.targetBook.id,
+        targetTabId: item.targetTabId,
+        targetFolderId: item.targetFolderId,
+        columnId: item.col.id,
+        mode: 'ADD',
+      });
     }
 
     setPendingBatch(null);
-    commitBatch(nextResolved);
+    commitResolved(nextResolved);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
-    if (!targetClass || !targetTab || selectedColIds.length === 0) return;
+    if (chosenTargetsList.length === 0 || selectedColIds.length === 0) return;
 
     const orderedCols: Array<{ col: ColumnEntity; sourceTabId: string }> = [];
     const wanted = new Set(selectedColIds);
@@ -251,10 +305,25 @@ export const CopyColumnsModal: React.FC<CopyColumnsModalProps> = ({
       }
     }
     if (orderedCols.length === 0) return;
-    processQueue(orderedCols, [], orderedCols.length);
+
+    const queue: TargetQueueItem[] = [];
+    for (const target of chosenTargetsList) {
+      for (const entry of orderedCols) {
+        queue.push({
+          targetBook: target.book,
+          targetTabId: target.tab.id,
+          targetTabTitle: target.tab.title,
+          targetFolderId: target.folderId,
+          col: entry.col,
+          sourceTabId: entry.sourceTabId,
+        });
+      }
+    }
+
+    processQueue(queue, [], queue.length);
   };
 
-  const canSubmit = Boolean(targetClass && targetTab && selectedColIds.length > 0);
+  const canSubmit = chosenTargetsList.length > 0 && selectedColIds.length > 0;
   const pickerActiveTabId =
     effectiveSourceBook.id === sourceBook?.id
       ? activeTabId
@@ -266,8 +335,8 @@ export const CopyColumnsModal: React.FC<CopyColumnsModalProps> = ({
         open={open}
         onClose={onClose}
         title="Copiar columnas"
-        subtitle="Copia una o varias columnas dentro de la misma clase, entre pestañas o desde/hacia otra clase"
-        maxWidthClass="w-[min(660px,95vw)]"
+        subtitle="Copia una o varias columnas a la misma clase o a varias clases a la vez, eligiendo pestaña y carpeta en cada una"
+        maxWidthClass="w-[min(700px,95vw)]"
         notice={feedback}
       >
         <form onSubmit={handleSubmit} className="p-5 space-y-4 text-xs">
@@ -342,97 +411,27 @@ export const CopyColumnsModal: React.FC<CopyColumnsModalProps> = ({
               onToggleMany={toggleManyColIds}
               ariaLabel="Columnas del cuaderno origen agrupadas por pestaña"
               emptyMessage="No hay columnas disponibles en este cuaderno."
-              maxHeightClass="max-h-[240px]"
+              maxHeightClass="max-h-[210px]"
             />
           </div>
 
-          {/* Target Class, Tab & Folder */}
-          <div className="space-y-3">
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">Clase destino</label>
-              <select
-                value={targetClassId}
-                onChange={(e) => {
-                  const nextId = e.target.value;
-                  setTargetClassId(nextId);
-                  const cls = orderedTargetBooks.find((c) => c.id === nextId);
-                  setTargetTabId(
-                    cls?.id === sourceBook?.id && activeTabId
-                      ? activeTabId
-                      : (cls?.tabs[0]?.id ?? '')
-                  );
-                  setTargetFolderId('');
-                  setFeedback(null);
-                }}
-                className="w-full border border-slate-300 rounded-xl px-3 py-2 bg-white"
-              >
-                {orderedTargetBooks.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} — {c.subject}
-                    {c.id === sourceBook?.id
-                      ? c.isTemplate
-                        ? ' (plantilla actual)'
-                        : ' (clase actual)'
-                      : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
+          <MultiClassTargetPicker
+            books={orderedTargetBooks}
+            currentBookId={sourceBook?.id ?? null}
+            activeTabId={activeTabId}
+            preferredTabTitle={preferredTabTitle}
+            selectedTargets={selectedTargets}
+            onChangeTargets={(next) => {
+              setSelectedTargets(next);
+              setFeedback(null);
+            }}
+          />
 
-            {targetClass && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Pestaña destino</label>
-                  <select
-                    value={targetTabId}
-                    onChange={(e) => {
-                      setTargetTabId(e.target.value);
-                      setTargetFolderId('');
-                      setFeedback(null);
-                    }}
-                    className="w-full border border-slate-300 rounded-xl px-3 py-2 bg-white"
-                  >
-                    {targetClass.tabs.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.title}
-                        {targetClass.id === sourceBook?.id && t.id === activeTabId
-                          ? ' (pestaña actual)'
-                          : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {targetTab && (
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Carpeta destino (opcional)
-                    </label>
-                    <select
-                      value={targetFolderId}
-                      onChange={(e) => {
-                        setTargetFolderId(e.target.value);
-                        setFeedback(null);
-                      }}
-                      className="w-full border border-slate-300 rounded-xl px-3 py-2 bg-white"
-                    >
-                      <option value="">Sin carpeta (suelta)</option>
-                      {targetTab.folders.map((f) => (
-                        <option key={f.id} value={f.id}>
-                          {f.title}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <p className="text-[11px] text-slate-500 bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2">
-              Puedes copiar dentro de la misma pestaña, a otra pestaña de la clase o a cualquier otra
-              clase (eligiendo pestaña y carpeta). Se copia la estructura sin notas de alumnos.
-            </p>
-          </div>
+          <p className="text-[11px] text-slate-500 bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2">
+            Se copia la estructura de las columnas (título, escala, rúbrica, criterios LOMLOE y
+            fórmulas internas) sin notas de alumnos. Si hay conflicto de nombres, se te preguntará en
+            cada caso.
+          </p>
 
           <div className="flex justify-end gap-2 pt-3 border-t border-slate-200">
             <button
@@ -447,15 +446,17 @@ export const CopyColumnsModal: React.FC<CopyColumnsModalProps> = ({
               disabled={!canSubmit}
               className="px-4 py-2 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-700 disabled:opacity-40 flex items-center gap-1.5"
             >
-              {selectedColIds.length > 1 ? (
+              {selectedColIds.length > 1 || chosenTargetsList.length > 1 ? (
                 <Send className="w-3.5 h-3.5" aria-hidden="true" />
               ) : (
                 <Check className="w-3.5 h-3.5" aria-hidden="true" />
               )}
               <span>
-                {selectedColIds.length > 1
-                  ? `Copiar ${selectedColIds.length} columnas`
-                  : 'Copiar columna'}
+                {chosenTargetsList.length > 1
+                  ? `Copiar ${selectedColIds.length > 1 ? `${selectedColIds.length} cols.` : 'columna'} a ${chosenTargetsList.length} clases`
+                  : selectedColIds.length > 1
+                    ? `Copiar ${selectedColIds.length} columnas`
+                    : 'Copiar columna'}
               </span>
             </button>
           </div>
@@ -467,18 +468,29 @@ export const CopyColumnsModal: React.FC<CopyColumnsModalProps> = ({
         onCancel={() => setPendingBatch(null)}
         onAddBoth={() => {
           if (!pendingBatch) return;
-          const nextResolved: BatchColumnDecision[] = [
+          const item = pendingBatch.currentItem;
+          const nextResolved: ResolvedDecision[] = [
             ...pendingBatch.resolved,
-            { columnId: pendingBatch.currentCol.id, mode: 'ADD' },
+            {
+              targetClassId: item.targetBook.id,
+              targetTabId: item.targetTabId,
+              targetFolderId: item.targetFolderId,
+              columnId: item.col.id,
+              mode: 'ADD',
+            },
           ];
           processQueue(pendingBatch.remaining, nextResolved, pendingBatch.totalCount);
         }}
         onReplace={(existingId) => {
           if (!pendingBatch) return;
-          const nextResolved: BatchColumnDecision[] = [
+          const item = pendingBatch.currentItem;
+          const nextResolved: ResolvedDecision[] = [
             ...pendingBatch.resolved,
             {
-              columnId: pendingBatch.currentCol.id,
+              targetClassId: item.targetBook.id,
+              targetTabId: item.targetTabId,
+              targetFolderId: item.targetFolderId,
+              columnId: item.col.id,
               mode: 'REPLACE',
               replaceColumnId: existingId,
             },

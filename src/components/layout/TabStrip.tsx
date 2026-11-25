@@ -14,7 +14,15 @@ interface TabStripProps {
 export const TabStrip: React.FC<TabStripProps> = ({ onEditTab, onOpenTemplateCopy }) => {
   const device = useDeviceProfile();
   const longPress = useTouchLongPress();
-  const { activeBook, activeTab, isTemplateMode, selectTab, addTab, reorderTabs } = useGradebook();
+  const {
+    activeBook,
+    activeTab,
+    isTemplateMode,
+    selectTab,
+    addTab,
+    reorderTabs,
+    moveColumnToTab,
+  } = useGradebook();
   const [dragTabId, setDragTabId] = useState<string | null>(null);
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -63,11 +71,35 @@ export const TabStrip: React.FC<TabStripProps> = ({ onEditTab, onOpenTemplateCop
               setDragOverTabId(null);
             }}
             onDragOver={(e) => {
+              const hasColDrag = Array.from(e.dataTransfer.types).includes('application/x-cuaderno-drag');
+              if (hasColDrag && !isActive) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                setDragOverTabId(tab.id);
+                return;
+              }
               e.preventDefault();
               if (dragTabId && dragTabId !== tab.id) setDragOverTabId(tab.id);
             }}
+            onDragLeave={() => {
+              if (dragOverTabId === tab.id) setDragOverTabId(null);
+            }}
             onDrop={(e) => {
               e.preventDefault();
+              const dragPayloadRaw = e.dataTransfer.getData('application/x-cuaderno-drag');
+              if (dragPayloadRaw && !isActive) {
+                try {
+                  const parsed = JSON.parse(dragPayloadRaw) as { kind?: string; id?: string };
+                  if (parsed.kind === 'COL' && parsed.id) {
+                    moveColumnToTab(parsed.id, tab.id);
+                    setDragTabId(null);
+                    setDragOverTabId(null);
+                    return;
+                  }
+                } catch {
+                  // fall through to tab reorder
+                }
+              }
               const srcId = dragTabId || e.dataTransfer.getData('text/plain');
               if (srcId && srcId !== tab.id) {
                 reorderTabs(srcId, tab.id);
