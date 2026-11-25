@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Check, Trash2, UserPlus, Users } from 'lucide-react';
+import { Ban, Check, Palette, Trash2, UserPlus, Users } from 'lucide-react';
+import { STUDENT_ROW_SWATCHES } from '../../constants/colors';
 import { useGradebook } from '../../context/GradebookContext';
 import { formatGrade, getEffectiveBookGroups, getStudentActiveGroup } from '../../engine/gradeMath';
 import { cellKey, type StudentEntity } from '../../types/gradebook';
@@ -22,6 +23,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [group, setGroup] = useState('');
+  const [color, setColor] = useState<string>('');
   const [notes, setNotes] = useState('');
 
   useEffect(() => {
@@ -32,11 +34,13 @@ export const StudentModal: React.FC<StudentModalProps> = ({
       setGroup(
         activeBook ? (getStudentActiveGroup(editingStudent, activeBook) ?? '') : (editingStudent.group ?? '')
       );
+      setColor(editingStudent.color ?? '');
       setNotes(editingStudent.notes ?? '');
     } else {
       setFirstName('');
       setLastName('');
       setGroup('');
+      setColor('');
       setNotes('');
     }
   }, [open, editingStudent, activeBook]);
@@ -49,6 +53,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         group: group.trim() || undefined,
+        color: color.trim() || undefined,
         notes: notes.trim() || undefined,
       });
     } else {
@@ -56,6 +61,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         group: group.trim() || undefined,
+        color: color.trim() || undefined,
         tags: [],
         notes: notes.trim() || undefined,
       });
@@ -138,6 +144,91 @@ export const StudentModal: React.FC<StudentModalProps> = ({
                   Quitar
                 </button>
               )}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="font-semibold text-slate-700 flex items-center gap-1.5">
+              <Palette className="w-3.5 h-3.5 text-slate-500" aria-hidden="true" />
+              <span>Color de relleno (marca toda la fila)</span>
+            </label>
+            {color && (
+              <button
+                type="button"
+                onClick={() => setColor('')}
+                className="text-[11px] font-semibold text-slate-500 hover:text-rose-600 transition-colors"
+              >
+                Quitar color
+              </button>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setColor('')}
+              aria-label="Sin color de relleno"
+              aria-pressed={!color}
+              title="Sin color"
+              className={`h-7 px-2 rounded-lg border-2 flex items-center gap-1 text-[11px] font-semibold transition-all ${
+                !color
+                  ? 'border-slate-900 bg-slate-100 text-slate-900'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <Ban className="w-3 h-3" aria-hidden="true" />
+              <span>Sin color</span>
+            </button>
+            {STUDENT_ROW_SWATCHES.map((sw) => {
+              const isSelected = color.toLowerCase() === sw.hex.toLowerCase();
+              return (
+                <button
+                  key={sw.hex}
+                  type="button"
+                  onClick={() => setColor(isSelected ? '' : sw.hex)}
+                  title={sw.name}
+                  aria-label={`Color ${sw.name}`}
+                  aria-pressed={isSelected}
+                  style={{ backgroundColor: sw.hex }}
+                  className={`color-swatch-essential w-7 h-7 rounded-lg border-2 flex items-center justify-center transition-all ${
+                    isSelected
+                      ? 'border-slate-900 scale-110 shadow-xs'
+                      : 'border-black/10 hover:scale-105'
+                  }`}
+                >
+                  {isSelected && <Check className="w-3.5 h-3.5 text-slate-900 stroke-[2.75]" aria-hidden="true" />}
+                </button>
+              );
+            })}
+            <label
+              title="Elegir color personalizado"
+              className="relative flex items-center gap-1 px-1.5 h-7 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 cursor-pointer text-[11px] font-medium text-slate-600"
+            >
+              <input
+                type="color"
+                aria-label="Color personalizado de fila"
+                value={color || '#FEF08A'}
+                onChange={(e) => setColor(e.target.value)}
+                className="w-5 h-5 rounded border-0 bg-transparent cursor-pointer p-0"
+              />
+              <span>Otro</span>
+            </label>
+          </div>
+          {color && (
+            <div
+              style={{
+                backgroundColor: color,
+                ['--student-row-bg' as string]: color,
+              }}
+              className="student-row-colored mt-2 px-3 py-1.5 rounded-xl border border-black/10 flex items-center justify-between text-[11.5px] font-semibold"
+            >
+              <span className="truncate">
+                {lastName.trim() || firstName.trim()
+                  ? `${lastName.trim()}${lastName.trim() && firstName.trim() ? ', ' : ''}${firstName.trim()}`
+                  : 'Vista previa de la fila del alumno'}
+              </span>
+              <span className="opacity-75 tabular-nums text-[11px] ml-2">8,50 · 9,00 · 7,75</span>
             </div>
           )}
         </div>

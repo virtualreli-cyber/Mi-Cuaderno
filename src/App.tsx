@@ -13,6 +13,7 @@ import { BookModal } from './components/modals/BookModal';
 import { BulkStudentModal } from './components/modals/BulkStudentModal';
 import { CellEditModal } from './components/modals/CellEditModal';
 import { ColumnModal } from './components/modals/ColumnModal';
+import { CopyColumnsModal } from './components/modals/CopyColumnsModal';
 import { FolderModal } from './components/modals/FolderModal';
 import { RubricBuilderModal, RubricGraderModal } from './components/modals/RubricModals';
 import { StudentGroupsModal } from './components/modals/StudentGroupsModal';
@@ -91,6 +92,10 @@ const CuadernoShell: React.FC = () => {
     initialGroupName?: string | null;
   }>({ open: false, initialGroupName: null });
   const [showBackupModal, setShowBackupModal] = useState(false);
+  const [copyColumnsModal, setCopyColumnsModal] = useState<{
+    open: boolean;
+    columnIds: string[];
+  }>({ open: false, columnIds: [] });
 
   const sortedStudents = useMemo(() => {
     if (!activeBook) return [];
@@ -177,6 +182,9 @@ const CuadernoShell: React.FC = () => {
                 })
               }
               onEditFolder={(tabId, folder) => setFolderModal({ tabId, folder })}
+              onCopyColumnsToClass={(columnIds) =>
+                setCopyColumnsModal({ open: true, columnIds })
+              }
               onOpenCellModal={(student, column) => setCellModalTarget({ student, column })}
               onOpenRubricGrader={(student, column, groupBatch) =>
                 setRubricGraderTarget({ student, column, groupBatch: groupBatch ?? null })
@@ -199,6 +207,14 @@ const CuadernoShell: React.FC = () => {
         open={Boolean(templateApplyTarget)}
         template={templateApplyTarget}
         onClose={() => setTemplateApplyTarget(null)}
+      />
+
+      <CopyColumnsModal
+        open={copyColumnsModal.open}
+        sourceBook={activeBook}
+        activeTabId={activeTab?.id ?? null}
+        initialColumnIds={copyColumnsModal.columnIds}
+        onClose={() => setCopyColumnsModal({ open: false, columnIds: [] })}
       />
 
       <TabModal

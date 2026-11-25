@@ -66,6 +66,32 @@ export function cloneSingleColumn(
   };
 }
 
+export function cloneColumnBatch(
+  cols: ColumnEntity[],
+  startOrderIndex: number,
+  targetFolderId: string | null = null
+): ColumnEntity[] {
+  const colMap = new Map<string, string>();
+  for (const col of cols) {
+    colMap.set(col.id, makeId('col'));
+  }
+
+  return cols.map((col, idx) => ({
+    ...structuredClone(col),
+    id: colMap.get(col.id)!,
+    folderId: targetFolderId,
+    orderIndex: startOrderIndex + idx,
+    educamos: undefined,
+    averageConfig: col.averageConfig
+      ? {
+          ...col.averageConfig,
+          sourceColumnIds: col.averageConfig.sourceColumnIds.map((id) => colMap.get(id) ?? id),
+          weights: remapWeights(col.averageConfig.weights, colMap),
+        }
+      : undefined,
+  }));
+}
+
 export function cloneFolderWithColumns(
   folder: FolderEntity,
   childCols: ColumnEntity[],

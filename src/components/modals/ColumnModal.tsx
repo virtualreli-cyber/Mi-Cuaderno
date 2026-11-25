@@ -29,6 +29,7 @@ import type {
   ColumnType,
 } from '../../types/gradebook';
 import { Modal } from '../common/Modal';
+import { TabColumnPicker } from '../common/TabColumnPicker';
 import { LomloeCompetenceBadge } from '../lomloe/LomloeCompetenceBadge';
 import { CopyConflictModal, type PendingCopyConflict } from './CopyConflictModal';
 
@@ -142,34 +143,6 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
       );
     }).length;
   }, [editingColumn, activeBook]);
-
-  // Folders & columns available as sources for AVERAGE across all tabs in activeBook
-  const candidateSources = useMemo(() => {
-    if (!activeBook) return [];
-    const list: Array<{ id: string; tabTitle: string; title: string; kind: 'FOLDER' | 'COL'; color: string }> = [];
-    for (const t of activeBook.tabs) {
-      for (const f of t.folders) {
-        list.push({
-          id: f.id,
-          tabTitle: t.title,
-          title: `Carpeta: ${f.title}`,
-          kind: 'FOLDER',
-          color: f.color,
-        });
-      }
-      for (const c of t.columns) {
-        if (c.id === editingColumn?.id) continue;
-        list.push({
-          id: c.id,
-          tabTitle: t.title,
-          title: c.title,
-          kind: 'COL',
-          color: c.color,
-        });
-      }
-    }
-    return list;
-  }, [activeBook, editingColumn?.id]);
 
   useEffect(() => {
     if (!open) {
@@ -290,6 +263,28 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
       if (weights[colId] === undefined) {
         setWeights((w) => ({ ...w, [colId]: Math.round(100 / next.length) }));
       }
+      return next;
+    });
+  };
+
+  const toggleManySourceCols = (ids: string[], select: boolean) => {
+    setSelectedSrcIds((prev) => {
+      if (!select) {
+        const removeSet = new Set(ids);
+        return prev.filter((id) => !removeSet.has(id));
+      }
+      const next = [...prev];
+      for (const id of ids) {
+        if (!next.includes(id)) next.push(id);
+      }
+      setWeights((w) => {
+        const updated = { ...w };
+        const fallback = next.length > 0 ? Math.round(100 / next.length) : 0;
+        for (const id of ids) {
+          if (updated[id] === undefined) updated[id] = fallback;
+        }
+        return updated;
+      });
       return next;
     });
   };
@@ -757,84 +752,64 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
         {type === 'AVERAGE' && (
           <div className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/40 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <div className="font-bold text-slate-900">Carpetas, Columnas y Ponderación</div>
-                <div className="text-[11px] text-slate-500">
-                  Suma actual: <strong className="text-slate-800">{weightSum.toFixed(1)}%</strong>
+              <div className="space-y-0.5">
+                <div className="font-bold text-slate-900">
+                  Carpetas, Columnas y Ponderación (por pestañas)
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
+                  <span>
+                    Seleccionadas:{' '}
+                    <strong className="text-slate-900 tabular-nums">{selectedSrcIds.length}</strong>
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span
+                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border font-bold tabular-nums ${
+                      selectedSrcIds.length === 0
+                        ? 'bg-white border-slate-200 text-slate-500'
+                        : Math.abs(weightSum - 100) < 0.05
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-amber-100/80 border-amber-300 text-amber-900'
+                    }`}
+                  >
+                    {selectedSrcIds.length > 0 && Math.abs(weightSum - 100) < 0.05 && (
+                      <Check className="w-3 h-3 stroke-[2.5]" aria-hidden="true" />
+                    )}
+                    <span>Suma: {weightSum.toFixed(1)}%</span>
+                  </span>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={applyAutomaticArithmeticMean}
                 disabled={selectedSrcIds.length === 0}
-                className="px-3 py-1.5 rounded-xl bg-amber-600 text-white font-semibold hover:bg-amber-700 disabled:opacity-40 flex items-center gap-1.5 shadow-2xs"
+                className="px-3 py-1.5 rounded-xl bg-amber-600 text-white font-semibold hover:bg-amber-700 disabled:opacity-40 flex items-center gap-1.5 shadow-2xs transition-colors"
               >
-                <Calculator className="w-3.5 h-3.5" />
+                <Calculator className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Media aritmética automática</span>
               </button>
             </div>
 
-            {candidateSources.length === 0 ? (
-              <p className="text-slate-500 italic">
-                Añade primero carpetas u otras columnas en la clase para poder promediarlas.
-              </p>
-            ) : (
-              <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
-                {candidateSources.map((src) => {
-                  const checked = selectedSrcIds.includes(src.id);
-                  return (
-                    <div
-                      key={src.id}
-                      className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl border ${
-                        checked ? 'bg-white border-blue-300' : 'bg-white/60 border-slate-200'
-                      }`}
-                    >
-                      <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => toggleSourceCol(src.id)}
-                          className="accent-blue-600"
-                        />
-                        <span
-                          className="w-2.5 h-2.5 rounded-full border border-black/15 shrink-0"
-                          style={{ backgroundColor: src.color }}
-                        />
-                        <span className="truncate font-medium text-slate-800">
-                          <span className="text-slate-400 mr-1">[{src.tabTitle}]</span>
-                          {src.kind === 'FOLDER' ? (
-                            <strong className="text-slate-900">{src.title}</strong>
-                          ) : (
-                            src.title
-                          )}
-                        </span>
-                      </label>
+            <TabColumnPicker
+              tabs={activeBook.tabs}
+              activeTabId={activeTab.id}
+              excludeColumnId={editingColumn?.id}
+              allowFolders
+              selectedIds={selectedSrcIds}
+              onToggleId={toggleSourceCol}
+              onToggleMany={toggleManySourceCols}
+              weights={weights}
+              onChangeWeight={(id, val) =>
+                setWeights((prev) => ({
+                  ...prev,
+                  [id]: val,
+                }))
+              }
+              ariaLabel="Columnas y carpetas por pestaña para el cálculo de la media"
+              emptyMessage="Añade primero carpetas u otras columnas en la clase para poder promediarlas."
+              maxHeightClass="max-h-[300px]"
+            />
 
-                      {checked && (
-                        <div className="flex items-center gap-1 shrink-0">
-                          <input
-                            type="number"
-                            min={0}
-                            step="0.5"
-                            value={weights[src.id] ?? 0}
-                            onChange={(e) =>
-                              setWeights((prev) => ({
-                                ...prev,
-                                [src.id]: Math.max(0, Number(e.target.value)),
-                              }))
-                            }
-                            className="w-16 border border-slate-300 rounded-lg px-2 py-1 text-right font-semibold bg-white tabular-nums"
-                          />
-                          <span className="text-slate-500">%</span>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
+            <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700 pt-0.5">
               <input
                 type="checkbox"
                 checked={ignoreEmpty}

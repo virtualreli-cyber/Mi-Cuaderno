@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createSeedWorkspace } from '../../data/seedData';
 import { hydrateWorkspace, sanitizeForRtdb } from '../../services/storage';
-import type { TabEntity } from '../../types/gradebook';
+import type { ColumnEntity, TabEntity } from '../../types/gradebook';
+import { cloneColumnBatch } from '../cloneHelpers';
 import {
   findCopyConflicts,
   inspectTargetElementData,
@@ -216,6 +217,91 @@ describe('RTDB serialization & hydration', () => {
     expect(hydrated!.classes[0].students[1].tags).toEqual([]);
     expect(hydrated!.templates[1].cells).toEqual({});
     expect(hydrated!.classes[0].tabs[0].columns.length).toBeGreaterThan(0);
+  });
+
+  it('preserves student row fill color through RTDB sanitize and hydrate roundtrip', () => {
+    const ws = createSeedWorkspace();
+    ws.classes[0].students[0].color = '#FEF08A';
+    const sanitized = sanitizeForRtdb(ws);
+    const hydrated = hydrateWorkspace(JSON.parse(JSON.stringify(sanitized)));
+    expect(hydrated).not.toBeNull();
+    expect(hydrated!.classes[0].students[0].color).toBe('#FEF08A');
+  });
+});
+
+describe('cloneColumnBatch', () => {
+  it('clones multiple columns, clears educamos tracking, and remaps internal AVERAGE references', () => {
+    const srcCols: ColumnEntity[] = [
+      {
+        id: 'c-1',
+        folderId: 'fld-old',
+        title: 'Examen 1',
+        color: '#DBEAFE',
+        width: 100,
+        orderIndex: 0,
+        type: 'NUMERIC',
+        minValue: 0,
+        maxValue: 10,
+        decimals: 2,
+        passThreshold: 5,
+        colorMode: 'CELL_BG',
+        educamos: { status: 'DONE', snapshot: { st1: 8 } },
+      },
+      {
+        id: 'c-2',
+        folderId: null,
+        title: 'Trabajo 1',
+        color: '#D1FAE5',
+        width: 100,
+        orderIndex: 1,
+        type: 'NUMERIC',
+        minValue: 0,
+        maxValue: 10,
+        decimals: 2,
+        passThreshold: 5,
+        colorMode: 'CELL_BG',
+      },
+      {
+        id: 'c-avg',
+        folderId: null,
+        title: 'Media Bloque',
+        color: '#FEF9C3',
+        width: 100,
+        orderIndex: 2,
+        type: 'AVERAGE',
+        minValue: 0,
+        maxValue: 10,
+        decimals: 2,
+        passThreshold: 5,
+        colorMode: 'CELL_BG',
+        averageConfig: {
+          sourceColumnIds: ['c-1', 'c-2', 'external-col'],
+          weights: { 'c-1': 50, 'c-2': 30, 'external-col': 20 },
+          ignoreEmpty: true,
+        },
+      },
+    ];
+
+    const cloned = cloneColumnBatch(srcCols, 5, 'fld-target');
+    expect(cloned).toHaveLength(3);
+    expect(cloned[0].id).not.toBe('c-1');
+    expect(cloned[1].id).not.toBe('c-2');
+    expect(cloned[2].id).not.toBe('c-avg');
+    expect(cloned.map((c) => c.folderId)).toEqual(['fld-target', 'fld-target', 'fld-target']);
+    expect(cloned.map((c) => c.orderIndex)).toEqual([5, 6, 7]);
+    expect(cloned[0].educamos).toBeUndefined();
+
+    // Internal references remapped to new cloned IDs; external ref kept as-is
+    expect(cloned[2].averageConfig?.sourceColumnIds).toEqual([
+      cloned[0].id,
+      cloned[1].id,
+      'external-col',
+    ]);
+    expect(cloned[2].averageConfig?.weights).toEqual({
+      [cloned[0].id]: 50,
+      [cloned[1].id]: 30,
+      'external-col': 20,
+    });
   });
 });
 

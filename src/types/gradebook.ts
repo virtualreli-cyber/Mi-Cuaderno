@@ -238,6 +238,7 @@ export interface StudentEntity {
   firstName: string;
   lastName: string;
   group?: string;
+  color?: string;
   tags: string[];
   notes?: string;
   orderIndex: number;

@@ -15,6 +15,19 @@ export const PASTEL_SWATCHES: { name: string; hex: string }[] = [
   { name: 'Amarillo Pastel', hex: '#FEF08A' },
 ];
 
+export const STUDENT_ROW_SWATCHES: { name: string; hex: string }[] = [
+  { name: 'Amarillo', hex: '#FEF08A' },
+  { name: 'Melocotón', hex: '#FED7AA' },
+  { name: 'Rojo suave', hex: '#FECACA' },
+  { name: 'Rosa', hex: '#FBCFE8' },
+  { name: 'Lavanda', hex: '#DDD6FE' },
+  { name: 'Cielo', hex: '#BFDBFE' },
+  { name: 'Turquesa', hex: '#A5F3FC' },
+  { name: 'Menta', hex: '#A7F3D0' },
+  { name: 'Lima', hex: '#D9F99D' },
+  { name: 'Gris', hex: '#E2E8F0' },
+];
+
 export const SCHOOL_DEFAULT_COLORS: Record<string, string> = {
   Ribarroja: '#FCA5A5', // Rojo pastel
   Manises: '#93C5FD',   // Azul pastel

@@ -14,6 +14,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  Ban,
   BarChart3,
   Calculator,
   Check,
@@ -35,9 +36,11 @@ import {
   MessageSquare,
   Minus,
   MoreVertical,
+  Palette,
   Pencil,
   Plus,
   RotateCcw,
+  Send,
   Sigma,
   UserPlus,
   Users,
@@ -46,6 +49,7 @@ import {
 import {
   blendWithWhite,
   PASTEL_SWATCHES,
+  STUDENT_ROW_SWATCHES,
 } from '../../constants/colors';
 import { DEFAULT_LOMLOE_KEY_COMPETENCES } from '../../data/lomloeReligion';
 import { useGradebook } from '../../context/GradebookContext';
@@ -118,6 +122,7 @@ interface GradebookGridProps {
   onEditColumn: (col: ColumnEntity) => void;
   onNewColumn: (presetType?: 'NUMERIC' | 'AVERAGE' | 'RUBRIC', folderId?: string | null) => void;
   onEditFolder: (tabId: string, folder: FolderEntity) => void;
+  onCopyColumnsToClass?: (columnIds: string[]) => void;
   onOpenCellModal: (student: StudentEntity, col: ColumnEntity) => void;
   onOpenRubricGrader: (
     student: StudentEntity | null,
@@ -243,6 +248,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   onEditColumn,
   onNewColumn,
   onEditFolder,
+  onCopyColumnsToClass,
   onOpenCellModal,
   onOpenRubricGrader,
   onOpenLomloeManager,
@@ -274,6 +280,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     removeGroupSummaryRow,
     setColumnGroupSummaryOverride,
     reorderStudents,
+    updateStudent,
     selectGroupCategory,
     upsertStudentGroup,
     toggleGroupCollapsed,
@@ -316,6 +323,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   const [selectedStudentColHeader, setSelectedStudentColHeader] = useState(false);
   const [quickCounterColumnId, setQuickCounterColumnId] = useState<string | null>(null);
   const [selectedColumnTarget, setSelectedColumnTarget] = useState<SelectedColumnTarget | null>(null);
+  const [selectedColumnIds, setSelectedColumnIds] = useState<string[]>([]);
+  const [anchorColumnId, setAnchorColumnId] = useState<string | null>(null);
+  const [touchColMultiSelect, setTouchColMultiSelect] = useState(false);
   const [copyToast, setCopyToast] = useState<string | null>(null);
   const copyToastTimerRef = useRef<number | null>(null);
 
@@ -753,21 +763,44 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setEditingGroup(null);
   }, [activeBook?.id, activeTab?.id]);
 
-  // Clear stale selectedColumnTarget if that column/folder was deleted
+  // Clear stale selectedColumnTarget if that column/folder was deleted & keep multi-column selection synced
   useEffect(() => {
-    if (!selectedColumnTarget || !activeTab) return;
-    if (
-      selectedColumnTarget.kind === 'COL' &&
-      !activeTab.columns.some((c) => c.id === selectedColumnTarget.col.id)
-    ) {
-      setSelectedColumnTarget(null);
-    } else if (
-      selectedColumnTarget.kind === 'FOLDER' &&
-      !activeTab.folders.some((f) => f.id === selectedColumnTarget.folder.id)
-    ) {
-      setSelectedColumnTarget(null);
+    if (!selectedColumnTarget || !activeTab) {
+      if (selectedColumnIds.length > 0) setSelectedColumnIds([]);
+      if (anchorColumnId !== null) setAnchorColumnId(null);
+      if (touchColMultiSelect) setTouchColMultiSelect(false);
+      return;
     }
-  }, [selectedColumnTarget, activeTab]);
+    if (selectedColumnTarget.kind === 'COL') {
+      const validIds = new Set(activeTab.columns.map((c) => c.id));
+      const filtered = selectedColumnIds.filter((id) => validIds.has(id));
+      if (!validIds.has(selectedColumnTarget.col.id)) {
+        if (filtered.length > 0) {
+          const fallbackCol = activeTab.columns.find((c) => c.id === filtered[filtered.length - 1]);
+          if (fallbackCol) {
+            setSelectedColumnTarget({ kind: 'COL', col: fallbackCol });
+            setSelectedColumnIds(filtered);
+            return;
+          }
+        }
+        setSelectedColumnTarget(null);
+        setSelectedColumnIds([]);
+        setAnchorColumnId(null);
+        setTouchColMultiSelect(false);
+      } else if (filtered.length === 0) {
+        setSelectedColumnIds([selectedColumnTarget.col.id]);
+      } else if (filtered.length !== selectedColumnIds.length) {
+        setSelectedColumnIds(filtered);
+      }
+    } else if (selectedColumnTarget.kind === 'FOLDER') {
+      if (selectedColumnIds.length > 0) setSelectedColumnIds([]);
+      if (anchorColumnId !== null) setAnchorColumnId(null);
+      if (touchColMultiSelect) setTouchColMultiSelect(false);
+      if (!activeTab.folders.some((f) => f.id === selectedColumnTarget.folder.id)) {
+        setSelectedColumnTarget(null);
+      }
+    }
+  }, [selectedColumnTarget, activeTab, selectedColumnIds, anchorColumnId, touchColMultiSelect]);
 
   // Hide quick-counter +/- column buttons & student row selection whenever selection moves elsewhere
   useEffect(() => {
@@ -1363,6 +1396,23 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     [displaySlots]
   );
 
+  const visibleColumnIdsInOrder = useMemo(() => {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const slot of displaySlots) {
+      if (slot.kind === 'COL' && !seen.has(slot.col.id)) {
+        seen.add(slot.col.id);
+        ids.push(slot.col.id);
+      }
+    }
+    return ids;
+  }, [displaySlots]);
+
+  const selectedColumnIdSet = useMemo(
+    () => new Set(selectedColumnIds),
+    [selectedColumnIds]
+  );
+
   const selectSingleCell = useCallback((studentId: string, columnId: string) => {
     const k = cellKey(studentId, columnId);
     setSelectedStudentRowId(null);
@@ -1508,17 +1558,79 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     [visibleStudents, slotIdsInOrder, selectedKeys]
   );
 
-  const selectEntireColumn = useCallback((col: ColumnEntity) => {
-    setSelectedStudentRowId(null);
-    setSelectedStudentColHeader(false);
-    setSelectedColumnTarget({ kind: 'COL', col });
-    setSelectedGroupColCell(null);
-    setSelectedSummaryCell(null);
-    setSelectedKeys(new Set());
-    setSelectedCoord(null);
-    setAnchorCoord(null);
-    wrapperRef.current?.focus({ preventScroll: true });
-  }, []);
+  const selectEntireColumn = useCallback(
+    (col: ColumnEntity, opts?: { additive?: boolean; range?: boolean }) => {
+      setSelectedStudentRowId(null);
+      setSelectedStudentColHeader(false);
+      setSelectedGroupColCell(null);
+      setSelectedSummaryCell(null);
+      setSelectedKeys(new Set());
+      setSelectedCoord(null);
+      setAnchorCoord(null);
+
+      const isAdditive = Boolean(opts?.additive || (device.isTouch && touchColMultiSelect));
+      const isRange = Boolean(opts?.range);
+
+      if (isRange && anchorColumnId) {
+        const i1 = visibleColumnIdsInOrder.indexOf(anchorColumnId);
+        const i2 = visibleColumnIdsInOrder.indexOf(col.id);
+        if (i1 >= 0 && i2 >= 0) {
+          const [start, end] = i1 <= i2 ? [i1, i2] : [i2, i1];
+          const rangeIds = visibleColumnIdsInOrder.slice(start, end + 1);
+          const nextIds = isAdditive
+            ? Array.from(new Set([...selectedColumnIds, ...rangeIds]))
+            : rangeIds;
+          setSelectedColumnIds(nextIds);
+          setSelectedColumnTarget({ kind: 'COL', col });
+          wrapperRef.current?.focus({ preventScroll: true });
+          return;
+        }
+      }
+
+      if (isAdditive) {
+        const currentIds =
+          selectedColumnIds.length > 0
+            ? selectedColumnIds
+            : selectedColumnTarget?.kind === 'COL'
+              ? [selectedColumnTarget.col.id]
+              : [];
+        if (currentIds.includes(col.id)) {
+          const remaining = currentIds.filter((id) => id !== col.id);
+          if (remaining.length === 0) {
+            setSelectedColumnIds([]);
+            setSelectedColumnTarget(null);
+            setAnchorColumnId(null);
+            setTouchColMultiSelect(false);
+          } else {
+            const fallbackCol =
+              activeTab?.columns.find((c) => c.id === remaining[remaining.length - 1]) ?? col;
+            setSelectedColumnIds(remaining);
+            setSelectedColumnTarget({ kind: 'COL', col: fallbackCol });
+          }
+        } else {
+          setSelectedColumnIds([...currentIds, col.id]);
+          setSelectedColumnTarget({ kind: 'COL', col });
+          setAnchorColumnId(col.id);
+        }
+        wrapperRef.current?.focus({ preventScroll: true });
+        return;
+      }
+
+      setSelectedColumnTarget({ kind: 'COL', col });
+      setSelectedColumnIds([col.id]);
+      setAnchorColumnId(col.id);
+      wrapperRef.current?.focus({ preventScroll: true });
+    },
+    [
+      activeTab?.columns,
+      anchorColumnId,
+      device.isTouch,
+      selectedColumnIds,
+      selectedColumnTarget,
+      touchColMultiSelect,
+      visibleColumnIdsInOrder,
+    ]
+  );
 
   const selectFolderSummaryColumn = useCallback(
     (folder: FolderEntity, childCols: ColumnEntity[]) => {
@@ -2904,10 +3016,13 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   })();
 
   const totalActiveStudents = activeBook.students.filter((s) => !s.isHidden).length;
+  const isColumnIdSelected = (colId: string) =>
+    selectedColumnIdSet.has(colId) ||
+    (selectedColumnTarget?.kind === 'COL' && selectedColumnTarget.col.id === colId);
+
   const isSlotColumnSelected = (slot: DisplaySlot) =>
-    (selectedColumnTarget?.kind === 'COL' &&
-      (slot.kind === 'COL' || slot.kind === 'RUBRIC_CRITERION') &&
-      selectedColumnTarget.col.id === slot.col.id) ||
+    ((slot.kind === 'COL' || slot.kind === 'RUBRIC_CRITERION') &&
+      isColumnIdSelected(slot.col.id)) ||
     (selectedColumnTarget?.kind === 'FOLDER' &&
       slot.kind === 'FOLDER_SUMMARY' &&
       selectedColumnTarget.folder.id === slot.folder.id);
@@ -2928,8 +3043,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   ) => {
     const hint = dropHint?.key === col.id ? dropHint.mode : null;
     const isDraggingThis = dragItem?.kind === 'COL' && dragItem.id === col.id;
-    const isColSelected =
-      selectedColumnTarget?.kind === 'COL' && selectedColumnTarget.col.id === col.id;
+    const isColSelected = isColumnIdSelected(col.id);
     const isVertical =
       !inExpandedRubricFolder && shouldRenderVerticalHeader(col.title, col.width, col.headerOrientation);
     const hasTopCanopy = isStandalone && !inExpandedRubricFolder;
@@ -2999,6 +3113,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           }
           clearDrag();
         }}
+        onMouseDown={(e) => {
+          if (e.shiftKey || e.metaKey || e.ctrlKey) {
+            e.preventDefault();
+          }
+        }}
         onClick={(e) => {
           if (justResizedRef.current || touchDoubleTap.wasDoubleTapJustHandled()) {
             return;
@@ -3008,6 +3127,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
             !e.shiftKey &&
             !e.metaKey &&
             !e.ctrlKey &&
+            !touchColMultiSelect &&
             touchDoubleTap.handleTouchClick(
               `hdr-col:${col.id}`,
               () => {
@@ -3019,7 +3139,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           ) {
             return;
           }
-          selectEntireColumn(col);
+          selectEntireColumn(col, {
+            additive: e.metaKey || e.ctrlKey,
+            range: e.shiftKey,
+          });
         }}
         onDoubleClick={(e) => {
           if (justResizedRef.current || touchDoubleTap.wasDoubleTapJustHandled()) return;
@@ -3043,7 +3166,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 ? 'inset -3px 0 0 #2563EB'
                 : undefined,
         }}
-        title={`${col.title} — 1 clic: seleccionar columna · Doble clic o clic derecho: editar · Arrastra borde derecho para ancho`}
+        title={`${col.title} — 1 clic: seleccionar · Cmd/Ctrl o Shift+clic: seleccionar varias · Doble clic o clic derecho: editar`}
         className={`border-r border-b border-slate-300 ${
           inExpandedRubricFolder
             ? 'border-t-0'
@@ -3702,17 +3825,22 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               if (item.kind === 'RUBRIC_EXPANDED') {
                 const { col, rubric, criteria, critWidth } = item;
                 const totalUnzoomedW = col.width + criteria.length * critWidth;
-                const isColSelected =
-                  selectedColumnTarget?.kind === 'COL' && selectedColumnTarget.col.id === col.id;
+                const isColSelected = isColumnIdSelected(col.id);
 
                 return (
                   <th
                     key={`rubric-canopy-${col.id}`}
                     colSpan={1 + criteria.length}
+                    onMouseDown={(e) => {
+                      if (e.shiftKey || e.metaKey || e.ctrlKey) e.preventDefault();
+                    }}
                     onClick={(e) => {
                       if (justResizedRef.current) return;
                       e.stopPropagation();
-                      selectEntireColumn(col);
+                      selectEntireColumn(col, {
+                        additive: e.metaKey || e.ctrlKey,
+                        range: e.shiftKey,
+                      });
                     }}
                     onDoubleClick={(e) => {
                       if (justResizedRef.current) return;
@@ -4300,16 +4428,21 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 const critUnzoomedH = baseHeaderH + (showLomloeBar ? baseLomloeRowH : 0);
                 const critH = headerH + (showLomloeBar ? lomloeRowH : 0);
                 const critRowSpan = (hasExpandedChildRubric ? 2 : 1) + (showLomloeBar ? 1 : 0);
-                const isCritColSelected =
-                  selectedColumnTarget?.kind === 'COL' && selectedColumnTarget.col.id === col.id;
+                const isCritColSelected = isColumnIdSelected(col.id);
                 return (
                   <th
                     key={key}
                     rowSpan={critRowSpan > 1 ? critRowSpan : undefined}
                     data-rubric-crit-header={key}
+                    onMouseDown={(e) => {
+                      if (e.shiftKey || e.metaKey || e.ctrlKey) e.preventDefault();
+                    }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      selectEntireColumn(col);
+                      selectEntireColumn(col, {
+                        additive: e.metaKey || e.ctrlKey,
+                        range: e.shiftKey,
+                      });
                     }}
                     onDoubleClick={(e) => {
                       e.stopPropagation();
@@ -4360,16 +4493,21 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 const { col } = slot;
                 const critCount = childExpandedRubric.criteria.length;
                 const totalUnzoomedW = col.width + critCount * 75;
-                const isColSelected =
-                  selectedColumnTarget?.kind === 'COL' && selectedColumnTarget.col.id === col.id;
+                const isColSelected = isColumnIdSelected(col.id);
                 return (
                   <th
                     key={`rubric-child-canopy-${col.id}`}
                     colSpan={1 + critCount}
+                    onMouseDown={(e) => {
+                      if (e.shiftKey || e.metaKey || e.ctrlKey) e.preventDefault();
+                    }}
                     onClick={(e) => {
                       if (justResizedRef.current) return;
                       e.stopPropagation();
-                      selectEntireColumn(col);
+                      selectEntireColumn(col, {
+                        additive: e.metaKey || e.ctrlKey,
+                        range: e.shiftKey,
+                      });
                     }}
                     onDoubleClick={(e) => {
                       if (justResizedRef.current) return;
@@ -4466,16 +4604,21 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 const subBodyH = headerH - subCanopyH;
                 const critUnzoomedH = subBodyBaseH + (showLomloeBar ? baseLomloeRowH : 0);
                 const critH = subBodyH + (showLomloeBar ? lomloeRowH : 0);
-                const isCritColSelected =
-                  selectedColumnTarget?.kind === 'COL' && selectedColumnTarget.col.id === col.id;
+                const isCritColSelected = isColumnIdSelected(col.id);
                 return (
                   <th
                     key={`r3-${key}`}
                     rowSpan={showLomloeBar ? 2 : undefined}
                     data-rubric-crit-header={key}
+                    onMouseDown={(e) => {
+                      if (e.shiftKey || e.metaKey || e.ctrlKey) e.preventDefault();
+                    }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      selectEntireColumn(col);
+                      selectEntireColumn(col, {
+                        additive: e.metaKey || e.ctrlKey,
+                        range: e.shiftKey,
+                      });
                     }}
                     onDoubleClick={(e) => {
                       e.stopPropagation();
@@ -4593,7 +4736,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     className={`border-r border-b border-t-0 border-slate-300 px-1 py-1 align-middle text-center cursor-pointer relative group transition-colors hover:bg-indigo-50/70 ${
                       isPickerOpen
                         ? 'ring-2 ring-inset ring-indigo-500'
-                        : selectedColumnTarget?.kind === 'COL' && selectedColumnTarget.col.id === col.id
+                        : isColumnIdSelected(col.id)
                           ? 'col-cell-tint'
                           : ''
                     }`}
@@ -5042,7 +5185,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
               for (const student of bucket.students) {
                 const rIdx = runningRowIdx++;
-                const rowBg = rIdx % 2 === 0 ? '#FFFFFF' : '#F6F8FA';
+                const studentFill = student.color?.trim() || undefined;
+                const rowBg = studentFill ?? (rIdx % 2 === 0 ? '#FFFFFF' : '#F6F8FA');
+                const rowCellBg = studentFill ? blendWithWhite(studentFill, 0.14) : rowBg;
                 const isStudentRowSelected = selectedStudentRowId === student.id;
                 const displayName =
                   workspace.settings.nameFormat === 'FIRST_LAST'
@@ -5078,7 +5223,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       }
                       setDragStudentId(null);
                     }}
-                    style={{ backgroundColor: rowBg, height: rowH }}
+                    style={{
+                      backgroundColor: rowBg,
+                      height: rowH,
+                      ...(studentFill ? ({ '--student-row-bg': rowBg } as React.CSSProperties) : {}),
+                    }}
                     onPointerDown={(e) => {
                       touchDoubleTap.start(e, `st:${student.id}`);
                     }}
@@ -5124,8 +5273,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     }}
                     title={`${displayName} — 1 clic: seleccionar fila · Doble clic o clic derecho: abrir ficha del alumno`}
                     className={`sticky left-0 z-20 border-r-2 border-b border-slate-200 px-2.5 py-1 text-left font-normal relative cursor-pointer ${
-                      isStudentRowSelected ? 'student-row-selected' : ''
-                    }`}
+                      studentFill ? 'student-row-colored' : ''
+                    } ${isStudentRowSelected ? 'student-row-selected' : ''}`}
                   >
                     <div
                       role="button"
@@ -5143,11 +5292,19 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       className="w-full flex items-center justify-between gap-2 text-left hover:text-blue-700 transition-colors overflow-hidden focus:outline-none"
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="text-[1em] font-semibold text-slate-900 truncate">
+                        <div
+                          className={`text-[1em] font-semibold truncate ${
+                            studentFill ? 'text-current' : 'text-slate-900'
+                          }`}
+                        >
                           {displayName}
                         </div>
                       </div>
-                      <span className="text-[0.83em] text-slate-400 tabular-nums shrink-0">
+                      <span
+                        className={`text-[0.83em] tabular-nums shrink-0 ${
+                          studentFill ? 'opacity-65' : 'text-slate-400'
+                        }`}
+                      >
                         {rIdx + 1}
                       </span>
                     </div>
@@ -5180,9 +5337,17 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         maxValue: 10,
                         passThreshold: activeBook.passThreshold,
                       });
-                      const defaultFolderBg = blendWithWhite(
-                        slot.folder.color,
-                        rIdx % 2 === 0 ? 0.34 : 0.46
+                      const defaultFolderBg = studentFill
+                        ? rowCellBg
+                        : blendWithWhite(
+                            slot.folder.color,
+                            rIdx % 2 === 0 ? 0.34 : 0.46
+                          );
+                      const finalFolderBg = isFolderInline
+                        ? '#FFFFFF'
+                        : (folderColors.bgColor ?? defaultFolderBg);
+                      const usesStudentFillOnFolder = Boolean(
+                        studentFill && !isFolderInline && !folderColors.bgColor
                       );
                       const formulaValForTooltip =
                         isFolderManual || isFolderAutoRecalc
@@ -5201,10 +5366,12 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           tabIndex={isFocusedFolderCell ? 0 : -1}
                           style={{
                             height: rowH,
-                            backgroundColor: isFolderInline
-                              ? '#FFFFFF'
-                              : (folderColors.bgColor ?? defaultFolderBg),
-                            color: folderColors.textColor ?? '#0F172A',
+                            backgroundColor: finalFolderBg,
+                            ...(folderColors.textColor
+                              ? { color: folderColors.textColor }
+                              : usesStudentFillOnFolder
+                                ? ({ '--student-row-bg': finalFolderBg } as React.CSSProperties)
+                                : { color: '#0F172A' }),
                           }}
                           onMouseDown={(e) => {
                             if (e.shiftKey || e.metaKey || e.ctrlKey) {
@@ -5344,6 +5511,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             clearCellTooltip();
                           }}
                           className={`border-r border-b border-slate-200 px-1 py-0.5 text-center align-middle relative cursor-pointer overflow-hidden ${
+                            usesStudentFillOnFolder && !folderColors.textColor
+                              ? 'student-row-colored'
+                              : ''
+                          } ${
                             isFocusedFolderCell || isFolderInline
                               ? 'cell-selected z-10'
                               : isFolderCellInMulti
@@ -5448,7 +5619,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       const showPct = Boolean(
                         col.rubricShowPercentage || workspace.settings.showRubricsAsPercent
                       );
-                      const critBg = critRes ? critRes.level.color : blendWithWhite(rowBg, 0.15);
+                      const critBg = critRes
+                        ? critRes.level.color
+                        : studentFill
+                          ? rowCellBg
+                          : blendWithWhite(rowBg, 0.15);
 
                       const openCritEditor = (rect: DOMRect) => {
                         clearCellTooltip();
@@ -5664,10 +5839,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       Boolean(col.color) &&
                       col.color.toUpperCase() !== '#FFFFFF' &&
                       col.color.toUpperCase() !== '#F8FAFC';
-                    const baseColBg = isStandaloneColored
-                      ? blendWithWhite(col.color, rIdx % 2 === 0 ? 0.24 : 0.38)
-                      : rowBg;
+                    const baseColBg = studentFill
+                      ? rowCellBg
+                      : isStandaloneColored
+                        ? blendWithWhite(col.color, rIdx % 2 === 0 ? 0.24 : 0.38)
+                        : rowBg;
                     const cellBg = isInline ? '#FFFFFF' : (colors.bgColor ?? baseColBg);
+                    const usesStudentFillOnCell = Boolean(
+                      studentFill && !isInline && !colors.bgColor
+                    );
 
                     const isManualRubricEdit = col.type === 'RUBRIC' && Boolean(cell?.manualOverride);
                     const isEducamosOutdated = isCellOutdatedForEducamos(col, student.id, cell);
@@ -5845,9 +6025,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         style={{
                           height: rowH,
                           backgroundColor: cellBg,
-                          color: colors.textColor ?? '#0F172A',
+                          ...(colors.textColor
+                            ? { color: colors.textColor }
+                            : usesStudentFillOnCell
+                              ? ({ '--student-row-bg': cellBg } as React.CSSProperties)
+                              : { color: '#0F172A' }),
                         }}
                         className={`border-r border-b border-slate-200 px-1 py-0.5 text-center align-middle relative cursor-pointer overflow-hidden ${
+                          usesStudentFillOnCell && !colors.textColor ? 'student-row-colored' : ''
+                        } ${
                           isFocusedCell || isInline
                             ? 'cell-selected z-10'
                             : isInMultiSelection
@@ -5953,7 +6139,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   })}
 
                   <td
-                    className={`border-b border-slate-200 bg-slate-50/40 ${
+                    style={studentFill ? { backgroundColor: rowCellBg } : undefined}
+                    className={`border-b border-slate-200 ${studentFill ? '' : 'bg-slate-50/40'} ${
                       isStudentRowSelected ? 'student-row-cell-tint' : ''
                     }`}
                   />
@@ -7386,9 +7573,64 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
       {/* Touch-only Contextual Action Bar (Tablet/iPad & Mobile — zero footprint on Desktop!) */}
       {device.isTouch && !inlineEdit && (() => {
-        // 1. Selected Column or Folder Header
+        // 1. Selected Column(s) or Folder Header
         if (selectedColumnTarget) {
           if (selectedColumnTarget.kind === 'COL') {
+            if (selectedColumnIds.length > 1) {
+              return (
+                <div
+                  data-touch-action-bar="multi-column"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  style={{
+                    bottom: 'calc(0.75rem + var(--safe-bottom))',
+                    left: 'max(0.75rem, var(--safe-left))',
+                    maxWidth: 'calc(100dvw - 170px)',
+                  }}
+                  className="absolute z-30 flex items-center gap-1 px-1.5 py-1 rounded-2xl border border-blue-200 bg-white/95 backdrop-blur-xs shadow-lg overflow-x-auto no-scrollbar text-xs font-semibold text-slate-700"
+                >
+                  <span className="px-2 font-bold text-slate-900 shrink-0 tabular-nums">
+                    {selectedColumnIds.length} columnas
+                  </span>
+                  {onCopyColumnsToClass && (
+                    <button
+                      type="button"
+                      onClick={() => onCopyColumnsToClass(selectedColumnIds)}
+                      className="min-h-[38px] px-3 rounded-xl bg-blue-600 text-white flex items-center gap-1.5 shrink-0"
+                    >
+                      <Send className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Copiar a clase...</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setTouchColMultiSelect((v) => !v)}
+                    aria-pressed={touchColMultiSelect}
+                    className={`min-h-[38px] px-2.5 rounded-xl border flex items-center gap-1 shrink-0 ${
+                      touchColMultiSelect
+                        ? 'border-blue-600 bg-blue-50 text-blue-900'
+                        : 'border-slate-200 bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>{touchColMultiSelect ? 'Seleccionando' : '+ Varias'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedColumnTarget(null);
+                      setSelectedColumnIds([]);
+                      setTouchColMultiSelect(false);
+                    }}
+                    aria-label="Limpiar selección de columnas"
+                    className="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center shrink-0"
+                  >
+                    <X className="w-4 h-4" aria-hidden="true" />
+                  </button>
+                </div>
+              );
+            }
+
             const col = selectedColumnTarget.col;
             const canFillNP =
               col.type !== 'AVERAGE' && !col.isLocked && !activeTab.isLocked;
@@ -7456,6 +7698,29 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 >
                   <Copy className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>Copiar</span>
+                </button>
+                {onCopyColumnsToClass && (
+                  <button
+                    type="button"
+                    onClick={() => onCopyColumnsToClass([col.id])}
+                    className="min-h-[38px] px-2.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900 flex items-center gap-1 shrink-0"
+                  >
+                    <Send className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>A clase</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setTouchColMultiSelect((v) => !v)}
+                  aria-pressed={touchColMultiSelect}
+                  className={`min-h-[38px] px-2.5 rounded-xl border flex items-center gap-1 shrink-0 ${
+                    touchColMultiSelect
+                      ? 'border-blue-600 bg-blue-600 text-white'
+                      : 'border-slate-200 bg-slate-50 text-slate-700'
+                  }`}
+                >
+                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{touchColMultiSelect ? 'Multiselección' : 'Varias'}</span>
                 </button>
                 {canFillNP && (
                   <>
@@ -7775,6 +8040,56 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Ficha de {st.firstName}</span>
               </button>
+              <div
+                aria-label="Color de relleno de la fila"
+                className="flex items-center gap-1 px-1.5 py-1 rounded-xl border border-slate-200 bg-slate-50 shrink-0"
+              >
+                <Palette className="w-3.5 h-3.5 text-slate-500 shrink-0 mr-0.5" aria-hidden="true" />
+                <button
+                  type="button"
+                  onClick={() => updateStudent(st.id, { color: undefined })}
+                  aria-label="Quitar color de fila"
+                  title="Sin color"
+                  className={`w-6 h-6 rounded-md border flex items-center justify-center shrink-0 ${
+                    !st.color
+                      ? 'border-slate-900 bg-white text-slate-900'
+                      : 'border-slate-300 bg-white text-slate-500'
+                  }`}
+                >
+                  <Ban className="w-3 h-3" aria-hidden="true" />
+                </button>
+                {STUDENT_ROW_SWATCHES.map((sw) => {
+                  const isSel = st.color?.toLowerCase() === sw.hex.toLowerCase();
+                  return (
+                    <button
+                      key={sw.hex}
+                      type="button"
+                      onClick={() => updateStudent(st.id, { color: isSel ? undefined : sw.hex })}
+                      aria-label={`Color ${sw.name}`}
+                      aria-pressed={isSel}
+                      title={sw.name}
+                      style={{ backgroundColor: sw.hex }}
+                      className={`color-swatch-essential w-6 h-6 rounded-md border flex items-center justify-center shrink-0 ${
+                        isSel ? 'border-slate-900 ring-1 ring-slate-900' : 'border-black/15'
+                      }`}
+                    >
+                      {isSel && <Check className="w-3 h-3 text-slate-900 stroke-[2.75]" aria-hidden="true" />}
+                    </button>
+                  );
+                })}
+                <label
+                  title="Color personalizado"
+                  className="w-6 h-6 rounded-md border border-slate-300 bg-white flex items-center justify-center overflow-hidden cursor-pointer shrink-0"
+                >
+                  <input
+                    type="color"
+                    aria-label="Elegir color personalizado para la fila"
+                    value={st.color || '#FEF08A'}
+                    onChange={(e) => updateStudent(st.id, { color: e.target.value })}
+                    className="w-7 h-7 border-0 p-0 cursor-pointer bg-transparent"
+                  />
+                </label>
+              </div>
               <button
                 type="button"
                 onClick={() => {
@@ -8441,9 +8756,135 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         </div>
       )}
 
-      {/* Desktop quick action pill when a column/task or folder header is selected */}
+      {/* Desktop quick action pill when a student row is selected (1-click iDoceo row fill color + student card) */}
+      {!device.isTouch && !inlineEdit && selectedStudentRowId && (() => {
+        const st = visibleStudents.find((s) => s.id === selectedStudentRowId);
+        if (!st) return null;
+        return (
+          <div
+            data-desktop-student-bar="student"
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              bottom: 'calc(0.75rem + var(--safe-bottom))',
+              left: 'max(0.75rem, var(--safe-left))',
+              maxWidth: 'calc(100dvw - 170px)',
+            }}
+            className="absolute z-30 flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-xs shadow-lg text-xs font-semibold text-slate-700 overflow-x-auto no-scrollbar"
+          >
+            <span className="font-bold text-slate-900 truncate max-w-[170px] pr-0.5 shrink-0">
+              {st.lastName}, {st.firstName}
+            </span>
+            <button
+              type="button"
+              onClick={() => onEditStudent(st)}
+              className="px-2.5 py-1 rounded-xl bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1 shrink-0 transition-colors"
+            >
+              <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Ficha</span>
+            </button>
+            <div
+              aria-label="Color de relleno de la fila"
+              className="flex items-center gap-1 pl-1.5 pr-1 py-0.5 rounded-xl border border-slate-200 bg-slate-50/90 shrink-0"
+            >
+              <Palette className="w-3.5 h-3.5 text-slate-500 shrink-0" aria-hidden="true" />
+              <span className="text-[11px] text-slate-500 mr-0.5 shrink-0">Relleno:</span>
+              <button
+                type="button"
+                onClick={() => updateStudent(st.id, { color: undefined })}
+                aria-label="Sin color de relleno"
+                aria-pressed={!st.color}
+                title="Quitar color de fila"
+                className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all shrink-0 ${
+                  !st.color
+                    ? 'border-slate-900 bg-white text-slate-900'
+                    : 'border-slate-300 bg-white text-slate-500 hover:text-rose-600'
+                }`}
+              >
+                <Ban className="w-3 h-3" aria-hidden="true" />
+              </button>
+              {STUDENT_ROW_SWATCHES.map((sw) => {
+                const isSel = st.color?.toLowerCase() === sw.hex.toLowerCase();
+                return (
+                  <button
+                    key={sw.hex}
+                    type="button"
+                    onClick={() => updateStudent(st.id, { color: isSel ? undefined : sw.hex })}
+                    aria-label={`Color ${sw.name}`}
+                    aria-pressed={isSel}
+                    title={sw.name}
+                    style={{ backgroundColor: sw.hex }}
+                    className={`color-swatch-essential w-5 h-5 rounded-md border flex items-center justify-center transition-transform shrink-0 ${
+                      isSel
+                        ? 'border-slate-900 scale-110 shadow-2xs'
+                        : 'border-black/15 hover:scale-110'
+                    }`}
+                  >
+                    {isSel && <Check className="w-3 h-3 text-slate-900 stroke-[2.75]" aria-hidden="true" />}
+                  </button>
+                );
+              })}
+              <label
+                title="Elegir color personalizado"
+                className="w-5 h-5 rounded-md border border-slate-300 bg-white flex items-center justify-center overflow-hidden cursor-pointer shrink-0 hover:border-slate-500"
+              >
+                <input
+                  type="color"
+                  aria-label="Color personalizado de fila"
+                  value={st.color || '#FEF08A'}
+                  onChange={(e) => updateStudent(st.id, { color: e.target.value })}
+                  className="w-6 h-6 border-0 p-0 cursor-pointer bg-transparent"
+                />
+              </label>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Desktop quick action pill when column(s)/task or folder header is selected */}
       {!device.isTouch && !inlineEdit && selectedColumnTarget && (() => {
         if (selectedColumnTarget.kind === 'COL') {
+          if (selectedColumnIds.length > 1) {
+            return (
+              <div
+                data-desktop-column-bar="multi-column"
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{
+                  bottom: 'calc(0.75rem + var(--safe-bottom))',
+                  left: 'max(0.75rem, var(--safe-left))',
+                }}
+                className="absolute z-30 flex items-center gap-1.5 pl-3 pr-1.5 py-1.5 rounded-2xl border border-blue-200 bg-white/95 backdrop-blur-xs shadow-lg text-xs font-semibold text-slate-700"
+              >
+                <span className="font-bold text-slate-900 tabular-nums pr-1">
+                  {selectedColumnIds.length} columnas seleccionadas
+                </span>
+                {onCopyColumnsToClass && (
+                  <button
+                    type="button"
+                    data-multi-col-copy-class-btn="true"
+                    onClick={() => onCopyColumnsToClass(selectedColumnIds)}
+                    className="px-3 py-1 rounded-xl bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1.5 shrink-0 transition-colors"
+                  >
+                    <Send className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Copiar a otra clase...</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedColumnTarget(null);
+                    setSelectedColumnIds([]);
+                    setAnchorColumnId(null);
+                  }}
+                  title="Limpiar selección"
+                  aria-label="Limpiar selección de columnas"
+                  className="p-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            );
+          }
+
           const col = selectedColumnTarget.col;
           const canFillNP =
             col.type !== 'AVERAGE' && !col.isLocked && !activeTab.isLocked;
@@ -8501,6 +8942,18 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 <Copy className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Copiar</span>
               </button>
+              {onCopyColumnsToClass && (
+                <button
+                  type="button"
+                  data-col-copy-class-btn="true"
+                  onClick={() => onCopyColumnsToClass([col.id])}
+                  title="Copiar esta columna (o seleccionar más) a otra clase. Consejo: Cmd/Ctrl o Shift+clic en varias cabeceras."
+                  className="px-2.5 py-1 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 flex items-center gap-1 shrink-0 transition-colors"
+                >
+                  <Send className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>A otra clase</span>
+                </button>
+              )}
               {canFillNP && (
                 <>
                   <button

@@ -29,6 +29,7 @@ import {
 } from '../data/lomloeReligion';
 import { createSeedWorkspace } from '../data/seedData';
 import {
+  cloneColumnBatch,
   cloneFolderWithColumns,
   cloneSingleColumn,
   cloneTabEntity,
@@ -187,6 +188,19 @@ interface GradebookContextValue {
       targetFolderId?: string | null;
       mode?: 'ADD' | 'REPLACE';
       replaceColumnId?: string;
+    }
+  ) => void;
+  copyColumnsToTarget: (
+    sourceBookId: string,
+    items: Array<{
+      columnId: string;
+      mode?: 'ADD' | 'REPLACE';
+      replaceColumnId?: string;
+    }>,
+    targetClassId: string,
+    targetTabId: string,
+    options?: {
+      targetFolderId?: string | null;
     }
   ) => void;
   copyFolderToTarget: (
@@ -1473,6 +1487,134 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
                     ...c.averageConfig,
                     sourceColumnIds: c.averageConfig.sourceColumnIds.map((id) =>
                       id === replaceId ? newId : id
+                    ),
+                    weights: nextWeights,
+                  },
+                };
+              }),
+            }));
+          }
+
+          return recalculateBook({ ...book, tabs: nextTabs, cells: nextCells }, prev.rubrics);
+        };
+
+        return {
+          ...prev,
+          classes: prev.classes.map(mutateBook),
+          templates: prev.templates.map(mutateBook),
+        };
+      });
+    },
+    [commit]
+  );
+
+  const copyColumnsToTarget = useCallback<GradebookContextValue['copyColumnsToTarget']>(
+    (sourceBookId, items, targetClassId, targetTabId, options) => {
+      if (items.length === 0) return;
+      commit((prev) => {
+        const srcBook =
+          prev.classes.find((c) => c.id === sourceBookId) ??
+          prev.templates.find((t) => t.id === sourceBookId);
+        if (!srcBook) return prev;
+
+        const srcColsMap = new Map(
+          srcBook.tabs.flatMap((t) => t.columns).map((c) => [c.id, c] as const)
+        );
+        const resolvedItems = items
+          .map((item) => {
+            const srcCol = srcColsMap.get(item.columnId);
+            return srcCol ? { ...item, srcCol } : null;
+          })
+          .filter((x): x is NonNullable<typeof x> => x !== null);
+        if (resolvedItems.length === 0) return prev;
+
+        const mutateBook = (book: ClassBook): ClassBook => {
+          if (book.id !== targetClassId) return book;
+
+          let nextCells = { ...book.cells };
+          const replacedIdMap = new Map<string, string>();
+          const clonedBatch = cloneColumnBatch(
+            resolvedItems.map((i) => i.srcCol),
+            0,
+            options?.targetFolderId ?? null
+          );
+
+          let nextTabs = book.tabs.map((tab) => {
+            if (tab.id !== targetTabId) return tab;
+
+            let nextCols = [...tab.columns];
+            let nextOrder = getCanonicalItemOrder(tab);
+
+            resolvedItems.forEach((item, idx) => {
+              const clonedBase = clonedBatch[idx];
+              const replaceId = item.mode === 'REPLACE' ? item.replaceColumnId : undefined;
+
+              if (replaceId) {
+                const oldCol = nextCols.find((c) => c.id === replaceId);
+                if (oldCol) {
+                  for (const k of Object.keys(nextCells)) {
+                    if (k.endsWith(`::${replaceId}`)) delete nextCells[k];
+                  }
+                  const effectiveFolderId =
+                    options?.targetFolderId !== undefined
+                      ? options.targetFolderId
+                      : oldCol.folderId;
+                  const clonedCol: ColumnEntity = {
+                    ...clonedBase,
+                    folderId: effectiveFolderId,
+                    orderIndex: oldCol.orderIndex,
+                  };
+                  replacedIdMap.set(replaceId, clonedCol.id);
+
+                  nextOrder =
+                    effectiveFolderId === null
+                      ? nextOrder.map((id) => (id === replaceId ? clonedCol.id : id))
+                      : nextOrder.filter((id) => id !== replaceId);
+                  if (effectiveFolderId === null && !nextOrder.includes(clonedCol.id)) {
+                    nextOrder.push(clonedCol.id);
+                  }
+                  nextCols = nextCols.map((c) => (c.id === replaceId ? clonedCol : c));
+                  return;
+                }
+              }
+
+              const effectiveFolderId = options?.targetFolderId ?? null;
+              const clonedCol: ColumnEntity = {
+                ...clonedBase,
+                folderId: effectiveFolderId,
+                orderIndex: nextCols.length,
+              };
+              nextCols.push(clonedCol);
+              if (effectiveFolderId === null) {
+                nextOrder = [...nextOrder, clonedCol.id];
+              }
+            });
+
+            return syncTabOrderIndices({ ...tab, columns: nextCols }, nextOrder);
+          });
+
+          if (replacedIdMap.size > 0) {
+            nextTabs = nextTabs.map((tab) => ({
+              ...tab,
+              columns: tab.columns.map((c) => {
+                if (!c.averageConfig) return c;
+                const needsRemap = c.averageConfig.sourceColumnIds.some((id) =>
+                  replacedIdMap.has(id)
+                );
+                if (!needsRemap) return c;
+                const nextWeights = { ...c.averageConfig.weights };
+                for (const [oldId, newId] of replacedIdMap.entries()) {
+                  if (nextWeights[oldId] !== undefined) {
+                    nextWeights[newId] = nextWeights[oldId];
+                    delete nextWeights[oldId];
+                  }
+                }
+                return {
+                  ...c,
+                  averageConfig: {
+                    ...c.averageConfig,
+                    sourceColumnIds: c.averageConfig.sourceColumnIds.map(
+                      (id) => replacedIdMap.get(id) ?? id
                     ),
                     weights: nextWeights,
                   },
@@ -4221,6 +4363,7 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
     saveBookAsTemplate,
     applyTemplateTabsToClass,
     copyColumnToTarget,
+    copyColumnsToTarget,
     copyFolderToTarget,
     copyTabToTarget,
     addTab,

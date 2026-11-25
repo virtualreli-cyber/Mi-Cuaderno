@@ -92,6 +92,74 @@ dialog::backdrop {
     inset 0 0 0 9999px rgba(147, 197, 253, 0.16);
 }
 
+/* Color swatches: preserve exact swatch colors in Windows Forced Colors Mode */
+.color-swatch-essential {
+  forced-color-adjust: none;
+}
+
+/* Dynamic contrasting text color on arbitrary student row fill backgrounds */
+.student-row-colored {
+  color: #0f172a;
+}
+
+@supports (color: color(from white xyz-d65 calc(max(0, sign(0.1 - y)) * 0.9505) 0 0)) {
+  .student-row-colored {
+    --wcag-y-threshold: 0.17913;
+    color: color(
+      from var(--student-row-bg) xyz-d65
+      calc(max(0, sign(var(--wcag-y-threshold) - y)) * 0.9505)
+      max(0, sign(var(--wcag-y-threshold) - y))
+      calc(max(0, sign(var(--wcag-y-threshold) - y)) * 1.089)
+    );
+  }
+}
+
+@supports (color: contrast-color(white)) {
+  .student-row-colored {
+    color: contrast-color(var(--student-row-bg));
+  }
+}
+
+/* Accessible native <details> collapsible tab sections */
+.tab-accordion-details > summary {
+  list-style: none;
+}
+
+.tab-accordion-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tab-accordion-details > summary .tab-accordion-chevron {
+  rotate: -90deg;
+}
+
+.tab-accordion-details[open] > summary .tab-accordion-chevron {
+  rotate: 0deg;
+}
+
+.tab-accordion-details::details-content {
+  interpolate-size: allow-keywords;
+  overflow: clip;
+  contain: layout;
+}
+
+.tab-accordion-details:not([open])::details-content {
+  block-size: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .tab-accordion-details > summary .tab-accordion-chevron {
+    transition: rotate 0.2s ease;
+  }
+
+  .tab-accordion-details::details-content {
+    transition: block-size, content-visibility, display;
+    transition-duration: 0.22s;
+    transition-timing-function: ease-in-out;
+    transition-behavior: allow-discrete;
+  }
+}
+
 /* Hide scrollbars on horizontal touch tab strips while keeping swipeable */
 .no-scrollbar {
   scrollbar-width: none;
