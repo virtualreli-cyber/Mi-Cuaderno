@@ -3426,7 +3426,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         style={{
           width: totalTableWidth + 200,
           minWidth: '100%',
-          paddingBottom: '82dvh',
           overflow: 'clip',
         }}
       >
@@ -6443,9 +6442,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           })()}
         </tbody>
 
-        {/* BOTTOM SUMMARY ROWS (up to 5 per column, individually editable or globally extensible) */}
-        {workspace.settings.showStatsRow && (
-        <tfoot className="bg-slate-50">
+        {/* BOTTOM SUMMARY ROWS + BOTTOM OVERSCROLL SPACER (inside <table> so sticky <thead> NEVER scrolls away) */}
+        <tfoot className="bg-transparent">
+          {workspace.settings.showStatsRow && (
+            <>
           {summaryRows.map((globalMetric, rowIdx) => {
             const globalOpt =
               COLUMN_SUMMARY_OPTIONS.find((o) => o.metric === globalMetric) ??
@@ -6803,8 +6803,17 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               Pulsa en el selector izquierdo para cambiar estas filas en todas las clases y pestañas, o doble clic en una celda para personalizar esa columna.
             </td>
           </tr>
+            </>
+          )}
+          <tr aria-hidden="true" data-grid-bottom-overscroll="true">
+            <td
+              colSpan={displaySlots.length + 2}
+              className="p-0 border-0 bg-transparent pointer-events-none"
+            >
+              <div style={{ height: '82dvh' }} />
+            </td>
+          </tr>
         </tfoot>
-        )}
       </table>
       </div>
 
