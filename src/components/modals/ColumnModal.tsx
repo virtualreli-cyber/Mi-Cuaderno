@@ -100,9 +100,10 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
   // LOMLOE criteria settings
   const [lomloeCriteriaIds, setLomloeCriteriaIds] = useState<string[]>([]);
 
-  // Copy to another class/tab
+  // Copy to same/another class, tab & folder
   const [copyClassId, setCopyClassId] = useState('');
   const [copyTabId, setCopyTabId] = useState('');
+  const [copyFolderId, setCopyFolderId] = useState('');
   const [copyDoneMsg, setCopyDoneMsg] = useState<string | null>(null);
   const [actionPopupMsg, setActionPopupMsg] = useState<string | null>(null);
   const actionPopupTimerRef = useRef<number | null>(null);
@@ -247,9 +248,14 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
       setLomloeCriteriaIds([]);
     }
 
-    const firstCls = workspace.classes[0];
-    setCopyClassId(firstCls?.id ?? '');
-    setCopyTabId(firstCls?.tabs[0]?.id ?? '');
+    const defaultTargetBook = activeBook ?? workspace.classes[0];
+    setCopyClassId(defaultTargetBook?.id ?? '');
+    setCopyTabId(
+      defaultTargetBook?.id === activeBook?.id
+        ? (activeTab?.id ?? defaultTargetBook?.tabs[0]?.id ?? '')
+        : (defaultTargetBook?.tabs[0]?.id ?? '')
+    );
+    setCopyFolderId('');
     // Only initialize form state when opening or switching target column
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editingColumn?.id, presetType, presetFolderId]);
@@ -377,12 +383,21 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
     onClose();
   };
 
-  const copyTargetClass = workspace.classes.find((c) => c.id === copyClassId);
+  const copyTargetBooks = useMemo(() => {
+    const books = [...workspace.classes];
+    if (activeBook?.isTemplate && !books.some((b) => b.id === activeBook.id)) {
+      books.unshift(activeBook);
+    }
+    return books;
+  }, [workspace.classes, activeBook]);
+
+  const copyTargetClass = copyTargetBooks.find((c) => c.id === copyClassId);
   const copyTargetTab = copyTargetClass?.tabs.find((t) => t.id === copyTabId);
 
   const executeCopyToClass = (resolution: 'ADD' | 'REPLACE', replaceColumnId?: string) => {
     if (!editingColumn || !copyClassId || !copyTabId) return;
     copyColumnToTarget(activeBook.id, editingColumn.id, copyClassId, copyTabId, {
+      targetFolderId: copyFolderId || null,
       mode: resolution,
       replaceColumnId,
     });
@@ -401,7 +416,10 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
       copyTargetClass,
       'COLUMN',
       editingColumn.title,
-      copyTargetTab.id
+      copyTargetTab.id,
+      copyTargetClass.id === activeBook.id && copyTargetTab.id === activeTab.id
+        ? editingColumn.id
+        : undefined
     );
     if (matches.length > 0) {
       setPendingConflict({
@@ -1047,43 +1065,85 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
               )}
             </div>
 
-            {/* Copy to another class */}
-            <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center gap-2">
-              <span className="font-semibold text-slate-600">Copiar columna a:</span>
-              <select
-                value={copyClassId}
-                onChange={(e) => {
-                  setCopyClassId(e.target.value);
-                  const cls = workspace.classes.find((c) => c.id === e.target.value);
-                  setCopyTabId(cls?.tabs[0]?.id ?? '');
-                }}
-                className="border border-slate-200 rounded-lg px-2 py-1 bg-white"
-              >
-                {workspace.classes.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={copyTabId}
-                onChange={(e) => setCopyTabId(e.target.value)}
-                className="border border-slate-200 rounded-lg px-2 py-1 bg-white"
-              >
-                {(copyTargetClass?.tabs ?? []).map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.title}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={handleCopyColumnClick}
-                className="px-2.5 py-1 rounded-lg bg-slate-800 text-white font-semibold hover:bg-slate-900"
-              >
-                Copiar
-              </button>
-              {copyDoneMsg && <span className="text-emerald-700 font-semibold">{copyDoneMsg}</span>}
+            {/* Copy to same/another class, tab & folder */}
+            <div className="pt-2 border-t border-slate-100 space-y-2">
+              <div className="font-semibold text-slate-600">
+                Copiar columna a (clase / pestaña / carpeta):
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <select
+                  aria-label="Clase destino"
+                  value={copyClassId}
+                  onChange={(e) => {
+                    setCopyClassId(e.target.value);
+                    const cls = copyTargetBooks.find((c) => c.id === e.target.value);
+                    setCopyTabId(
+                      cls?.id === activeBook.id
+                        ? activeTab.id
+                        : (cls?.tabs[0]?.id ?? '')
+                    );
+                    setCopyFolderId('');
+                    setCopyDoneMsg(null);
+                  }}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 bg-white"
+                >
+                  {copyTargetBooks.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                      {c.id === activeBook.id
+                        ? c.isTemplate
+                          ? ' (plantilla actual)'
+                          : ' (clase actual)'
+                        : ''}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="Pestaña destino"
+                  value={copyTabId}
+                  onChange={(e) => {
+                    setCopyTabId(e.target.value);
+                    setCopyFolderId('');
+                    setCopyDoneMsg(null);
+                  }}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 bg-white"
+                >
+                  {(copyTargetClass?.tabs ?? []).map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.title}
+                      {copyTargetClass?.id === activeBook.id && t.id === activeTab.id
+                        ? ' (actual)'
+                        : ''}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="Carpeta destino"
+                  value={copyFolderId}
+                  onChange={(e) => {
+                    setCopyFolderId(e.target.value);
+                    setCopyDoneMsg(null);
+                  }}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 bg-white"
+                >
+                  <option value="">Sin carpeta (suelta)</option>
+                  {(copyTargetTab?.folders ?? []).map((f) => (
+                    <option key={f.id} value={f.id}>
+                      Carpeta: {f.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCopyColumnClick}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 text-white font-semibold hover:bg-slate-900"
+                >
+                  Copiar columna
+                </button>
+                {copyDoneMsg && <span className="text-emerald-700 font-semibold">{copyDoneMsg}</span>}
+              </div>
             </div>
           </div>
         )}

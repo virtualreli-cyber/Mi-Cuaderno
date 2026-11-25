@@ -7608,7 +7608,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       className="min-h-[38px] px-3 rounded-xl bg-blue-600 text-white flex items-center gap-1.5 shrink-0"
                     >
                       <Send className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>Copiar a clase...</span>
+                      <span>Copiar a...</span>
                     </button>
                   )}
                   <button
@@ -7715,7 +7715,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     className="min-h-[38px] px-2.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900 flex items-center gap-1 shrink-0"
                   >
                     <Send className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>A clase</span>
+                    <span>Copiar a...</span>
                   </button>
                 )}
                 <button
@@ -8874,7 +8874,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     className="px-3 py-1 rounded-xl bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1.5 shrink-0 transition-colors"
                   >
                     <Send className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>Copiar a otra clase...</span>
+                    <span>Copiar a clase o pestaña...</span>
                   </button>
                 )}
                 <button
@@ -8956,11 +8956,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   type="button"
                   data-col-copy-class-btn="true"
                   onClick={() => onCopyColumnsToClass([col.id])}
-                  title="Copiar esta columna (o seleccionar más) a otra clase. Consejo: Cmd/Ctrl o Shift+clic en varias cabeceras."
+                  title="Copiar esta columna (o seleccionar más) a otra pestaña, carpeta o clase. Consejo: Cmd/Ctrl o Shift+clic en varias cabeceras."
                   className="px-2.5 py-1 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 flex items-center gap-1 shrink-0 transition-colors"
                 >
                   <Send className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>A otra clase</span>
+                  <span>Copiar a...</span>
                 </button>
               )}
               {canFillNP && (

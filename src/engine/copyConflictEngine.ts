@@ -185,17 +185,20 @@ export function inspectTargetElementData(
 /**
  * Searches `targetClass` (and `targetTabId` when copying a column or folder)
  * for any existing element with an equal or similar name.
+ * Pass `excludeId` when copying within the same tab so a column isn't flagged against itself.
  */
 export function findCopyConflicts(
   targetClass: ClassBook,
   kind: CopyElementKind,
   sourceTitle: string,
-  targetTabId?: string
+  targetTabId?: string,
+  excludeId?: string
 ): CopyConflictMatch[] {
   const candidates: Array<{ id: string; title: string }> = [];
 
   if (kind === 'TAB') {
     for (const tab of targetClass.tabs) {
+      if (excludeId && tab.id === excludeId) continue;
       candidates.push({ id: tab.id, title: tab.title });
     }
   } else {
@@ -203,10 +206,12 @@ export function findCopyConflicts(
     if (!tab) return [];
     if (kind === 'COLUMN') {
       for (const col of tab.columns) {
+        if (excludeId && col.id === excludeId) continue;
         candidates.push({ id: col.id, title: col.title });
       }
     } else if (kind === 'FOLDER') {
       for (const fld of tab.folders) {
+        if (excludeId && fld.id === excludeId) continue;
         candidates.push({ id: fld.id, title: fld.title });
       }
     }

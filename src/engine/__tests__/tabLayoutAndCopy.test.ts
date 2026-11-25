@@ -198,6 +198,13 @@ describe('copyConflictEngine', () => {
     // Empty column data inspection
     const emptyCheck = inspectTargetElementData(cls, 'COLUMN', 'non-existent-col', tab1.id);
     expect(emptyCheck.hasStudentData).toBe(false);
+
+    // Same-tab copy skips self-conflict when excludeId is provided
+    const firstCol = tab1.columns[0];
+    const withoutExclude = findCopyConflicts(cls, 'COLUMN', firstCol.title, tab1.id);
+    expect(withoutExclude.some((m) => m.id === firstCol.id)).toBe(true);
+    const withExclude = findCopyConflicts(cls, 'COLUMN', firstCol.title, tab1.id, firstCol.id);
+    expect(withExclude.some((m) => m.id === firstCol.id)).toBe(false);
   });
 });
 
