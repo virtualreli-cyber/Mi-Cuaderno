@@ -168,6 +168,15 @@ dialog::backdrop {
   display: none;
 }
 
+/* Auto-sizing personal note textareas (progressive enhancement: degrades cleanly to standard vertical scroll) */
+.note-autosize-textarea {
+  field-sizing: content;
+  width: 100%;
+  height: auto;
+  min-block-size: 3lh;
+  max-block-size: 11lh;
+}
+
 /* Touch-only ergonomic upgrades (strictly gated on pointer: coarse / hover: none — desktop untouched!) */
 @media (pointer: coarse), (hover: none) {
   /* Prevent full-app double-tap & pinch zoom on iPad/mobile while preserving native 1-finger panning */

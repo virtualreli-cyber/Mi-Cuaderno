@@ -72,7 +72,7 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState('');
-  const [color, setColor] = useState('#DBEAFE');
+  const [color, setColor] = useState('#FFFFFF');
   const [type, setType] = useState<ColumnType>('NUMERIC');
   const [width, setWidth] = useState(80);
   const [folderId, setFolderId] = useState<string>('');
@@ -207,7 +207,7 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
       setTitle(defaultTitle);
       setDescription('');
       setDate('');
-      setColor(PASTEL_SWATCHES[(idx + 5) % PASTEL_SWATCHES.length].hex);
+      setColor('#FFFFFF');
       setType(presetType);
       setWidth(80);
       setFolderId(presetFolderId ?? '');

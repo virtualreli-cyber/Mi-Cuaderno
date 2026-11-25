@@ -1954,7 +1954,7 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
       const fld: FolderEntity = {
         id: makeId('fld'),
         title: title.trim() || 'Nueva Carpeta',
-        color: color || '#DCFCE7',
+        color: color || '#FFFFFF',
         width: 80,
         orderIndex: activeTab.folders.length,
         isCollapsed: false,

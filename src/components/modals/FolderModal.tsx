@@ -52,7 +52,7 @@ export const FolderModal: React.FC<FolderModalProps> = ({ open, onClose, tabId, 
   } = useGradebook();
 
   const [title, setTitle] = useState('');
-  const [color, setColor] = useState('#DCFCE7');
+  const [color, setColor] = useState('#FFFFFF');
   const [width, setWidth] = useState(64);
   const [summaryMode, setSummaryMode] = useState<FolderSummaryMode>('ARITHMETIC_MEAN');
   const [colorMode, setColorMode] = useState<ColorMode>('CELL_BG');

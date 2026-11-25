@@ -26,6 +26,7 @@ import {
   ChevronsRight,
   Copy,
   Eraser,
+  EyeOff,
   FileX2,
   FolderOutput,
   FolderPlus,
@@ -43,15 +44,16 @@ import {
   RotateCcw,
   Send,
   Sigma,
+  StickyNote,
   UserPlus,
   Users,
   X,
 } from 'lucide-react';
 import {
   blendWithWhite,
-  PASTEL_SWATCHES,
   STUDENT_ROW_SWATCHES,
 } from '../../constants/colors';
+import { resolveStudentTags } from '../../constants/studentTags';
 import { DEFAULT_LOMLOE_KEY_COMPETENCES } from '../../data/lomloeReligion';
 import { useGradebook } from '../../context/GradebookContext';
 import { useDeviceProfile } from '../../hooks/useDeviceProfile';
@@ -117,6 +119,11 @@ import {
   HeaderContextMenu,
   type HeaderContextMenuTarget,
 } from './HeaderContextMenu';
+import { StudentTagIcon } from '../common/StudentTagIcon';
+import {
+  PersonalNotePopover,
+  type PersonalNoteEditorState,
+} from './PersonalNotePopover';
 
 interface GradebookGridProps {
   searchQuery: string;
@@ -374,6 +381,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     bottom: number;
     left: number;
   } | null>(null);
+  const [activeNoteEditor, setActiveNoteEditor] = useState<PersonalNoteEditorState | null>(null);
   const [showSortMenu, setShowSortMenu] = useState(false);
   const [showCategoryMenu, setShowCategoryMenu] = useState(false);
   const [showAddSummaryMenu, setShowAddSummaryMenu] = useState(false);
@@ -2511,12 +2519,19 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
       if (!selectedCoord) {
         if (e.key === 'Escape') {
-          if (showAddColMenu || moveTabPopover || headerContextMenu || educamosMenu) {
+          if (
+            showAddColMenu ||
+            moveTabPopover ||
+            headerContextMenu ||
+            educamosMenu ||
+            activeNoteEditor
+          ) {
             e.preventDefault();
             setShowAddColMenu(false);
             setMoveTabPopover(null);
             setHeaderContextMenu(null);
             setEducamosMenu(null);
+            setActiveNoteEditor(null);
             return;
           }
         }
@@ -2973,6 +2988,33 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     updateSettings({ studentColWidth: fitted });
   };
 
+  // Personal notes column horizontal resize (200px to 540px; double-click resets to 300px)
+  const startNotesColResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    justResizedRef.current = true;
+    beginAspectChange();
+    const startX = e.clientX;
+    const startW = workspace.settings.notesColWidth ?? 300;
+
+    const onMove = (ev: PointerEvent) => {
+      const clamped = Math.max(
+        200,
+        Math.min(540, Math.round(startW + (ev.clientX - startX) / gridZoom))
+      );
+      updateSettings({ notesColWidth: clamped });
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.setTimeout(() => {
+        justResizedRef.current = false;
+      }, 200);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
   // Header height resize by dragging the bottom border of <thead>
   const startHeaderHeightResize = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -3122,6 +3164,27 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     ? Math.min(workspace.settings.studentColWidth, Math.max(124, Math.round(device.viewportWidth * 0.4)))
     : workspace.settings.studentColWidth;
   const studentColW = effectiveStudentBaseW * gridZoom;
+  const showNotesColumn = Boolean(workspace.settings.showNotesColumn);
+  const baseNotesColW = workspace.settings.notesColWidth ?? 300;
+  const effectiveNotesBaseW = device.isMobile
+    ? Math.min(baseNotesColW, Math.max(210, Math.round(device.viewportWidth * 0.62)))
+    : baseNotesColW;
+  const notesColW = showNotesColumn ? effectiveNotesBaseW * gridZoom : 0;
+  const extraColCount = showNotesColumn ? 1 : 0;
+  const hasClassNote = Boolean(activeBook.notes?.trim());
+  const studentsWithNotesCount = visibleStudents.filter((s) => Boolean(s.notes?.trim())).length;
+  const hasAnyPrivateNotes = hasClassNote || studentsWithNotesCount > 0;
+  const toggleNotesColumn = () => {
+    const next = !showNotesColumn;
+    updateSettings({ showNotesColumn: next });
+    if (next) {
+      requestAnimationFrame(() => {
+        if (wrapperRef.current && wrapperRef.current.scrollLeft > 0) {
+          wrapperRef.current.scrollTo({ left: 0, behavior: 'smooth' });
+        }
+      });
+    }
+  };
   const rowH = Math.round(workspace.settings.rowHeight * gridZoom);
   const headerH = baseHeaderH * gridZoom;
   const canopyH = baseCanopyH * gridZoom;
@@ -3145,7 +3208,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     (sum, s) => sum + s.width * gridZoom,
     0
   );
-  const totalTableWidth = studentColW + scaledSlotsWidth + addColW;
+  const totalTableWidth = studentColW + notesColW + scaledSlotsWidth + addColW;
 
   const sortShortLabel = (() => {
     switch (activeBook.sortMode) {
@@ -3631,6 +3694,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       >
         <colgroup>
           <col style={{ width: studentColW }} />
+          {showNotesColumn && <col style={{ width: notesColW }} />}
           {displaySlots.map((slot) => (
             <col key={`cg-${slot.key}`} style={{ width: slot.width * gridZoom }} />
           ))}
@@ -3658,6 +3722,45 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 selectedStudentColHeader ? 'col-header-selected' : ''
               }`}
             >
+              {/* Option A: Discreet top-right corner fold micro-indicator when the class has private notes while collapsed */}
+              {hasClassNote && !showNotesColumn && (
+                <button
+                  type="button"
+                  data-class-note-indicator="true"
+                  aria-label="Ver nota privada de la clase"
+                  title={`Nota privada de clase: ${(activeBook.notes ?? '').trim().slice(0, 140)}${
+                    (activeBook.notes ?? '').trim().length > 140 ? '…' : ''
+                  } (clic para leer o editar)`}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const th = e.currentTarget.closest('th') as HTMLElement | null;
+                    const rect = (th ?? e.currentTarget).getBoundingClientRect();
+                    setActiveNoteEditor({
+                      target: {
+                        kind: 'CLASS',
+                        bookId: activeBook.id,
+                        bookName: activeBook.name,
+                        initialNotes: activeBook.notes ?? '',
+                      },
+                      rect: {
+                        top: rect.top,
+                        bottom: rect.bottom,
+                        left: rect.left,
+                        right: rect.right,
+                        width: rect.width,
+                      },
+                      fromCollapsedIndicator: true,
+                    });
+                  }}
+                  className="absolute top-0 right-0 w-4 h-4 flex items-start justify-end z-30 group/classind focus:outline-none"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="block w-0 h-0 border-t-[9px] border-t-amber-500/90 group-hover/classind:border-t-amber-600 border-l-[9px] border-l-transparent transition-colors"
+                  />
+                </button>
+              )}
               <div
                 className="flex flex-col justify-between min-w-0"
                 style={{
@@ -3679,6 +3782,57 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     </div>
                   </div>
                   <div className="flex items-center gap-0.5 shrink-0">
+                    <button
+                      type="button"
+                      data-notes-column-toggle="true"
+                      aria-pressed={showNotesColumn}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleNotesColumn();
+                      }}
+                      title={
+                        showNotesColumn
+                          ? 'Ocultar columna de notas privadas'
+                          : hasAnyPrivateNotes
+                            ? `Mostrar notas privadas (${
+                                [
+                                  hasClassNote ? 'nota de clase' : '',
+                                  studentsWithNotesCount > 0
+                                    ? `${studentsWithNotesCount} ${
+                                        studentsWithNotesCount === 1 ? 'alumno' : 'alumnos'
+                                      }`
+                                    : '',
+                                ]
+                                  .filter(Boolean)
+                                  .join(' · ')
+                              })`
+                            : 'Mostrar columna de notas privadas (clase y alumnos)'
+                      }
+                      aria-label={
+                        showNotesColumn
+                          ? 'Ocultar columna de notas privadas'
+                          : 'Mostrar columna de notas privadas'
+                      }
+                      className={`relative p-1 rounded-lg border flex items-center justify-center shadow-2xs shrink-0 transition-colors ${
+                        showNotesColumn
+                          ? 'bg-amber-100 border-amber-400 text-amber-800 hover:bg-amber-200/80'
+                          : hasAnyPrivateNotes
+                            ? 'bg-amber-50/90 border-amber-300 text-amber-700 hover:border-amber-400 hover:bg-amber-100/80'
+                            : 'bg-white/90 border-slate-300 hover:border-amber-400 hover:text-amber-700 text-slate-600'
+                      }`}
+                    >
+                      {showNotesColumn ? (
+                        <EyeOff style={iconStyle} />
+                      ) : (
+                        <StickyNote style={iconStyle} />
+                      )}
+                      {!showNotesColumn && hasAnyPrivateNotes && (
+                        <span
+                          aria-hidden="true"
+                          className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-500 ring-1 ring-white"
+                        />
+                      )}
+                    </button>
                     {onOpenGroupsManager && (
                       <button
                         type="button"
@@ -4002,6 +4156,127 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 />
               )}
             </th>
+
+            {/* Toggleable Personal Notes Column Header (Class-level private notes) */}
+            {showNotesColumn && (
+              <th
+                rowSpan={totalHeaderRows}
+                data-class-notes-header="true"
+                style={{
+                  width: notesColW,
+                  backgroundColor: '#FFFBEB',
+                }}
+                className="border-r-2 border-b border-amber-200/90 px-2.5 py-1.5 text-left align-top font-normal relative"
+              >
+                <div
+                  className="flex flex-col gap-1 min-w-0 h-full"
+                  style={{
+                    minHeight: Math.max(
+                      60,
+                      canopyH + headerH + (showLomloeBar ? lomloeRowH : 0) - 10
+                    ),
+                  }}
+                >
+                  <div className="flex items-center justify-between gap-1.5 shrink-0">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <StickyNote
+                        style={smallIconStyle}
+                        className="text-amber-600 shrink-0"
+                        aria-hidden="true"
+                      />
+                      <span className="text-[0.82em] font-bold uppercase tracking-wide text-amber-900/90 truncate">
+                        Notas privadas · Clase
+                      </span>
+                      {hasClassNote && (
+                        <span
+                          aria-hidden="true"
+                          title="Esta clase tiene anotaciones privadas"
+                          className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0"
+                        />
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleNotesColumn();
+                      }}
+                      title="Ocultar columna de notas privadas"
+                      aria-label="Ocultar columna de notas privadas"
+                      className="p-0.5 rounded-md text-amber-700/75 hover:text-amber-950 hover:bg-amber-200/60 transition-colors shrink-0"
+                    >
+                      <EyeOff style={smallIconStyle} />
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    data-class-notes-trigger="true"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setActiveNoteEditor({
+                        target: {
+                          kind: 'CLASS',
+                          bookId: activeBook.id,
+                          bookName: activeBook.name,
+                          initialNotes: activeBook.notes ?? '',
+                        },
+                        rect: {
+                          top: rect.top,
+                          bottom: rect.bottom,
+                          left: rect.left,
+                          right: rect.right,
+                          width: rect.width,
+                        },
+                      });
+                    }}
+                    title="Clic para leer o editar las notas privadas de esta clase"
+                    className={`flex-1 w-full text-left rounded-xl border px-2 py-1.5 transition-colors overflow-y-auto focus:outline-none focus:ring-2 focus:ring-amber-400/50 ${
+                      hasClassNote
+                        ? 'bg-white/95 border-amber-200/90 hover:border-amber-400 text-slate-800 shadow-2xs'
+                        : 'bg-white/60 border-dashed border-amber-300/80 hover:bg-white hover:border-amber-400 text-amber-900/45'
+                    }`}
+                    style={{
+                      maxHeight: Math.max(
+                        48,
+                        canopyH + headerH + (showLomloeBar ? lomloeRowH : 0) - 34
+                      ),
+                    }}
+                  >
+                    {hasClassNote ? (
+                      <div className="text-[0.86em] leading-snug whitespace-pre-wrap break-words font-medium">
+                        {activeBook.notes}
+                      </div>
+                    ) : (
+                      <div className="text-[0.82em] italic leading-snug">
+                        Clic para añadir una nota privada sobre esta clase...
+                      </div>
+                    )}
+                  </button>
+                </div>
+
+                {/* Vertical resize handle for the personal notes column */}
+                <div
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Redimensionar columna de notas privadas"
+                  title="Arrastra para ajustar el ancho de notas · Doble clic: restablecer (300 px)"
+                  style={device.isTouch ? { touchAction: 'none' } : undefined}
+                  onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    beginAspectChange();
+                    updateSettings({ notesColWidth: 300 });
+                  }}
+                  onPointerDown={startNotesColResize}
+                  className={`absolute top-0 right-0 ${
+                    device.isTouch ? 'w-3.5 bg-amber-400/25' : 'w-1.5'
+                  } h-full cursor-col-resize hover:bg-amber-500/50 transition-colors z-20`}
+                />
+              </th>
+            )}
 
             {/* Row 1 Dynamic Headers: Standalone Cols (rowSpan=2) + Folder Canopies (BOTH open & closed keep Row 1 + Row 2 so header height NEVER changes!) */}
             {row1Headers.map((item) => {
@@ -4414,10 +4689,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           e.preventDefault();
                           const trimmed = newFolderTitle.trim();
                           if (!trimmed) return;
-                          addFolder(
-                            trimmed,
-                            PASTEL_SWATCHES[(activeTab.folders.length + 2) % PASTEL_SWATCHES.length].hex
-                          );
+                          addFolder(trimmed, '#FFFFFF');
                           setNewFolderTitle('');
                           setNewFolderMode(false);
                           setShowAddColMenu(false);
@@ -5026,7 +5298,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           {totalActiveStudents === 0 || (visibleStudents.length === 0 && !activeBook.groupByGroups) ? (
             <tr>
               <td
-                colSpan={displaySlots.length + 2}
+                colSpan={displaySlots.length + 2 + extraColCount}
                 className="py-12 text-center text-sm text-slate-500 bg-white"
               >
                 No hay alumnos visibles. Pulsa <strong>+</strong> en la esquina superior izquierda para añadir alumnado.
@@ -5240,6 +5512,18 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       </div>
                     </th>
 
+                    {showNotesColumn && (
+                      <td
+                        style={{
+                          backgroundColor: blendWithWhite(bucket.color, 0.56),
+                          height: groupRowH,
+                        }}
+                        className="border-r-2 border-b border-t border-amber-200/80 px-2 py-0.5 text-[0.78em] font-semibold text-amber-900/65 truncate"
+                      >
+                        Notas · {bucket.name}
+                      </td>
+                    )}
+
                     {/* iDoceo-style per-column Group Action Cells above each group */}
                     {displaySlots.map((slot) => {
                       const isFolder = slot.kind === 'FOLDER_SUMMARY';
@@ -5419,6 +5703,30 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     ? `${student.firstName} ${student.lastName}`
                     : `${student.lastName}, ${student.firstName}`;
                 const stGroup = getStudentActiveGroup(student, activeBook);
+                const resolvedTags = resolveStudentTags(student.tags);
+                const studentNoteText = (student.notes ?? '').trim();
+                const hasStudentNote = studentNoteText.length > 0;
+                const openStudentNoteEditor = (
+                  triggerEl: HTMLElement,
+                  fromCollapsedIndicator: boolean
+                ) => {
+                  const rect = triggerEl.getBoundingClientRect();
+                  setActiveNoteEditor({
+                    target: {
+                      kind: 'STUDENT',
+                      student,
+                      displayName,
+                    },
+                    rect: {
+                      top: rect.top,
+                      bottom: rect.bottom,
+                      left: rect.left,
+                      right: rect.right,
+                      width: rect.width,
+                    },
+                    fromCollapsedIndicator,
+                  });
+                };
 
                 rows.push(
                 <tr key={student.id} data-student-row={student.id} style={{ height: rowH }}>
@@ -5501,6 +5809,32 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       studentFill ? 'student-row-colored' : ''
                     } ${isStudentRowSelected ? 'student-row-selected' : ''}`}
                   >
+                    {/* Option A: Ultra-discreet top-right corner fold micro-indicator when student has personal notes */}
+                    {hasStudentNote && (
+                      <button
+                        type="button"
+                        data-student-note-indicator={student.id}
+                        aria-label={`Ver nota personal de ${displayName}`}
+                        title={`Nota personal: ${studentNoteText.slice(0, 140)}${
+                          studentNoteText.length > 140 ? '…' : ''
+                        } (clic para ver o editar)`}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onPointerUp={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const th = e.currentTarget.closest('th') as HTMLElement | null;
+                          openStudentNoteEditor(th ?? e.currentTarget, !showNotesColumn);
+                        }}
+                        className="absolute top-0 right-0 w-4 h-4 flex items-start justify-end z-10 group/noteind focus:outline-none"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className="block w-0 h-0 border-t-[8px] border-t-amber-400/90 group-hover/noteind:border-t-amber-500 border-l-[8px] border-l-transparent transition-colors"
+                        />
+                      </button>
+                    )}
+
                     <div
                       role="button"
                       tabIndex={0}
@@ -5514,7 +5848,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         }
                       }}
                       style={{ height: Math.max(16, rowH - 8), maxHeight: Math.max(16, rowH - 8) }}
-                      className="w-full flex items-center justify-between gap-2 text-left hover:text-blue-700 transition-colors overflow-hidden focus:outline-none"
+                      className="w-full flex items-center justify-between gap-1.5 text-left hover:text-blue-700 transition-colors overflow-hidden focus:outline-none"
                     >
                       <div className="min-w-0 flex-1">
                         <div
@@ -5525,6 +5859,58 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           {displayName}
                         </div>
                       </div>
+
+                      {/* Discreet Student Characteristic Tag Icons right inside the student row */}
+                      {resolvedTags.length > 0 && (
+                        <div
+                          className="flex items-center gap-0.5 shrink-0"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onPointerUp={(e) => e.stopPropagation()}
+                          onDoubleClick={(e) => e.stopPropagation()}
+                        >
+                          {resolvedTags.slice(0, 3).map((tag) => (
+                            <button
+                              key={tag.rawKey}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const th = e.currentTarget.closest('th') as HTMLElement | null;
+                                openStudentNoteEditor(th ?? e.currentTarget, !showNotesColumn);
+                              }}
+                              title={`${tag.label}: ${tag.description}${
+                                hasStudentNote ? `\nNota: ${studentNoteText.slice(0, 120)}` : ''
+                              }`}
+                              aria-label={`${tag.label} — ${displayName}`}
+                              style={{
+                                backgroundColor: tag.bgColor,
+                                color: tag.color,
+                                borderColor: tag.borderColor,
+                              }}
+                              className="w-[18px] h-[18px] rounded-[5px] border flex items-center justify-center shrink-0 hover:scale-110 transition-transform"
+                            >
+                              <StudentTagIcon name={tag.iconName} className="w-[11px] h-[11px]" />
+                            </button>
+                          ))}
+                          {resolvedTags.length > 3 && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const th = e.currentTarget.closest('th') as HTMLElement | null;
+                                openStudentNoteEditor(th ?? e.currentTarget, !showNotesColumn);
+                              }}
+                              title={resolvedTags
+                                .slice(3)
+                                .map((t) => t.label)
+                                .join(' · ')}
+                              className="px-1 h-[18px] rounded-[5px] bg-slate-100 border border-slate-300 text-[9.5px] font-bold text-slate-600 flex items-center justify-center shrink-0"
+                            >
+                              +{resolvedTags.length - 3}
+                            </button>
+                          )}
+                        </div>
+                      )}
+
                       <span
                         className={`text-[0.83em] tabular-nums shrink-0 ${
                           studentFill ? 'opacity-65' : 'text-slate-400'
@@ -5534,6 +5920,75 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       </span>
                     </div>
                   </th>
+
+                  {/* Option D: Toggleable Wide Personal Notes Column Cell (Tags + Personal Notes together) */}
+                  {showNotesColumn && (
+                    <td
+                      data-student-notes-cell={student.id}
+                      style={{
+                        height: rowH,
+                        backgroundColor: studentFill
+                          ? rowCellBg
+                          : rIdx % 2 === 0
+                            ? '#FFFDF7'
+                            : '#FEFCE8',
+                        ...(studentFill
+                          ? ({ '--student-row-bg': rowCellBg } as React.CSSProperties)
+                          : {}),
+                      }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openStudentNoteEditor(e.currentTarget, false);
+                      }}
+                      title={
+                        hasStudentNote || resolvedTags.length > 0
+                          ? 'Clic para leer o editar las etiquetas y notas privadas del alumno'
+                          : 'Clic para añadir etiquetas o una nota privada sobre este alumno'
+                      }
+                      className={`border-r-2 border-b border-amber-200/80 px-2 py-1 text-left align-middle relative cursor-pointer hover:bg-amber-50/90 transition-colors overflow-hidden group/notecell ${
+                        studentFill ? 'student-row-colored' : ''
+                      }`}
+                    >
+                      <div
+                        style={{ maxHeight: Math.max(20, rowH - 6) }}
+                        className="w-full h-full flex flex-col justify-center gap-0.5 overflow-hidden"
+                      >
+                        {resolvedTags.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1 min-w-0">
+                            {resolvedTags.map((tag) => (
+                              <span
+                                key={tag.rawKey}
+                                title={`${tag.label}: ${tag.description}`}
+                                style={{
+                                  backgroundColor: tag.bgColor,
+                                  color: tag.color,
+                                  borderColor: tag.borderColor,
+                                }}
+                                className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded-md border text-[0.74em] font-bold leading-4 shrink-0"
+                              >
+                                <StudentTagIcon name={tag.iconName} className="w-2.5 h-2.5 shrink-0" />
+                                <span>{tag.shortLabel}</span>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {hasStudentNote ? (
+                          <div
+                            className={`text-[0.86em] leading-snug whitespace-pre-wrap break-words ${
+                              resolvedTags.length > 0 ? 'line-clamp-1' : 'line-clamp-2'
+                            } ${studentFill ? 'text-current opacity-90' : 'text-slate-700'}`}
+                          >
+                            {studentNoteText}
+                          </div>
+                        ) : resolvedTags.length === 0 ? (
+                          <div className="text-[0.8em] italic text-amber-800/40 opacity-0 group-hover/notecell:opacity-100 touch-reveal transition-opacity truncate">
+                            + Nota privada o etiqueta...
+                          </div>
+                        ) : null}
+                      </div>
+                    </td>
+                  )}
 
                   {/* Data Cells & Continuous iDoceo Folder Summary Columns (individual cell selection!) */}
                   {displaySlots.map((slot) => {
@@ -6494,6 +6949,13 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         </div>
                       </th>
 
+                      {showNotesColumn && (
+                        <td
+                          style={{ height: summaryRowH }}
+                          className="border-r-2 border-b border-amber-200/70 bg-amber-50/30"
+                        />
+                      )}
+
                       {displaySlots.map((slot) => {
                         const isFolder = slot.kind === 'FOLDER_SUMMARY';
                         const isCritSlot = slot.kind === 'RUBRIC_CRITERION';
@@ -6654,7 +7116,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         className="sticky left-0 z-20 bg-slate-100/90 border-r-2 border-b border-slate-200/80"
                       />
                       <td
-                        colSpan={displaySlots.length + 1}
+                        colSpan={displaySlots.length + 1 + extraColCount}
                         style={{ height: groupSpacerH }}
                         className="border-b border-slate-200/80 bg-slate-50/70"
                       />
@@ -6798,6 +7260,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     className="absolute left-0 bottom-0 w-full h-1.5 cursor-row-resize hover:bg-indigo-500/50 transition-colors z-20"
                   />
                 </th>
+
+                {showNotesColumn && (
+                  <td
+                    style={{ height: sumRowH }}
+                    className={`border-r-2 border-b border-amber-200/70 bg-amber-50/35 ${
+                      rowIdx === 0 ? 'border-t-2 border-t-slate-300' : ''
+                    }`}
+                  />
+                )}
 
                 {displaySlots.map((slot) => {
                   const isFolder = slot.kind === 'FOLDER_SUMMARY';
@@ -7021,7 +7492,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               </div>
             </th>
             <td
-              colSpan={displaySlots.length + 1}
+              colSpan={displaySlots.length + 1 + extraColCount}
               className={`border-b border-slate-300 bg-slate-100/50 px-3 py-1 text-[10.5px] text-slate-500 ${
                 summaryRows.length === 0 ? 'border-t-2 border-t-slate-300' : ''
               }`}
@@ -7033,7 +7504,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           )}
           <tr aria-hidden="true" data-grid-bottom-overscroll="true">
             <td
-              colSpan={displaySlots.length + 2}
+              colSpan={displaySlots.length + 2 + extraColCount}
               className="p-0 border-0 bg-transparent pointer-events-none"
             >
               <div style={{ height: '82dvh' }} />
@@ -10059,6 +10530,21 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           </div>,
           document.body
         )}
+
+      <PersonalNotePopover
+        editor={activeNoteEditor}
+        showNotesColumn={showNotesColumn}
+        onSaveClassNote={(bookId, nextNote) => {
+          updateBook(bookId, { notes: nextNote || undefined });
+        }}
+        onSaveStudent={(studentId, patch) => {
+          updateStudent(studentId, patch);
+        }}
+        onExpandNotesColumn={() => {
+          if (!showNotesColumn) toggleNotesColumn();
+        }}
+        onClose={() => setActiveNoteEditor(null)}
+      />
 
       <BatchAdjustGradeModal
         targetState={batchAdjustState}

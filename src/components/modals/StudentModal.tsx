@@ -1,10 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { Ban, Check, Palette, Trash2, UserPlus, Users } from 'lucide-react';
+import { Ban, Check, Palette, StickyNote, Tag, Trash2, UserPlus, Users, X } from 'lucide-react';
 import { STUDENT_ROW_SWATCHES } from '../../constants/colors';
+import {
+  STUDENT_TAG_CATALOG,
+  hasCatalogTag,
+  resolveStudentTags,
+  toggleCatalogTag,
+  type StudentTagId,
+} from '../../constants/studentTags';
 import { useGradebook } from '../../context/GradebookContext';
 import { formatGrade, getEffectiveBookGroups, getStudentActiveGroup } from '../../engine/gradeMath';
 import { cellKey, type StudentEntity } from '../../types/gradebook';
 import { Modal } from '../common/Modal';
+import { StudentTagIcon } from '../common/StudentTagIcon';
 
 interface StudentModalProps {
   open: boolean;
@@ -24,6 +32,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
   const [lastName, setLastName] = useState('');
   const [group, setGroup] = useState('');
   const [color, setColor] = useState<string>('');
+  const [tags, setTags] = useState<string[]>([]);
   const [notes, setNotes] = useState('');
 
   useEffect(() => {
@@ -35,15 +44,23 @@ export const StudentModal: React.FC<StudentModalProps> = ({
         activeBook ? (getStudentActiveGroup(editingStudent, activeBook) ?? '') : (editingStudent.group ?? '')
       );
       setColor(editingStudent.color ?? '');
+      setTags(editingStudent.tags ?? []);
       setNotes(editingStudent.notes ?? '');
     } else {
       setFirstName('');
       setLastName('');
       setGroup('');
       setColor('');
+      setTags([]);
       setNotes('');
     }
   }, [open, editingStudent, activeBook]);
+
+  const handleToggleTag = (tagId: StudentTagId) => {
+    setTags((prev) => toggleCatalogTag(prev, tagId));
+  };
+
+  const customTags = resolveStudentTags(tags).filter((t) => t.isCustom);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,6 +71,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
         lastName: lastName.trim(),
         group: group.trim() || undefined,
         color: color.trim() || undefined,
+        tags,
         notes: notes.trim() || undefined,
       });
     } else {
@@ -62,7 +80,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
         lastName: lastName.trim(),
         group: group.trim() || undefined,
         color: color.trim() || undefined,
-        tags: [],
+        tags,
         notes: notes.trim() || undefined,
       });
     }
@@ -233,15 +251,107 @@ export const StudentModal: React.FC<StudentModalProps> = ({
           )}
         </div>
 
-        <div>
-          <label className="block font-semibold text-slate-700 mb-1">Anotaciones del profesor</label>
-          <textarea
-            rows={2}
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Observaciones generales de seguimiento..."
-            className="w-full border border-slate-300 rounded-xl px-3 py-2 bg-white"
-          />
+        {/* Curated Student Attention Tags + Personal Notes together */}
+        <div className="p-3 rounded-2xl border border-amber-200/80 bg-amber-50/35 space-y-3">
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="font-semibold text-slate-800 flex items-center gap-1.5">
+                <Tag className="w-3.5 h-3.5 text-amber-600" aria-hidden="true" />
+                <span>Etiquetas de seguimiento / atención</span>
+              </label>
+              {tags.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setTags([])}
+                  className="text-[11px] font-semibold text-slate-500 hover:text-rose-600 transition-colors"
+                >
+                  Limpiar etiquetas
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              {STUDENT_TAG_CATALOG.map((tag) => {
+                const isSelected = hasCatalogTag(tags, tag.id);
+                return (
+                  <button
+                    key={tag.id}
+                    type="button"
+                    aria-pressed={isSelected}
+                    title={tag.description}
+                    onClick={() => handleToggleTag(tag.id)}
+                    style={
+                      isSelected
+                        ? {
+                            backgroundColor: tag.bgColor,
+                            borderColor: tag.color,
+                            color: tag.color,
+                          }
+                        : undefined
+                    }
+                    className={`flex items-center gap-2 px-2.5 py-1.5 rounded-xl border text-left transition-all ${
+                      isSelected
+                        ? 'font-bold shadow-2xs ring-1 ring-black/5'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 font-medium'
+                    }`}
+                  >
+                    <span
+                      style={{
+                        backgroundColor: tag.bgColor,
+                        color: tag.color,
+                        borderColor: tag.borderColor,
+                      }}
+                      className="w-6 h-6 rounded-lg border flex items-center justify-center shrink-0"
+                    >
+                      <StudentTagIcon name={tag.iconName} className="w-3.5 h-3.5" />
+                    </span>
+                    <span className="truncate flex-1 text-[11.5px] leading-tight">
+                      {tag.label}
+                    </span>
+                    {isSelected && <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />}
+                  </button>
+                );
+              })}
+            </div>
+            {customTags.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                {customTags.map((ct) => (
+                  <span
+                    key={ct.rawKey}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-300"
+                  >
+                    <StudentTagIcon name="Tag" className="w-3 h-3 text-slate-500" />
+                    <span>{ct.label}</span>
+                    <button
+                      type="button"
+                      onClick={() => setTags((prev) => prev.filter((x) => x !== ct.rawKey))}
+                      aria-label={`Quitar etiqueta ${ct.label}`}
+                      className="hover:text-rose-600 ml-0.5"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label
+              htmlFor="student-personal-notes"
+              className="font-semibold text-slate-800 mb-1 flex items-center gap-1.5"
+            >
+              <StickyNote className="w-3.5 h-3.5 text-amber-600" aria-hidden="true" />
+              <span>Notas personales del profesor</span>
+            </label>
+            <textarea
+              id="student-personal-notes"
+              rows={3}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Anotaciones privadas sobre adaptaciones, situación personal, conducta o seguimiento..."
+              className="note-autosize-textarea w-full border border-amber-200 focus:border-amber-400 focus:ring-2 focus:ring-amber-200/70 focus:outline-none rounded-xl px-3 py-2 bg-white text-slate-800"
+            />
+          </div>
         </div>
 
         {editingStudent && activeBook && (

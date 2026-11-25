@@ -270,6 +270,8 @@ export interface ClassBook {
   lomloeCurriculumId?: string | null;
   /** Mostrar la fila de criterios y competencias LOMLOE bajo las cabeceras en el cuaderno */
   showLomloeRow?: boolean;
+  /** Notas personales privadas del profesor sobre toda la clase */
+  notes?: string;
   isTemplate?: boolean;
   tabs: TabEntity[];
   students: StudentEntity[];
@@ -280,6 +282,10 @@ export interface ViewSettings {
   rowHeight: number;
   headerHeight: number;
   studentColWidth: number;
+  /** Mostrar la columna desplegable de notas personales privadas (clase y alumnos) */
+  showNotesColumn?: boolean;
+  /** Anchura en px de la columna de notas personales cuando está desplegada (por defecto 300) */
+  notesColWidth?: number;
   nameFormat: 'LAST_FIRST' | 'FIRST_LAST';
   showStatsRow: boolean;
   sidebarVisible: boolean;

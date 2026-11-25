@@ -175,6 +175,7 @@ function hydrateBook(
         : inferReligionCurriculumId(book.name, book.subject) ?? undefined,
     showLomloeRow:
       typeof book.showLomloeRow === 'boolean' ? book.showLomloeRow : undefined,
+    notes: typeof book.notes === 'string' && book.notes.length > 0 ? book.notes : undefined,
     students: toArray<ClassBook['students'][number]>(book.students).map((s, idx) => ({
       ...s,
       tags: toArray<string>(s.tags),
@@ -325,6 +326,9 @@ export function hydrateWorkspace(raw: Partial<GradebookWorkspace>): GradebookWor
       rowHeight: raw.settings?.rowHeight ?? 48,
       headerHeight: raw.settings?.headerHeight ?? 84,
       studentColWidth: raw.settings?.studentColWidth ?? 220,
+      showNotesColumn: Boolean(raw.settings?.showNotesColumn),
+      notesColWidth:
+        typeof raw.settings?.notesColWidth === 'number' ? raw.settings.notesColWidth : 300,
       nameFormat: raw.settings?.nameFormat ?? 'LAST_FIRST',
       showStatsRow: raw.settings?.showStatsRow ?? true,
       sidebarVisible: raw.settings?.sidebarVisible ?? true,
