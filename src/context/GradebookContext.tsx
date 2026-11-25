@@ -49,6 +49,7 @@ import {
   getEffectiveBookGroups,
   makeId,
   normalizeRubricLevels,
+  pruneOrphanAverageSources,
   recalculateBook,
   restoreFolderCellsCalculation,
   roundTo,
@@ -1495,7 +1496,10 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
             }));
           }
 
-          return recalculateBook({ ...book, tabs: nextTabs, cells: nextCells }, prev.rubrics);
+          return recalculateBook(
+            pruneOrphanAverageSources({ ...book, tabs: nextTabs, cells: nextCells }).book,
+            prev.rubrics
+          );
         };
 
         return {
@@ -1623,7 +1627,10 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
             }));
           }
 
-          return recalculateBook({ ...book, tabs: nextTabs, cells: nextCells }, prev.rubrics);
+          return recalculateBook(
+            pruneOrphanAverageSources({ ...book, tabs: nextTabs, cells: nextCells }).book,
+            prev.rubrics
+          );
         };
 
         return {
@@ -1703,7 +1710,10 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
             );
           });
 
-          return recalculateBook({ ...book, tabs: nextTabs, cells: nextCells }, prev.rubrics);
+          return recalculateBook(
+            pruneOrphanAverageSources({ ...book, tabs: nextTabs, cells: nextCells }).book,
+            prev.rubrics
+          );
         };
 
         return {
@@ -1744,7 +1754,10 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
               const cloned = cloneTabEntity(srcTab, oldTab.orderIndex);
               replacementNewTabId = cloned.id;
               const nextTabs = book.tabs.map((t) => (t.id === replaceId ? cloned : t));
-              return recalculateBook({ ...book, tabs: nextTabs, cells: nextCells }, prev.rubrics);
+              return recalculateBook(
+            pruneOrphanAverageSources({ ...book, tabs: nextTabs, cells: nextCells }).book,
+            prev.rubrics
+          );
             }
           }
 
@@ -1854,12 +1867,13 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
 
   const deleteTab = useCallback<GradebookContextValue['deleteTab']>(
     (tabId) => {
-      mutateActiveBook((book) => {
+      mutateActiveBook((book, ws) => {
         if (book.tabs.length <= 1) return book;
         const remaining = book.tabs
           .filter((t) => t.id !== tabId)
           .map((t, idx) => ({ ...t, orderIndex: idx }));
-        return { ...book, tabs: remaining };
+        const { book: pruned } = pruneOrphanAverageSources({ ...book, tabs: remaining });
+        return recalculateBook(pruned, ws.rubrics);
       });
     },
     [mutateActiveBook]
@@ -1964,7 +1978,7 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
           }
         }
         return recalculateBook(
-          {
+          pruneOrphanAverageSources({
             ...book,
             cells: nextCells,
             tabs: book.tabs.map((t) => {
@@ -1986,7 +2000,7 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
                 nextOrder
               );
             }),
-          },
+          }).book,
           ws.rubrics
         );
       });
@@ -2028,7 +2042,7 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
             return syncTabOrderIndices({ ...t, columns: [...t.columns, newCol] }, nextOrder);
           }),
         };
-        return recalculateBook(nextBook, ws.rubrics);
+        return recalculateBook(pruneOrphanAverageSources(nextBook).book, ws.rubrics);
       });
       return newCol;
     },
@@ -2063,7 +2077,7 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
             return syncTabOrderIndices({ ...t, columns: updatedCols }, nextOrder);
           }),
         };
-        return recalculateBook(nextBook, ws.rubrics);
+        return recalculateBook(pruneOrphanAverageSources(nextBook).book, ws.rubrics);
       });
     },
     [mutateActiveBook]
@@ -2088,7 +2102,7 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
             );
           }),
         };
-        return recalculateBook(nextBook, ws.rubrics);
+        return recalculateBook(pruneOrphanAverageSources(nextBook).book, ws.rubrics);
       });
     },
     [mutateActiveBook]
@@ -2125,7 +2139,7 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
             return syncTabOrderIndices({ ...t, columns: [...t.columns, copy] }, nextOrder);
           }),
         };
-        return recalculateBook(nextBook, ws.rubrics);
+        return recalculateBook(pruneOrphanAverageSources(nextBook).book, ws.rubrics);
       });
     },
     [mutateActiveBook]
@@ -2707,7 +2721,7 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
             groupCategories: [updatedCat, ...categories.slice(1)],
           };
         }
-        return recalculateBook(nextBook, ws.rubrics);
+        return recalculateBook(pruneOrphanAverageSources(nextBook).book, ws.rubrics);
       });
       return st;
     },
@@ -2779,7 +2793,7 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
             groupCategories: updatedCategories,
           };
         }
-        return recalculateBook(nextBook, ws.rubrics);
+        return recalculateBook(pruneOrphanAverageSources(nextBook).book, ws.rubrics);
       });
     },
     [activeBook, mutateActiveBook]

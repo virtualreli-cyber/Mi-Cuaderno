@@ -785,6 +785,88 @@ export function migrateRedundantFolderAverageColumns(book: ClassBook): {
 }
 
 /**
+ * Filters an AVERAGE column's source IDs and weights down to unique, existing IDs
+ * in the book (excluding `selfId`), eliminating phantom weights from deleted or copied columns.
+ */
+export function filterValidAverageSources(
+  sourceColumnIds: string[],
+  weights: Record<string, number>,
+  validIds: Set<string>,
+  selfId?: string
+): { sourceColumnIds: string[]; weights: Record<string, number> } {
+  const seen = new Set<string>();
+  const cleanIds: string[] = [];
+  for (const sid of sourceColumnIds) {
+    if (sid !== selfId && validIds.has(sid) && !seen.has(sid)) {
+      seen.add(sid);
+      cleanIds.push(sid);
+    }
+  }
+  const cleanWeights: Record<string, number> = {};
+  for (const sid of cleanIds) {
+    if (weights[sid] !== undefined) {
+      cleanWeights[sid] = weights[sid];
+    }
+  }
+  return { sourceColumnIds: cleanIds, weights: cleanWeights };
+}
+
+/**
+ * Removes nonexistent/deleted or duplicate source IDs (and stale weights) from all AVERAGE
+ * columns in `book` so UI counts, weight sums, and auto-equalize always match real columns/folders.
+ */
+export function pruneOrphanAverageSources(book: ClassBook): {
+  book: ClassBook;
+  prunedCount: number;
+} {
+  const validIds = new Set<string>();
+  for (const tab of book.tabs ?? []) {
+    for (const f of tab.folders ?? []) validIds.add(f.id);
+    for (const c of tab.columns ?? []) validIds.add(c.id);
+  }
+
+  let prunedCount = 0;
+  const nextTabs = (book.tabs ?? []).map((tab) => {
+    let tabChanged = false;
+    const nextColumns = (tab.columns ?? []).map((col) => {
+      if (col.type !== 'AVERAGE' || !col.averageConfig) return col;
+      const prevIds = col.averageConfig.sourceColumnIds ?? [];
+      const prevWeights = col.averageConfig.weights ?? {};
+      const cleaned = filterValidAverageSources(prevIds, prevWeights, validIds, col.id);
+      const idsChanged =
+        cleaned.sourceColumnIds.length !== prevIds.length ||
+        cleaned.sourceColumnIds.some((id, idx) => id !== prevIds[idx]);
+      const weightsChanged =
+        Object.keys(cleaned.weights).length !== Object.keys(prevWeights).length;
+      if (!idsChanged && !weightsChanged) return col;
+      tabChanged = true;
+      prunedCount += Math.max(0, prevIds.length - cleaned.sourceColumnIds.length);
+      return {
+        ...col,
+        averageConfig: {
+          ...col.averageConfig,
+          sourceColumnIds: cleaned.sourceColumnIds,
+          weights: cleaned.weights,
+        },
+      };
+    });
+    return tabChanged ? { ...tab, columns: nextColumns } : tab;
+  });
+
+  if (prunedCount === 0 && nextTabs.every((t, i) => t === book.tabs[i])) {
+    return { book, prunedCount: 0 };
+  }
+
+  return {
+    book: {
+      ...book,
+      tabs: nextTabs,
+    },
+    prunedCount,
+  };
+}
+
+/**
  * Deterministic fingerprint of every child-column grade & folder configuration affecting
  * a student's calculated folder summary. Used to detect upstream changes after a manual override.
  */

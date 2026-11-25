@@ -4,7 +4,11 @@ import {
   DEFAULT_LOMLOE_KEY_COMPETENCES,
   DEFAULT_LOMLOE_RELIGION_CURRICULA,
 } from '../data/lomloeReligion';
-import { migrateRedundantFolderAverageColumns, recalculateBook } from '../engine/gradeMath';
+import {
+  migrateRedundantFolderAverageColumns,
+  pruneOrphanAverageSources,
+  recalculateBook,
+} from '../engine/gradeMath';
 import { getVerifiedLomloeCriteriaForColumn, inferReligionCurriculumId } from '../engine/lomloe';
 import type {
   CellEntity,
@@ -251,7 +255,8 @@ function hydrateBook(
   };
 
   const { book: migrated, removedCount } = migrateRedundantFolderAverageColumns(hydrated);
-  return removedCount > 0 ? recalculateBook(migrated, rubrics) : migrated;
+  const { book: pruned, prunedCount } = pruneOrphanAverageSources(migrated);
+  return removedCount > 0 || prunedCount > 0 ? recalculateBook(pruned, rubrics) : pruned;
 }
 
 export function hydrateWorkspace(raw: Partial<GradebookWorkspace>): GradebookWorkspace | null {

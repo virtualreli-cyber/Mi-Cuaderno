@@ -19,7 +19,10 @@ import { PASTEL_SWATCHES } from '../../constants/colors';
 import { DEFAULT_LOMLOE_KEY_COMPETENCES } from '../../data/lomloeReligion';
 import { useGradebook } from '../../context/GradebookContext';
 import { findCopyConflicts } from '../../engine/copyConflictEngine';
-import { countEmptyGradesInColumns } from '../../engine/gradeMath';
+import {
+  countEmptyGradesInColumns,
+  filterValidAverageSources,
+} from '../../engine/gradeMath';
 import { compareLomloeCodes, resolveBookCurriculum } from '../../engine/lomloe';
 import { getCanonicalItemOrder } from '../../engine/tabLayout';
 import type {
@@ -173,8 +176,21 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
       setDecimals(editingColumn.decimals);
       setPassThreshold(editingColumn.passThreshold);
       setColorMode(editingColumn.colorMode ?? 'NONE');
-      setSelectedSrcIds(editingColumn.averageConfig?.sourceColumnIds ?? []);
-      setWeights(editingColumn.averageConfig?.weights ?? {});
+      const validCandidateIds = new Set<string>();
+      for (const t of activeBook?.tabs ?? []) {
+        for (const f of t.folders) validCandidateIds.add(f.id);
+        for (const c of t.columns) {
+          if (c.id !== editingColumn.id) validCandidateIds.add(c.id);
+        }
+      }
+      const cleanedAvg = filterValidAverageSources(
+        editingColumn.averageConfig?.sourceColumnIds ?? [],
+        editingColumn.averageConfig?.weights ?? {},
+        validCandidateIds,
+        editingColumn.id
+      );
+      setSelectedSrcIds(cleanedAvg.sourceColumnIds);
+      setWeights(cleanedAvg.weights);
       setIgnoreEmpty(editingColumn.averageConfig?.ignoreEmpty ?? true);
       setRubricId(editingColumn.rubricId ?? workspace.rubrics[0]?.id ?? '');
       setRubricShowPercentage(Boolean(editingColumn.rubricShowPercentage));

@@ -20,6 +20,7 @@ import {
   ensureGroupCategories,
   exportStudentList,
   fillColumnsEmptyWithNP,
+  filterValidAverageSources,
   formatCellCopyValue,
   formatCellDisplayGrade,
   getEffectiveBookGroups,
@@ -30,6 +31,7 @@ import {
   parseLiveMixedInput,
   parseMixedInput,
   parseStudentList,
+  pruneOrphanAverageSources,
   recalculateBook,
   resolveCellColors,
   restoreFolderCellsCalculation,
@@ -971,5 +973,47 @@ describe('Weighted Averages, Cross-Tab Chaining, Rubrics & Folders', () => {
     const expectedScore = applyCounterDelta(rubric.maxScore, -1, rubCol);
     expect(recalculated.cells[cellKey(st2.id, rubCol.id)]?.grade).toBe(expectedScore);
     expect(recalculated.cells[cellKey(st2.id, rubCol.id)]?.pendingAdjustment).toBe(-1);
+  });
+
+  it('prunes orphan/deleted or duplicate sourceColumnIds and stale weights from AVERAGE columns', () => {
+    const ws = createSeedWorkspace();
+    const book = structuredClone(ws.templates[0]);
+    const tab = book.tabs[0];
+    const realCols = tab.columns.filter((c) => c.type !== 'AVERAGE');
+    const colIds = realCols.slice(0, 3).map((c) => c.id);
+    expect(colIds).toHaveLength(3);
+
+    const avgCol = tab.columns.find((c) => c.type === 'AVERAGE');
+    expect(avgCol).toBeDefined();
+    avgCol!.averageConfig = {
+      sourceColumnIds: [...colIds, 'deleted-orphan-col-id', colIds[0]],
+      weights: {
+        [colIds[0]]: 50,
+        [colIds[1]]: 30,
+        [colIds[2]]: 20,
+        'deleted-orphan-col-id': 10,
+      },
+      ignoreEmpty: true,
+    };
+
+    const validSet = new Set(tab.columns.map((c) => c.id));
+    const filtered = filterValidAverageSources(
+      avgCol!.averageConfig.sourceColumnIds,
+      avgCol!.averageConfig.weights,
+      validSet,
+      avgCol!.id
+    );
+    expect(filtered.sourceColumnIds).toEqual(colIds);
+    expect(Object.values(filtered.weights).reduce((s, w) => s + w, 0)).toBe(100);
+
+    const { book: prunedBook, prunedCount } = pruneOrphanAverageSources(book);
+    expect(prunedCount).toBe(2);
+    const updatedAvg = prunedBook.tabs[0].columns.find((c) => c.id === avgCol!.id)!;
+    expect(updatedAvg.averageConfig?.sourceColumnIds).toEqual(colIds);
+    expect(updatedAvg.averageConfig?.weights).toEqual({
+      [colIds[0]]: 50,
+      [colIds[1]]: 30,
+      [colIds[2]]: 20,
+    });
   });
 });
