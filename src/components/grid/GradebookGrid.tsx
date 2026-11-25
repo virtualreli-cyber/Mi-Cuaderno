@@ -120,6 +120,7 @@ import {
   type HeaderContextMenuTarget,
 } from './HeaderContextMenu';
 import { StudentTagIcon } from '../common/StudentTagIcon';
+import { InlineNotesTextarea } from './InlineNotesTextarea';
 import {
   PersonalNotePopover,
   type PersonalNoteEditorState,
@@ -2988,19 +2989,19 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     updateSettings({ studentColWidth: fitted });
   };
 
-  // Personal notes column horizontal resize (200px to 540px; double-click resets to 300px)
+  // Personal notes column horizontal resize (180px to 520px; double-click resets to 260px)
   const startNotesColResize = (e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
     justResizedRef.current = true;
     beginAspectChange();
     const startX = e.clientX;
-    const startW = workspace.settings.notesColWidth ?? 300;
+    const startW = workspace.settings.notesColWidth ?? 260;
 
     const onMove = (ev: PointerEvent) => {
       const clamped = Math.max(
-        200,
-        Math.min(540, Math.round(startW + (ev.clientX - startX) / gridZoom))
+        180,
+        Math.min(520, Math.round(startW + (ev.clientX - startX) / gridZoom))
       );
       updateSettings({ notesColWidth: clamped });
     };
@@ -3165,9 +3166,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     : workspace.settings.studentColWidth;
   const studentColW = effectiveStudentBaseW * gridZoom;
   const showNotesColumn = Boolean(workspace.settings.showNotesColumn);
-  const baseNotesColW = workspace.settings.notesColWidth ?? 300;
+  const baseNotesColW = workspace.settings.notesColWidth ?? 260;
   const effectiveNotesBaseW = device.isMobile
-    ? Math.min(baseNotesColW, Math.max(210, Math.round(device.viewportWidth * 0.62)))
+    ? Math.min(baseNotesColW, Math.max(190, Math.round(device.viewportWidth * 0.56)))
     : baseNotesColW;
   const notesColW = showNotesColumn ? effectiveNotesBaseW * gridZoom : 0;
   const extraColCount = showNotesColumn ? 1 : 0;
@@ -3185,7 +3186,11 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       });
     }
   };
-  const rowH = Math.round(workspace.settings.rowHeight * gridZoom);
+  // Automatically expand student rows while the personal notes column is open so multiple lines read comfortably
+  const effectiveRowBaseH = showNotesColumn
+    ? Math.max(workspace.settings.rowHeight, 92)
+    : workspace.settings.rowHeight;
+  const rowH = Math.round(effectiveRowBaseH * gridZoom);
   const headerH = baseHeaderH * gridZoom;
   const canopyH = baseCanopyH * gridZoom;
   const activeCurriculum = resolveBookCurriculum(activeBook, workspace.lomloeCurricula);
@@ -4209,52 +4214,48 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     </button>
                   </div>
 
-                  <button
-                    type="button"
+                  <div
                     data-class-notes-trigger="true"
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      setActiveNoteEditor({
-                        target: {
-                          kind: 'CLASS',
-                          bookId: activeBook.id,
-                          bookName: activeBook.name,
-                          initialNotes: activeBook.notes ?? '',
-                        },
-                        rect: {
-                          top: rect.top,
-                          bottom: rect.bottom,
-                          left: rect.left,
-                          right: rect.right,
-                          width: rect.width,
-                        },
-                      });
-                    }}
-                    title="Clic para leer o editar las notas privadas de esta clase"
-                    className={`flex-1 w-full text-left rounded-xl border px-2 py-1.5 transition-colors overflow-y-auto focus:outline-none focus:ring-2 focus:ring-amber-400/50 ${
+                    className={`flex-1 w-full rounded-xl border transition-colors overflow-hidden ${
                       hasClassNote
-                        ? 'bg-white/95 border-amber-200/90 hover:border-amber-400 text-slate-800 shadow-2xs'
-                        : 'bg-white/60 border-dashed border-amber-300/80 hover:bg-white hover:border-amber-400 text-amber-900/45'
+                        ? 'bg-white/95 border-amber-200/90 hover:border-amber-400 shadow-2xs'
+                        : 'bg-white/65 border-dashed border-amber-300/80 hover:bg-white hover:border-amber-400'
                     }`}
                     style={{
-                      maxHeight: Math.max(
-                        48,
+                      height: Math.max(
+                        52,
                         canopyH + headerH + (showLomloeBar ? lomloeRowH : 0) - 34
                       ),
                     }}
                   >
-                    {hasClassNote ? (
-                      <div className="text-[0.86em] leading-snug whitespace-pre-wrap break-words font-medium">
-                        {activeBook.notes}
-                      </div>
-                    ) : (
-                      <div className="text-[0.82em] italic leading-snug">
-                        Clic para añadir una nota privada sobre esta clase...
-                      </div>
-                    )}
-                  </button>
+                    <InlineNotesTextarea
+                      value={activeBook.notes ?? ''}
+                      ariaLabel={`Notas privadas de la clase ${activeBook.name}`}
+                      placeholder="Nota privada de clase (doble clic para ampliar)..."
+                      onCommit={(next) => {
+                        updateBook(activeBook.id, { notes: next || undefined });
+                      }}
+                      onDoubleClickOpenModal={(currentDraft, anchorEl) => {
+                        const rect = anchorEl.getBoundingClientRect();
+                        setActiveNoteEditor({
+                          target: {
+                            kind: 'CLASS',
+                            bookId: activeBook.id,
+                            bookName: activeBook.name,
+                            initialNotes: currentDraft,
+                          },
+                          rect: {
+                            top: rect.top,
+                            bottom: rect.bottom,
+                            left: rect.left,
+                            right: rect.right,
+                            width: rect.width,
+                          },
+                        });
+                      }}
+                      className="text-[0.86em] font-medium text-slate-800 placeholder:italic placeholder:text-amber-900/45"
+                    />
+                  </div>
                 </div>
 
                 {/* Vertical resize handle for the personal notes column */}
@@ -4262,13 +4263,13 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   role="separator"
                   aria-orientation="vertical"
                   aria-label="Redimensionar columna de notas privadas"
-                  title="Arrastra para ajustar el ancho de notas · Doble clic: restablecer (300 px)"
+                  title="Arrastra para ajustar el ancho de notas · Doble clic: restablecer (260 px)"
                   style={device.isTouch ? { touchAction: 'none' } : undefined}
                   onClick={(e) => e.stopPropagation()}
                   onDoubleClick={(e) => {
                     e.stopPropagation();
                     beginAspectChange();
-                    updateSettings({ notesColWidth: 300 });
+                    updateSettings({ notesColWidth: 260 });
                   }}
                   onPointerDown={startNotesColResize}
                   className={`absolute top-0 right-0 ${
@@ -5708,7 +5709,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 const hasStudentNote = studentNoteText.length > 0;
                 const openStudentNoteEditor = (
                   triggerEl: HTMLElement,
-                  fromCollapsedIndicator: boolean
+                  fromCollapsedIndicator: boolean,
+                  initialNotesOverride?: string
                 ) => {
                   const rect = triggerEl.getBoundingClientRect();
                   setActiveNoteEditor({
@@ -5716,6 +5718,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       kind: 'STUDENT',
                       student,
                       displayName,
+                      initialNotes: initialNotesOverride,
                     },
                     rect: {
                       top: rect.top,
@@ -5921,7 +5924,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     </div>
                   </th>
 
-                  {/* Option D: Toggleable Wide Personal Notes Column Cell (Tags + Personal Notes together) */}
+                  {/* Option D: Toggleable Personal Notes Column Cell (Direct inline editing + icon-only tags inline at same height + double-click opens full modal) */}
                   {showNotesColumn && (
                     <td
                       data-student-notes-cell={student.id}
@@ -5937,55 +5940,66 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           : {}),
                       }}
                       onMouseDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
+                      onClick={(e) => e.stopPropagation()}
+                      onDoubleClick={(e) => {
                         e.stopPropagation();
                         openStudentNoteEditor(e.currentTarget, false);
                       }}
-                      title={
-                        hasStudentNote || resolvedTags.length > 0
-                          ? 'Clic para leer o editar las etiquetas y notas privadas del alumno'
-                          : 'Clic para añadir etiquetas o una nota privada sobre este alumno'
-                      }
-                      className={`border-r-2 border-b border-amber-200/80 px-2 py-1 text-left align-middle relative cursor-pointer hover:bg-amber-50/90 transition-colors overflow-hidden group/notecell ${
+                      title="Clic para escribir directamente · Doble clic para abrir el modal de etiquetas y notas"
+                      className={`border-r-2 border-b border-amber-200/80 px-1.5 py-1 text-left align-top relative hover:bg-amber-50/75 transition-colors overflow-hidden group/notecell ${
                         studentFill ? 'student-row-colored' : ''
                       }`}
                     >
                       <div
-                        style={{ maxHeight: Math.max(20, rowH - 6) }}
-                        className="w-full h-full flex flex-col justify-center gap-0.5 overflow-hidden"
+                        style={{ height: Math.max(24, rowH - 8) }}
+                        className="w-full flex items-start gap-1.5 overflow-hidden"
                       >
+                        {/* Icon-only tags aligned at the exact same top height as the note text (no text labels here) */}
                         {resolvedTags.length > 0 && (
-                          <div className="flex flex-wrap items-center gap-1 min-w-0">
+                          <div
+                            className="flex flex-col flex-wrap gap-1 pt-0.5 shrink-0 max-h-full content-start"
+                            onDoubleClick={(e) => {
+                              e.stopPropagation();
+                              const td = e.currentTarget.closest('td') as HTMLElement | null;
+                              openStudentNoteEditor(td ?? e.currentTarget, false);
+                            }}
+                          >
                             {resolvedTags.map((tag) => (
                               <span
                                 key={tag.rawKey}
-                                title={`${tag.label}: ${tag.description}`}
+                                title={`${tag.label}: ${tag.description} (doble clic para editar etiquetas)`}
+                                aria-label={tag.label}
                                 style={{
                                   backgroundColor: tag.bgColor,
                                   color: tag.color,
                                   borderColor: tag.borderColor,
                                 }}
-                                className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded-md border text-[0.74em] font-bold leading-4 shrink-0"
+                                className="w-[20px] h-[20px] rounded-[6px] border flex items-center justify-center shrink-0 cursor-pointer"
                               >
-                                <StudentTagIcon name={tag.iconName} className="w-2.5 h-2.5 shrink-0" />
-                                <span>{tag.shortLabel}</span>
+                                <StudentTagIcon name={tag.iconName} className="w-3 h-3 shrink-0" />
                               </span>
                             ))}
                           </div>
                         )}
-                        {hasStudentNote ? (
-                          <div
-                            className={`text-[0.86em] leading-snug whitespace-pre-wrap break-words ${
-                              resolvedTags.length > 0 ? 'line-clamp-1' : 'line-clamp-2'
-                            } ${studentFill ? 'text-current opacity-90' : 'text-slate-700'}`}
-                          >
-                            {studentNoteText}
-                          </div>
-                        ) : resolvedTags.length === 0 ? (
-                          <div className="text-[0.8em] italic text-amber-800/40 opacity-0 group-hover/notecell:opacity-100 touch-reveal transition-opacity truncate">
-                            + Nota privada o etiqueta...
-                          </div>
-                        ) : null}
+
+                        <div className="flex-1 min-w-0 h-full">
+                          <InlineNotesTextarea
+                            value={student.notes ?? ''}
+                            ariaLabel={`Nota privada de ${displayName}`}
+                            placeholder="Escribir nota... (doble clic: etiquetas)"
+                            onCommit={(next) => {
+                              updateStudent(student.id, { notes: next || undefined });
+                            }}
+                            onDoubleClickOpenModal={(currentDraft, anchorEl) => {
+                              openStudentNoteEditor(anchorEl, false, currentDraft);
+                            }}
+                            className={`text-[0.86em] ${
+                              studentFill
+                                ? 'text-current placeholder:text-current/45'
+                                : 'text-slate-800 placeholder:text-amber-800/35'
+                            } placeholder:italic placeholder:text-[0.9em]`}
+                          />
+                        </div>
                       </div>
                     </td>
                   )}

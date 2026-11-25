@@ -141,12 +141,56 @@ function hydrateCells(rawCells: Record<string, CellEntity> | undefined): Record<
   return out;
 }
 
+function formatLegacyTutorNote(rawNote: string): string | null {
+  const m = rawNote.trim().match(/^Tutor\/a:\s*(.+)$/i);
+  if (!m) return null;
+  const body = m[1].trim();
+  if (!body) return null;
+  const commaIdx = body.indexOf(',');
+  if (commaIdx > 0) {
+    const lastNames = body.slice(0, commaIdx).trim();
+    const firstNames = body.slice(commaIdx + 1).trim();
+    if (firstNames && lastNames) {
+      return `Tutor: ${firstNames} ${lastNames}`;
+    }
+  }
+  return `Tutor: ${body}`;
+}
+
 function hydrateBook(
   book: ClassBook,
   rubrics: GradebookWorkspace['rubrics'],
   isTemplate = false,
   backfillVerifiedLomloe = false
 ): ClassBook {
+  const schoolLow = (book.school ?? '').trim().toLowerCase();
+  let migratedTutorNote: string | undefined;
+  const hydratedStudents = toArray<ClassBook['students'][number]>(book.students).map((s, idx) => {
+    const rawTags = toArray<string>(s.tags);
+    const cleanedTags = rawTags.filter((t) => {
+      const low = t.trim().toLowerCase();
+      return Boolean(low) && low !== schoolLow && low !== 'ribarroja' && low !== 'manises';
+    });
+    let cleanedNotes = typeof s.notes === 'string' && s.notes.trim() ? s.notes : undefined;
+    if (cleanedNotes) {
+      const extracted = formatLegacyTutorNote(cleanedNotes);
+      if (extracted) {
+        if (!migratedTutorNote) migratedTutorNote = extracted;
+        cleanedNotes = undefined;
+      }
+    }
+    return {
+      ...s,
+      tags: cleanedTags,
+      notes: cleanedNotes,
+      orderIndex: typeof s.orderIndex === 'number' ? s.orderIndex : idx,
+      isHidden: Boolean(s.isHidden),
+    };
+  });
+
+  const existingBookNotes =
+    typeof book.notes === 'string' && book.notes.trim().length > 0 ? book.notes : undefined;
+
   const hydrated: ClassBook = {
     ...book,
     isTemplate: isTemplate || Boolean(book.isTemplate),
@@ -175,13 +219,8 @@ function hydrateBook(
         : inferReligionCurriculumId(book.name, book.subject) ?? undefined,
     showLomloeRow:
       typeof book.showLomloeRow === 'boolean' ? book.showLomloeRow : undefined,
-    notes: typeof book.notes === 'string' && book.notes.length > 0 ? book.notes : undefined,
-    students: toArray<ClassBook['students'][number]>(book.students).map((s, idx) => ({
-      ...s,
-      tags: toArray<string>(s.tags),
-      orderIndex: typeof s.orderIndex === 'number' ? s.orderIndex : idx,
-      isHidden: Boolean(s.isHidden),
-    })),
+    notes: existingBookNotes ?? migratedTutorNote,
+    students: hydratedStudents,
     tabs: toArray<ClassBook['tabs'][number]>(book.tabs).map((t, tIdx) => ({
       ...t,
       orderIndex: typeof t.orderIndex === 'number' ? t.orderIndex : tIdx,
@@ -328,7 +367,7 @@ export function hydrateWorkspace(raw: Partial<GradebookWorkspace>): GradebookWor
       studentColWidth: raw.settings?.studentColWidth ?? 220,
       showNotesColumn: Boolean(raw.settings?.showNotesColumn),
       notesColWidth:
-        typeof raw.settings?.notesColWidth === 'number' ? raw.settings.notesColWidth : 300,
+        typeof raw.settings?.notesColWidth === 'number' ? raw.settings.notesColWidth : 260,
       nameFormat: raw.settings?.nameFormat ?? 'LAST_FIRST',
       showStatsRow: raw.settings?.showStatsRow ?? true,
       sidebarVisible: raw.settings?.sidebarVisible ?? true,

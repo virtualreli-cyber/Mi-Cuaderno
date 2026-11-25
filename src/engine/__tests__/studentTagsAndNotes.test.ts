@@ -56,7 +56,7 @@ describe('studentTags catalog & resolution', () => {
 });
 
 describe('ClassBook.notes & personal notes column settings persistence/sync', () => {
-  it('hydrates ClassBook.notes and defaults notesColWidth to 300', () => {
+  it('hydrates ClassBook.notes and defaults notesColWidth to 260', () => {
     const ws = createSeedWorkspace();
     ws.classes[0].notes = 'Grupo muy participativo; revisar tiempos en pruebas escritas.';
     ws.settings.showNotesColumn = true;
@@ -68,7 +68,25 @@ describe('ClassBook.notes & personal notes column settings persistence/sync', ()
       'Grupo muy participativo; revisar tiempos en pruebas escritas.'
     );
     expect(hydrated!.settings.showNotesColumn).toBe(true);
-    expect(hydrated!.settings.notesColWidth).toBe(300);
+    expect(hydrated!.settings.notesColWidth).toBe(260);
+  });
+
+  it('migrates legacy student Tutor/a notes to class notes and strips redundant school tags', () => {
+    const ws = createSeedWorkspace();
+    ws.classes[0].school = 'Manises';
+    delete ws.classes[0].notes;
+    ws.classes[0].students[0].notes = 'Tutor/a: Pérez Capella, Marta';
+    ws.classes[0].students[0].tags = ['Manises', 'PERSONAL', 'CONDUCTA'];
+    ws.classes[0].students[1].notes = 'Observación real del profesor';
+    ws.classes[0].students[1].tags = ['Manises'];
+
+    const hydrated = hydrateWorkspace(JSON.parse(JSON.stringify(ws)));
+    expect(hydrated).not.toBeNull();
+    expect(hydrated!.classes[0].notes).toBe('Tutor: Marta Pérez Capella');
+    expect(hydrated!.classes[0].students[0].notes).toBeUndefined();
+    expect(hydrated!.classes[0].students[0].tags).toEqual(['PERSONAL', 'CONDUCTA']);
+    expect(hydrated!.classes[0].students[1].notes).toBe('Observación real del profesor');
+    expect(hydrated!.classes[0].students[1].tags).toEqual([]);
   });
 
   it('merges ClassBook.notes in 3-way sync while keeping notes column layout device-local', () => {

@@ -1,6 +1,5 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { Check, Eye, StickyNote, Trash2, X } from 'lucide-react';
+import { Check, Eye, StickyNote, Tag, Trash2, X } from 'lucide-react';
 import {
   STUDENT_TAG_CATALOG,
   hasCatalogTag,
@@ -9,6 +8,7 @@ import {
   type StudentTagId,
 } from '../../constants/studentTags';
 import type { StudentEntity } from '../../types/gradebook';
+import { Modal } from '../common/Modal';
 import { StudentTagIcon } from '../common/StudentTagIcon';
 
 export type PersonalNoteTarget =
@@ -22,11 +22,12 @@ export type PersonalNoteTarget =
       kind: 'STUDENT';
       student: StudentEntity;
       displayName: string;
+      initialNotes?: string;
     };
 
 export interface PersonalNoteEditorState {
   target: PersonalNoteTarget;
-  rect: {
+  rect?: {
     top: number;
     bottom: number;
     left: number;
@@ -46,6 +47,11 @@ interface PersonalNotePopoverProps {
   onClose: () => void;
 }
 
+/**
+ * Full modal for editing private notes (class or student) and toggling student characteristic tags
+ * (icons + full labels + descriptions, 1-click select/deselect).
+ * Triggered by double-clicking any cell in the Personal Notes Column or clicking a collapsed micro-indicator.
+ */
 export const PersonalNotePopover: React.FC<PersonalNotePopoverProps> = ({
   editor,
   showNotesColumn,
@@ -55,7 +61,6 @@ export const PersonalNotePopover: React.FC<PersonalNotePopoverProps> = ({
   onClose,
 }) => {
   const textareaId = useId();
-  const containerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const [draft, setDraft] = useState('');
@@ -69,7 +74,7 @@ export const PersonalNotePopover: React.FC<PersonalNotePopoverProps> = ({
       setDraft(editor.target.initialNotes);
       setTags([]);
     } else {
-      setDraft(editor.target.student.notes ?? '');
+      setDraft(editor.target.initialNotes ?? editor.target.student.notes ?? '');
       setTags(editor.target.student.tags ?? []);
     }
     requestAnimationFrame(() => {
@@ -103,32 +108,9 @@ export const PersonalNotePopover: React.FC<PersonalNotePopoverProps> = ({
     onClose();
   };
 
-  useEffect(() => {
-    if (!editor) return;
-    const onPointerDown = (e: PointerEvent) => {
-      const node = containerRef.current;
-      if (!node) return;
-      if (node.contains(e.target as Node)) return;
-      commitNoteText(draft);
-      onClose();
-    };
-    window.addEventListener('pointerdown', onPointerDown, true);
-    return () => window.removeEventListener('pointerdown', onPointerDown, true);
-  });
-
   if (!editor) return null;
 
   const isStudent = editor.target.kind === 'STUDENT';
-  const popWidth = Math.min(440, Math.max(330, Math.round(editor.rect.width + 12)));
-  const estHeight = isStudent ? 320 : 210;
-  const preferredLeft = editor.fromCollapsedIndicator
-    ? editor.rect.right + 6
-    : editor.rect.left - 4;
-  const clampedLeft = Math.max(12, Math.min(window.innerWidth - popWidth - 12, preferredLeft));
-  const fitsBelow = editor.rect.top + estHeight <= window.innerHeight - 12;
-  const clampedTop = fitsBelow
-    ? Math.max(12, editor.rect.top - 4)
-    : Math.max(12, window.innerHeight - estHeight - 12);
 
   const handleToggleTag = (tagId: StudentTagId) => {
     if (editor.target.kind !== 'STUDENT') return;
@@ -139,75 +121,64 @@ export const PersonalNotePopover: React.FC<PersonalNotePopoverProps> = ({
 
   const customTags = isStudent ? resolveStudentTags(tags).filter((t) => t.isCustom) : [];
 
-  return createPortal(
-    <div
-      ref={containerRef}
-      role="dialog"
-      aria-modal="false"
-      aria-label={
+  return (
+    <Modal
+      open={Boolean(editor)}
+      onClose={handleCloseAndSave}
+      title={
         editor.target.kind === 'STUDENT'
-          ? `Notas personales y etiquetas de ${editor.target.displayName}`
-          : `Notas privadas de la clase ${editor.target.bookName}`
+          ? editor.target.displayName
+          : `Notas privadas · ${editor.target.bookName}`
       }
-      data-personal-note-popover="true"
-      onMouseDown={(e) => e.stopPropagation()}
-      onPointerDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        position: 'fixed',
-        top: clampedTop,
-        left: clampedLeft,
-        width: popWidth,
-        zIndex: 92,
-      }}
-      className="rounded-2xl border-2 border-amber-300 bg-white shadow-2xl overflow-hidden text-xs"
-    >
-      {/* Header */}
-      <div className="px-3 py-2 bg-amber-50/90 border-b border-amber-200/80 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <StickyNote className="w-3.5 h-3.5 text-amber-600 shrink-0" aria-hidden="true" />
-          <span className="font-bold text-slate-900 truncate">
-            {editor.target.kind === 'STUDENT'
-              ? editor.target.displayName
-              : `Notas de clase · ${editor.target.bookName}`}
-          </span>
-        </div>
-        <div className="flex items-center gap-1 shrink-0">
-          {!showNotesColumn && (
-            <button
-              type="button"
-              onClick={() => {
-                commitNoteText(draft);
-                onExpandNotesColumn();
-                onClose();
-              }}
-              title="Desplegar la columna completa de notas a la derecha de los alumnos"
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white hover:bg-amber-100 border border-amber-300 text-[10.5px] font-semibold text-amber-900 transition-colors"
-            >
-              <Eye className="w-3 h-3" aria-hidden="true" />
-              <span>Abrir columna</span>
-            </button>
-          )}
+      subtitle={
+        isStudent
+          ? 'Etiquetas de atención y notas privadas del alumno'
+          : 'Anotaciones privadas sobre toda la clase'
+      }
+      maxWidthClass="w-[min(560px,95vw)]"
+      headerActions={
+        !showNotesColumn ? (
           <button
             type="button"
-            onClick={handleCloseAndSave}
-            aria-label="Guardar y cerrar nota"
-            title="Guardar y cerrar (Esc)"
-            className="p-1 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-amber-100/80 transition-colors"
+            onClick={() => {
+              commitNoteText(draft);
+              onExpandNotesColumn();
+              onClose();
+            }}
+            title="Desplegar la columna de notas privadas junto a los alumnos"
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-300 text-[11px] font-semibold text-amber-900 transition-colors"
           >
-            <X className="w-3.5 h-3.5" aria-hidden="true" />
+            <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>Abrir columna</span>
           </button>
-        </div>
-      </div>
-
-      <div className="p-3 space-y-2.5">
-        {/* Student characteristic tags picker */}
+        ) : undefined
+      }
+    >
+      <div className="p-5 space-y-4 text-xs" data-personal-note-popover="true">
+        {/* Student characteristic tags picker (Icons + full labels in this modal!) */}
         {isStudent && (
-          <div className="space-y-1.5">
-            <div className="text-[10.5px] font-bold uppercase tracking-wider text-slate-400">
-              Etiquetas de atención
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                <Tag className="w-3.5 h-3.5 text-amber-600" aria-hidden="true" />
+                <span>Etiquetas de seguimiento / atención</span>
+              </div>
+              {tags.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (editor.target.kind !== 'STUDENT') return;
+                    setTags([]);
+                    onSaveStudent(editor.target.student.id, { tags: [] });
+                  }}
+                  className="text-[11px] font-semibold text-slate-500 hover:text-rose-600 transition-colors"
+                >
+                  Quitar todas
+                </button>
+              )}
             </div>
-            <div className="flex flex-wrap gap-1">
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
               {STUDENT_TAG_CATALOG.map((tag) => {
                 const isActive = hasCatalogTag(tags, tag.id);
                 return (
@@ -226,27 +197,42 @@ export const PersonalNotePopover: React.FC<PersonalNotePopoverProps> = ({
                           }
                         : undefined
                     }
-                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] transition-all ${
+                    className={`flex items-center gap-2 px-2.5 py-2 rounded-xl border text-left transition-all ${
                       isActive
-                        ? 'font-bold shadow-2xs'
-                        : 'bg-slate-50/70 border-slate-200 text-slate-600 hover:bg-white hover:border-slate-300 font-medium'
+                        ? 'font-bold shadow-2xs ring-1 ring-black/5'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 font-medium'
                     }`}
                   >
-                    <StudentTagIcon name={tag.iconName} className="w-3 h-3 shrink-0" />
-                    <span>{tag.shortLabel}</span>
-                    {isActive && <Check className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />}
+                    <span
+                      style={{
+                        backgroundColor: tag.bgColor,
+                        color: tag.color,
+                        borderColor: tag.borderColor,
+                      }}
+                      className="w-7 h-7 rounded-lg border flex items-center justify-center shrink-0"
+                    >
+                      <StudentTagIcon name={tag.iconName} className="w-4 h-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[12px] leading-tight">{tag.label}</span>
+                      <span className="block truncate text-[10px] opacity-75 font-normal">
+                        {tag.description}
+                      </span>
+                    </span>
+                    {isActive && <Check className="w-4 h-4 shrink-0" aria-hidden="true" />}
                   </button>
                 );
               })}
             </div>
+
             {customTags.length > 0 && (
-              <div className="flex flex-wrap gap-1 pt-0.5">
+              <div className="flex flex-wrap gap-1.5 pt-1">
                 {customTags.map((ct) => (
                   <span
                     key={ct.rawKey}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-semibold bg-slate-100 text-slate-700 border border-slate-300"
+                    className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-300"
                   >
-                    <StudentTagIcon name="Tag" className="w-2.5 h-2.5" />
+                    <StudentTagIcon name="Tag" className="w-3 h-3" />
                     <span>{ct.label}</span>
                     <button
                       type="button"
@@ -257,9 +243,9 @@ export const PersonalNotePopover: React.FC<PersonalNotePopoverProps> = ({
                         setTags(next);
                         onSaveStudent(editor.target.student.id, { tags: next });
                       }}
-                      className="hover:text-rose-600"
+                      className="hover:text-rose-600 ml-0.5"
                     >
-                      <X className="w-2.5 h-2.5" />
+                      <X className="w-3 h-3" />
                     </button>
                   </span>
                 ))}
@@ -272,22 +258,20 @@ export const PersonalNotePopover: React.FC<PersonalNotePopoverProps> = ({
         <div>
           <label
             htmlFor={textareaId}
-            className="block text-[10.5px] font-bold uppercase tracking-wider text-slate-400 mb-1"
+            className="font-semibold text-slate-800 mb-1.5 flex items-center gap-1.5"
           >
-            {isStudent ? 'Nota privada del alumno' : 'Nota privada de la clase'}
+            <StickyNote className="w-3.5 h-3.5 text-amber-600" aria-hidden="true" />
+            <span>{isStudent ? 'Notas privadas del alumno' : 'Notas privadas de la clase'}</span>
           </label>
           <textarea
             id={textareaId}
             ref={textareaRef}
-            rows={4}
+            rows={5}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               e.stopPropagation();
-              if (e.key === 'Escape') {
-                e.preventDefault();
-                handleCloseAndSave();
-              } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                 e.preventDefault();
                 handleCloseAndSave();
@@ -296,14 +280,14 @@ export const PersonalNotePopover: React.FC<PersonalNotePopoverProps> = ({
             placeholder={
               isStudent
                 ? 'Escribe observaciones privadas sobre adaptaciones, situación personal, conducta, avisos...'
-                : 'Escribe notas privadas sobre esta clase (ritmo, acuerdos, avisos, incidencias generales)...'
+                : 'Escribe notas privadas sobre esta clase (tutor/a, ritmo, acuerdos, incidencias generales)...'
             }
-            className="note-autosize-textarea rounded-xl border border-amber-200 bg-amber-50/30 focus:bg-white focus:border-amber-400 focus:ring-2 focus:ring-amber-200/70 focus:outline-none px-2.5 py-2 text-[12.5px] leading-relaxed text-slate-900 placeholder:text-slate-400"
+            className="note-autosize-textarea rounded-xl border border-amber-200 bg-amber-50/25 focus:bg-white focus:border-amber-400 focus:ring-2 focus:ring-amber-200/70 focus:outline-none px-3 py-2.5 text-[13px] leading-relaxed text-slate-900 placeholder:text-slate-400"
           />
         </div>
 
         {/* Footer actions */}
-        <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
+        <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-200">
           {draft.trim().length > 0 ? (
             <button
               type="button"
@@ -312,27 +296,28 @@ export const PersonalNotePopover: React.FC<PersonalNotePopoverProps> = ({
                 commitNoteText('');
                 onClose();
               }}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-rose-600 hover:bg-rose-50 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-rose-600 hover:bg-rose-50 font-semibold transition-colors"
             >
-              <Trash2 className="w-3 h-3" aria-hidden="true" />
+              <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Borrar nota</span>
             </button>
           ) : (
-            <span className="text-[10.5px] text-slate-400">
-              Ctrl/⌘+Enter o clic fuera para guardar
+            <span className="text-[11px] text-slate-400">
+              Ctrl/⌘+Enter para guardar rápidamente
             </span>
           )}
-          <button
-            type="button"
-            onClick={handleCloseAndSave}
-            className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold text-[11.5px] shadow-2xs transition-colors"
-          >
-            <Check className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>Guardar</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleCloseAndSave}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold shadow-xs transition-colors"
+            >
+              <Check className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Guardar</span>
+            </button>
+          </div>
         </div>
       </div>
-    </div>,
-    document.body
+    </Modal>
   );
 };
