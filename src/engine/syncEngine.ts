@@ -786,6 +786,7 @@ function mergeBook(
     groupSummaryRows: pickBookField('groupSummaryRows', (v) => v ?? []),
     lomloeCurriculumId: pickBookField('lomloeCurriculumId', (v) => v ?? null),
     showLomloeRow: localBook.showLomloeRow,
+    tutor: pickBookField('tutor', (v) => (v ?? '').trim()),
     notes: pickBookField('notes', (v) => (v ?? '').trim()),
     isTemplate: localBook.isTemplate ?? remoteBook.isTemplate,
     students: alignedStudents,

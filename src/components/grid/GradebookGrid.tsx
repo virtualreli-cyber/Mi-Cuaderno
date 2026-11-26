@@ -3785,6 +3785,16 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       {totalActiveStudents} alumnos
                       {effectiveGroups.length > 0 ? ` · ${effectiveGroups.length} grupos` : ''}
                     </div>
+                    {!activeBook.isTemplate && activeBook.tutor?.trim() && (
+                      <div
+                        data-class-tutor-label="true"
+                        title={`Tutor/a: ${activeBook.tutor.trim()}`}
+                        className="text-[0.78em] text-slate-700 font-medium truncate mt-0.5 flex items-center gap-1"
+                      >
+                        <span className="text-slate-500 font-semibold shrink-0">Tutor/a:</span>
+                        <span className="truncate">{activeBook.tutor.trim()}</span>
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-0.5 shrink-0">
                     <button
@@ -4162,7 +4172,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               )}
             </th>
 
-            {/* Toggleable Personal Notes Column Header (Class-level private notes) */}
+            {/* Toggleable Personal Notes Column Header (Class-level private notes, full header height) */}
             {showNotesColumn && (
               <th
                 rowSpan={totalHeaderRows}
@@ -4171,17 +4181,20 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   width: notesColW,
                   backgroundColor: '#FFFBEB',
                 }}
-                className="border-r-2 border-b border-amber-200/90 px-2.5 py-1.5 text-left align-top font-normal relative"
+                className="border-r-2 border-b border-amber-200/90 p-0 text-left align-top font-normal relative"
               >
+                {/* Invisible baseline min-height spacer so the th matches thead minimums cleanly */}
                 <div
-                  className="flex flex-col gap-1 min-w-0 h-full"
+                  aria-hidden="true"
                   style={{
                     minHeight: Math.max(
                       60,
-                      canopyH + headerH + (showLomloeBar ? lomloeRowH : 0) - 10
+                      canopyH + headerH + (showLomloeBar ? lomloeRowH : 0)
                     ),
                   }}
-                >
+                />
+                {/* Absolute overlay stretches the textarea across 100% of the real rendered thead height (rowSpan included) */}
+                <div className="absolute inset-0 px-2 py-1.5 flex flex-col gap-1 min-w-0">
                   <div className="flex items-center justify-between gap-1.5 shrink-0">
                     <div className="flex items-center gap-1.5 min-w-0">
                       <StickyNote
@@ -4216,22 +4229,16 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
                   <div
                     data-class-notes-trigger="true"
-                    className={`flex-1 w-full rounded-xl border transition-colors overflow-hidden ${
+                    className={`flex-1 min-h-0 w-full flex flex-col rounded-xl border transition-colors overflow-hidden ${
                       hasClassNote
                         ? 'bg-white/95 border-amber-200/90 hover:border-amber-400 shadow-2xs'
                         : 'bg-white/65 border-dashed border-amber-300/80 hover:bg-white hover:border-amber-400'
                     }`}
-                    style={{
-                      height: Math.max(
-                        52,
-                        canopyH + headerH + (showLomloeBar ? lomloeRowH : 0) - 34
-                      ),
-                    }}
                   >
                     <InlineNotesTextarea
                       value={activeBook.notes ?? ''}
                       ariaLabel={`Notas privadas de la clase ${activeBook.name}`}
-                      placeholder="Nota privada de clase (doble clic para ampliar)..."
+                      placeholder="Anotaciones importantes de la clase (doble clic para ampliar)..."
                       onCommit={(next) => {
                         updateBook(activeBook.id, { notes: next || undefined });
                       }}
@@ -4253,7 +4260,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           },
                         });
                       }}
-                      className="text-[0.86em] font-medium text-slate-800 placeholder:italic placeholder:text-amber-900/45"
+                      className="flex-1 text-[0.86em] font-medium text-slate-800 placeholder:italic placeholder:text-amber-900/45"
                     />
                   </div>
                 </div>

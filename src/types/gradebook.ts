@@ -250,6 +250,8 @@ export interface ClassBook {
   name: string;
   subject: string;
   school?: string;
+  /** Tutor/a asignado a esta clase */
+  tutor?: string;
   year: string;
   color: string;
   passThreshold: number;

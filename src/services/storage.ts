@@ -141,8 +141,10 @@ function hydrateCells(rawCells: Record<string, CellEntity> | undefined): Record<
   return out;
 }
 
-function formatLegacyTutorNote(rawNote: string): string | null {
-  const m = rawNote.trim().match(/^Tutor\/a:\s*(.+)$/i);
+function extractPureTutorName(rawNote: string | undefined): string | null {
+  if (!rawNote) return null;
+  const trimmed = rawNote.trim();
+  const m = trimmed.match(/^Tutor(?:\/a)?:\s*([^\r\n]+)$/i);
   if (!m) return null;
   const body = m[1].trim();
   if (!body) return null;
@@ -151,10 +153,10 @@ function formatLegacyTutorNote(rawNote: string): string | null {
     const lastNames = body.slice(0, commaIdx).trim();
     const firstNames = body.slice(commaIdx + 1).trim();
     if (firstNames && lastNames) {
-      return `Tutor: ${firstNames} ${lastNames}`;
+      return `${firstNames} ${lastNames}`;
     }
   }
-  return `Tutor: ${body}`;
+  return body;
 }
 
 function hydrateBook(
@@ -164,7 +166,7 @@ function hydrateBook(
   backfillVerifiedLomloe = false
 ): ClassBook {
   const schoolLow = (book.school ?? '').trim().toLowerCase();
-  let migratedTutorNote: string | undefined;
+  let migratedTutorName: string | undefined;
   const hydratedStudents = toArray<ClassBook['students'][number]>(book.students).map((s, idx) => {
     const rawTags = toArray<string>(s.tags);
     const cleanedTags = rawTags.filter((t) => {
@@ -172,12 +174,10 @@ function hydrateBook(
       return Boolean(low) && low !== schoolLow && low !== 'ribarroja' && low !== 'manises';
     });
     let cleanedNotes = typeof s.notes === 'string' && s.notes.trim() ? s.notes : undefined;
-    if (cleanedNotes) {
-      const extracted = formatLegacyTutorNote(cleanedNotes);
-      if (extracted) {
-        if (!migratedTutorNote) migratedTutorNote = extracted;
-        cleanedNotes = undefined;
-      }
+    if (cleanedNotes && /^Tutor\/a:\s*/i.test(cleanedNotes.trim())) {
+      const extracted = extractPureTutorName(cleanedNotes);
+      if (extracted && !migratedTutorName) migratedTutorName = extracted;
+      cleanedNotes = undefined;
     }
     return {
       ...s,
@@ -188,8 +188,13 @@ function hydrateBook(
     };
   });
 
-  const existingBookNotes =
+  const explicitTutor =
+    typeof book.tutor === 'string' && book.tutor.trim().length > 0 ? book.tutor.trim() : undefined;
+  const rawBookNotes =
     typeof book.notes === 'string' && book.notes.trim().length > 0 ? book.notes : undefined;
+  const pureTutorFromBookNotes = extractPureTutorName(rawBookNotes);
+  const resolvedTutor = explicitTutor ?? pureTutorFromBookNotes ?? migratedTutorName;
+  const resolvedBookNotes = pureTutorFromBookNotes ? undefined : rawBookNotes;
 
   const hydrated: ClassBook = {
     ...book,
@@ -219,7 +224,8 @@ function hydrateBook(
         : inferReligionCurriculumId(book.name, book.subject) ?? undefined,
     showLomloeRow:
       typeof book.showLomloeRow === 'boolean' ? book.showLomloeRow : undefined,
-    notes: existingBookNotes ?? migratedTutorNote,
+    tutor: !isTemplate ? resolvedTutor : undefined,
+    notes: resolvedBookNotes,
     students: hydratedStudents,
     tabs: toArray<ClassBook['tabs'][number]>(book.tabs).map((t, tIdx) => ({
       ...t,

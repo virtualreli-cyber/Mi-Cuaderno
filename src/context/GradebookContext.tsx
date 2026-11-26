@@ -173,7 +173,14 @@ interface GradebookContextValue {
   // Classes & Templates CRUD
   createBook: (
     kind: 'CLASS' | 'TEMPLATE',
-    data: { name: string; subject: string; school?: string; year?: string; color: string }
+    data: {
+      name: string;
+      subject: string;
+      school?: string;
+      tutor?: string;
+      year?: string;
+      color: string;
+    }
   ) => ClassBook;
   updateBook: (bookId: string, patch: Partial<ClassBook>) => void;
   deleteBook: (bookId: string) => void;
@@ -1222,6 +1229,7 @@ function resolveGlobalSummaryRows(ws: GradebookWorkspace): ColumnSummaryMetric[]
         name: data.name.trim() || (isTpl ? 'Nueva Plantilla' : 'Nueva Clase'),
         subject: data.subject.trim() || (isTpl ? 'Borrador reutilizable' : 'Asignatura'),
         school: !isTpl && data.school?.trim() ? data.school.trim() : undefined,
+        tutor: !isTpl && data.tutor?.trim() ? data.tutor.trim() : undefined,
         year: data.year?.trim() || (isTpl ? 'Plantilla' : '2026-2027'),
         color: data.color || '#3B82F6',
         passThreshold: 5,

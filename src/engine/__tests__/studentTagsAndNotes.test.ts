@@ -71,22 +71,31 @@ describe('ClassBook.notes & personal notes column settings persistence/sync', ()
     expect(hydrated!.settings.notesColWidth).toBe(260);
   });
 
-  it('migrates legacy student Tutor/a notes to class notes and strips redundant school tags', () => {
+  it('migrates legacy student Tutor/a notes and book-level Tutor notes into ClassBook.tutor without leaving class notes dirty', () => {
     const ws = createSeedWorkspace();
     ws.classes[0].school = 'Manises';
     delete ws.classes[0].notes;
+    delete ws.classes[0].tutor;
     ws.classes[0].students[0].notes = 'Tutor/a: Pérez Capella, Marta';
     ws.classes[0].students[0].tags = ['Manises', 'PERSONAL', 'CONDUCTA'];
     ws.classes[0].students[1].notes = 'Observación real del profesor';
     ws.classes[0].students[1].tags = ['Manises'];
 
+    // Simulate a second class that had a standalone "Tutor: ..." string in book.notes
+    ws.classes[1].notes = 'Tutor: Fernando San Isidro Cazorla';
+    delete ws.classes[1].tutor;
+
     const hydrated = hydrateWorkspace(JSON.parse(JSON.stringify(ws)));
     expect(hydrated).not.toBeNull();
-    expect(hydrated!.classes[0].notes).toBe('Tutor: Marta Pérez Capella');
+    expect(hydrated!.classes[0].tutor).toBe('Marta Pérez Capella');
+    expect(hydrated!.classes[0].notes).toBeUndefined();
     expect(hydrated!.classes[0].students[0].notes).toBeUndefined();
     expect(hydrated!.classes[0].students[0].tags).toEqual(['PERSONAL', 'CONDUCTA']);
     expect(hydrated!.classes[0].students[1].notes).toBe('Observación real del profesor');
     expect(hydrated!.classes[0].students[1].tags).toEqual([]);
+
+    expect(hydrated!.classes[1].tutor).toBe('Fernando San Isidro Cazorla');
+    expect(hydrated!.classes[1].notes).toBeUndefined();
   });
 
   it('merges ClassBook.notes in 3-way sync while keeping notes column layout device-local', () => {

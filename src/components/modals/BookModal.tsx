@@ -22,6 +22,7 @@ export const BookModal: React.FC<BookModalProps> = ({
   const [name, setName] = useState('');
   const [subject, setSubject] = useState('');
   const [school, setSchool] = useState('Ribarroja');
+  const [tutor, setTutor] = useState('');
   const [year, setYear] = useState('2026-2027');
   const [color, setColor] = useState(SCHOOL_DEFAULT_COLORS.Ribarroja);
   const [passThreshold, setPassThreshold] = useState(5);
@@ -32,6 +33,7 @@ export const BookModal: React.FC<BookModalProps> = ({
       setName(editingBook.name);
       setSubject(editingBook.subject);
       setSchool(editingBook.school ?? '');
+      setTutor(editingBook.tutor ?? '');
       setYear(editingBook.year);
       setColor(editingBook.color);
       setPassThreshold(editingBook.passThreshold);
@@ -39,6 +41,7 @@ export const BookModal: React.FC<BookModalProps> = ({
       setName('');
       setSubject('Religión');
       setSchool(kind === 'CLASS' ? 'Ribarroja' : '');
+      setTutor('');
       setYear(kind === 'TEMPLATE' ? 'Plantilla' : '2026-2027');
       setColor(kind === 'CLASS' ? SCHOOL_DEFAULT_COLORS.Ribarroja : CLASS_ACCENT_SWATCHES[2]);
       setPassThreshold(5);
@@ -60,6 +63,7 @@ export const BookModal: React.FC<BookModalProps> = ({
         name: name.trim(),
         subject: subject.trim(),
         school: !editingBook.isTemplate ? (school.trim() || undefined) : undefined,
+        tutor: !editingBook.isTemplate ? (tutor.trim() || undefined) : undefined,
         year: year.trim(),
         color,
         passThreshold,
@@ -69,6 +73,7 @@ export const BookModal: React.FC<BookModalProps> = ({
         name: name.trim(),
         subject: subject.trim(),
         school: kind === 'CLASS' ? (school.trim() || undefined) : undefined,
+        tutor: kind === 'CLASS' ? (tutor.trim() || undefined) : undefined,
         year: year.trim(),
         color,
       });
@@ -171,6 +176,22 @@ export const BookModal: React.FC<BookModalProps> = ({
             />
           </div>
         </div>
+
+        {!isTpl && (
+          <div>
+            <label htmlFor="book-tutor-input" className="block font-semibold text-slate-700 mb-1">
+              Tutor/a de la clase
+            </label>
+            <input
+              id="book-tutor-input"
+              type="text"
+              value={tutor}
+              onChange={(e) => setTutor(e.target.value)}
+              placeholder="Ej: Marta Pérez Capella"
+              className="w-full border border-slate-300 rounded-xl px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+            />
+          </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
           <div>
