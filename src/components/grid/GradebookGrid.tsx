@@ -3727,47 +3727,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 selectedStudentColHeader ? 'col-header-selected' : ''
               }`}
             >
-              {/* Option A: Discreet top-right corner fold micro-indicator when the class has private notes while collapsed */}
-              {hasClassNote && !showNotesColumn && (
-                <button
-                  type="button"
-                  data-class-note-indicator="true"
-                  aria-label="Ver nota privada de la clase"
-                  title={`Nota privada de clase: ${(activeBook.notes ?? '').trim().slice(0, 140)}${
-                    (activeBook.notes ?? '').trim().length > 140 ? '…' : ''
-                  } (clic para leer o editar)`}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const th = e.currentTarget.closest('th') as HTMLElement | null;
-                    const rect = (th ?? e.currentTarget).getBoundingClientRect();
-                    setActiveNoteEditor({
-                      target: {
-                        kind: 'CLASS',
-                        bookId: activeBook.id,
-                        bookName: activeBook.name,
-                        initialNotes: activeBook.notes ?? '',
-                      },
-                      rect: {
-                        top: rect.top,
-                        bottom: rect.bottom,
-                        left: rect.left,
-                        right: rect.right,
-                        width: rect.width,
-                      },
-                      fromCollapsedIndicator: true,
-                    });
-                  }}
-                  className="absolute top-0 right-0 w-4 h-4 flex items-start justify-end z-30 group/classind focus:outline-none"
-                >
-                  <span
-                    aria-hidden="true"
-                    className="block w-0 h-0 border-t-[9px] border-t-amber-500/90 group-hover/classind:border-t-amber-600 border-l-[9px] border-l-transparent transition-colors"
-                  />
-                </button>
-              )}
               <div
-                className="flex flex-col justify-between min-w-0"
+                className="flex flex-col justify-between gap-1 min-w-0"
                 style={{
                   minHeight: Math.max(
                     60,
@@ -3775,110 +3736,159 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                   ),
                 }}
               >
-                <div className="flex items-start justify-between gap-1 min-w-0">
-                  <div className="min-w-0 flex-1 leading-tight">
-                    <div className="text-[1.02em] font-bold text-slate-900 truncate flex items-center gap-1">
-                      <span className="truncate">{activeTab.title}</span>
-                      {activeTab.isLocked && <Lock style={smallIconStyle} className="text-slate-600 shrink-0" />}
+                <div className="space-y-1 min-w-0">
+                  {/* Top Action Row: Prominent Class Note indicator on the left (only when class has an important note) + utility buttons on the right */}
+                  <div className="flex items-center justify-between gap-1 flex-wrap">
+                    {hasClassNote ? (
+                      <button
+                        type="button"
+                        data-class-note-indicator="true"
+                        aria-label="Ver nota privada de la clase"
+                        title={`Nota de clase: ${(activeBook.notes ?? '').trim().slice(0, 180)}${
+                          (activeBook.notes ?? '').trim().length > 180 ? '…' : ''
+                        } (clic para leer o editar)`}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const th = e.currentTarget.closest('th') as HTMLElement | null;
+                          const rect = (th ?? e.currentTarget).getBoundingClientRect();
+                          setActiveNoteEditor({
+                            target: {
+                              kind: 'CLASS',
+                              bookId: activeBook.id,
+                              bookName: activeBook.name,
+                              initialNotes: activeBook.notes ?? '',
+                            },
+                            rect: {
+                              top: rect.top,
+                              bottom: rect.bottom,
+                              left: rect.left,
+                              right: rect.right,
+                              width: rect.width,
+                            },
+                            fromCollapsedIndicator: !showNotesColumn,
+                          });
+                        }}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-300/90 hover:bg-amber-400 border border-amber-500 text-amber-950 font-bold text-[0.76em] shadow-xs transition-all cursor-pointer shrink-0"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className="w-2 h-2 rounded-full bg-amber-700 motion-safe:animate-pulse shrink-0"
+                        />
+                        <StickyNote style={smallIconStyle} className="shrink-0" aria-hidden="true" />
+                        <span>Nota clase</span>
+                      </button>
+                    ) : (
+                      <span />
+                    )}
+
+                    <div className="flex items-center gap-0.5 shrink-0 ml-auto">
+                      <button
+                        type="button"
+                        data-notes-column-toggle="true"
+                        aria-pressed={showNotesColumn}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleNotesColumn();
+                        }}
+                        title={
+                          showNotesColumn
+                            ? 'Ocultar columna de notas privadas'
+                            : hasAnyPrivateNotes
+                              ? `Mostrar notas privadas (${
+                                  [
+                                    hasClassNote ? 'nota de clase' : '',
+                                    studentsWithNotesCount > 0
+                                      ? `${studentsWithNotesCount} ${
+                                          studentsWithNotesCount === 1 ? 'alumno' : 'alumnos'
+                                        }`
+                                      : '',
+                                  ]
+                                    .filter(Boolean)
+                                    .join(' · ')
+                                })`
+                              : 'Mostrar columna de notas privadas (clase y alumnos)'
+                        }
+                        aria-label={
+                          showNotesColumn
+                            ? 'Ocultar columna de notas privadas'
+                            : 'Mostrar columna de notas privadas'
+                        }
+                        className={`relative p-1 rounded-lg border flex items-center justify-center shadow-2xs shrink-0 transition-colors ${
+                          showNotesColumn
+                            ? 'bg-amber-100 border-amber-400 text-amber-800 hover:bg-amber-200/80'
+                            : hasAnyPrivateNotes
+                              ? 'bg-amber-50/90 border-amber-300 text-amber-700 hover:border-amber-400 hover:bg-amber-100/80'
+                              : 'bg-white/90 border-slate-300 hover:border-amber-400 hover:text-amber-700 text-slate-600'
+                        }`}
+                      >
+                        {showNotesColumn ? (
+                          <EyeOff style={iconStyle} />
+                        ) : (
+                          <StickyNote style={iconStyle} />
+                        )}
+                        {!showNotesColumn && hasAnyPrivateNotes && (
+                          <span
+                            aria-hidden="true"
+                            className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-amber-500 ring-1 ring-white"
+                          />
+                        )}
+                      </button>
+                      {onOpenGroupsManager && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenGroupsManager()}
+                          title="Agrupaciones y categorías de grupos"
+                          aria-label="Gestionar grupos de alumnos"
+                          className="p-1 rounded-lg bg-white/90 border border-slate-300 hover:border-indigo-400 hover:text-indigo-700 text-slate-700 flex items-center justify-center shadow-2xs shrink-0"
+                        >
+                          <Layers style={iconStyle} />
+                        </button>
+                      )}
+                      {onOpenBulkStudents && (
+                        <button
+                          type="button"
+                          onClick={onOpenBulkStudents}
+                          title="Importar y exportar alumnos en masa (Apellidos, Nombre)"
+                          aria-label="Importar y exportar alumnos en masa"
+                          className="p-1 rounded-lg bg-white/90 border border-slate-300 hover:border-blue-400 hover:text-blue-700 text-slate-700 flex items-center justify-center shadow-2xs shrink-0"
+                        >
+                          <Users style={iconStyle} />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={onNewStudent}
+                        title="Añadir alumno"
+                        aria-label="Añadir alumno"
+                        className="p-1 rounded-lg bg-white/90 border border-slate-300 hover:border-blue-400 hover:text-blue-700 text-slate-700 flex items-center justify-center shadow-2xs shrink-0"
+                      >
+                        <Plus style={iconStyle} />
+                      </button>
                     </div>
-                    <div className="text-[0.8em] text-slate-600 truncate">
+                  </div>
+
+                  {/* Full-width Class/Tab Header Data (never clipped by side buttons) */}
+                  <div className="min-w-0 leading-snug space-y-0.5">
+                    <div className="text-[1.02em] font-bold text-slate-900 whitespace-normal break-words flex items-start gap-1">
+                      <span className="break-words">{activeTab.title}</span>
+                      {activeTab.isLocked && (
+                        <Lock style={smallIconStyle} className="text-slate-600 shrink-0 mt-0.5" />
+                      )}
+                    </div>
+                    <div className="text-[0.82em] text-slate-600 whitespace-normal break-words">
                       {totalActiveStudents} alumnos
                       {effectiveGroups.length > 0 ? ` · ${effectiveGroups.length} grupos` : ''}
                     </div>
                     {!activeBook.isTemplate && activeBook.tutor?.trim() && (
                       <div
                         data-class-tutor-label="true"
-                        title={`Tutor/a: ${activeBook.tutor.trim()}`}
-                        className="text-[0.78em] text-slate-700 font-medium truncate mt-0.5 flex items-center gap-1"
+                        className="text-[0.8em] text-slate-700 font-medium whitespace-normal break-words leading-snug"
                       >
-                        <span className="text-slate-500 font-semibold shrink-0">Tutor/a:</span>
-                        <span className="truncate">{activeBook.tutor.trim()}</span>
+                        <span className="text-slate-500 font-semibold">Tutor/a: </span>
+                        <span>{activeBook.tutor.trim()}</span>
                       </div>
                     )}
-                  </div>
-                  <div className="flex items-center gap-0.5 shrink-0">
-                    <button
-                      type="button"
-                      data-notes-column-toggle="true"
-                      aria-pressed={showNotesColumn}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleNotesColumn();
-                      }}
-                      title={
-                        showNotesColumn
-                          ? 'Ocultar columna de notas privadas'
-                          : hasAnyPrivateNotes
-                            ? `Mostrar notas privadas (${
-                                [
-                                  hasClassNote ? 'nota de clase' : '',
-                                  studentsWithNotesCount > 0
-                                    ? `${studentsWithNotesCount} ${
-                                        studentsWithNotesCount === 1 ? 'alumno' : 'alumnos'
-                                      }`
-                                    : '',
-                                ]
-                                  .filter(Boolean)
-                                  .join(' · ')
-                              })`
-                            : 'Mostrar columna de notas privadas (clase y alumnos)'
-                      }
-                      aria-label={
-                        showNotesColumn
-                          ? 'Ocultar columna de notas privadas'
-                          : 'Mostrar columna de notas privadas'
-                      }
-                      className={`relative p-1 rounded-lg border flex items-center justify-center shadow-2xs shrink-0 transition-colors ${
-                        showNotesColumn
-                          ? 'bg-amber-100 border-amber-400 text-amber-800 hover:bg-amber-200/80'
-                          : hasAnyPrivateNotes
-                            ? 'bg-amber-50/90 border-amber-300 text-amber-700 hover:border-amber-400 hover:bg-amber-100/80'
-                            : 'bg-white/90 border-slate-300 hover:border-amber-400 hover:text-amber-700 text-slate-600'
-                      }`}
-                    >
-                      {showNotesColumn ? (
-                        <EyeOff style={iconStyle} />
-                      ) : (
-                        <StickyNote style={iconStyle} />
-                      )}
-                      {!showNotesColumn && hasAnyPrivateNotes && (
-                        <span
-                          aria-hidden="true"
-                          className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-500 ring-1 ring-white"
-                        />
-                      )}
-                    </button>
-                    {onOpenGroupsManager && (
-                      <button
-                        type="button"
-                        onClick={() => onOpenGroupsManager()}
-                        title="Agrupaciones y categorías de grupos"
-                        aria-label="Gestionar grupos de alumnos"
-                        className="p-1 rounded-lg bg-white/90 border border-slate-300 hover:border-indigo-400 hover:text-indigo-700 text-slate-700 flex items-center justify-center shadow-2xs shrink-0"
-                      >
-                        <Layers style={iconStyle} />
-                      </button>
-                    )}
-                    {onOpenBulkStudents && (
-                      <button
-                        type="button"
-                        onClick={onOpenBulkStudents}
-                        title="Importar y exportar alumnos en masa (Apellidos, Nombre)"
-                        aria-label="Importar y exportar alumnos en masa"
-                        className="p-1 rounded-lg bg-white/90 border border-slate-300 hover:border-blue-400 hover:text-blue-700 text-slate-700 flex items-center justify-center shadow-2xs shrink-0"
-                      >
-                        <Users style={iconStyle} />
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={onNewStudent}
-                      title="Añadir alumno"
-                      aria-label="Añadir alumno"
-                      className="p-1 rounded-lg bg-white/90 border border-slate-300 hover:border-blue-400 hover:text-blue-700 text-slate-700 flex items-center justify-center shadow-2xs shrink-0"
-                    >
-                      <Plus style={iconStyle} />
-                    </button>
                   </div>
                 </div>
 
