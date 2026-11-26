@@ -231,23 +231,22 @@ export function usePreventGlobalBrowserZoom() {
     const isInsidePinchSurface = (target: EventTarget | null) =>
       target instanceof Element && Boolean(target.closest('[data-pinch-zoom-surface="true"]'));
 
+    const isFormControl = (target: EventTarget | null) =>
+      target instanceof Element &&
+      Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey) {
         e.preventDefault();
       }
     };
     const onGesture = (e: Event) => {
-      if (!isInsidePinchSurface(e.target)) {
-        e.preventDefault();
-      }
-    };
-    const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length >= 2 && !isInsidePinchSurface(e.target)) {
+      if (!isInsidePinchSurface(e.target) && !isFormControl(e.target)) {
         e.preventDefault();
       }
     };
     const onTouchMove = (e: TouchEvent) => {
-      if (e.touches.length >= 2 && !isInsidePinchSurface(e.target)) {
+      if (e.touches.length >= 2 && !isInsidePinchSurface(e.target) && !isFormControl(e.target)) {
         e.preventDefault();
       }
     };
@@ -262,7 +261,6 @@ export function usePreventGlobalBrowserZoom() {
     document.addEventListener('gesturestart', onGesture, { passive: false });
     document.addEventListener('gesturechange', onGesture, { passive: false });
     document.addEventListener('gestureend', onGesture, { passive: false });
-    document.addEventListener('touchstart', onTouchStart, { passive: false });
     document.addEventListener('touchmove', onTouchMove, { passive: false });
     window.addEventListener('keydown', onKeyDown);
 
@@ -271,7 +269,6 @@ export function usePreventGlobalBrowserZoom() {
       document.removeEventListener('gesturestart', onGesture);
       document.removeEventListener('gesturechange', onGesture);
       document.removeEventListener('gestureend', onGesture);
-      document.removeEventListener('touchstart', onTouchStart);
       document.removeEventListener('touchmove', onTouchMove);
       window.removeEventListener('keydown', onKeyDown);
     };

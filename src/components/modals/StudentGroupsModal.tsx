@@ -262,18 +262,10 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                     <input
                       type="text"
                       autoFocus={!device.isTouch}
-                      inputMode="text"
-                      enterKeyHint="done"
                       value={renameCatDraft}
                       onChange={(e) => setRenameCatDraft(e.target.value)}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onTouchStart={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        e.currentTarget.focus();
-                      }}
                       aria-label="Nombre de la categoría"
-                      className={`w-36 min-h-[34px] select-text font-semibold text-slate-900 bg-transparent focus:outline-none ${
+                      className={`w-40 min-h-[34px] select-text font-semibold text-slate-900 bg-transparent focus:outline-none ${
                         device.isTouch ? 'text-base' : 'text-xs'
                       }`}
                     />
@@ -355,19 +347,11 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                 <input
                   type="text"
                   autoFocus={!device.isTouch}
-                  inputMode="text"
-                  enterKeyHint="done"
                   value={newCatName}
                   onChange={(e) => setNewCatName(e.target.value)}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onTouchStart={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    e.currentTarget.focus();
-                  }}
                   placeholder="Ej: Proyecto, Mesas..."
                   aria-label="Nueva categoría"
-                  className={`w-40 min-h-[34px] select-text text-slate-900 bg-transparent focus:outline-none ${
+                  className={`w-44 min-h-[34px] select-text text-slate-900 bg-transparent focus:outline-none ${
                     device.isTouch ? 'text-base' : 'text-xs'
                   }`}
                 />
@@ -605,16 +589,8 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
             >
               <input
                 type="text"
-                inputMode="text"
-                enterKeyHint="done"
                 value={newGroupName}
                 onChange={(e) => setNewGroupName(e.target.value)}
-                onPointerDown={(e) => e.stopPropagation()}
-                onTouchStart={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.currentTarget.focus();
-                }}
                 placeholder={
                   selectedCount > 0
                     ? `Crear grupo nuevo y meter a los ${selectedCount} seleccionados...`
@@ -741,16 +717,8 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                             <input
                               type="text"
                               autoFocus={!device.isTouch}
-                              inputMode="text"
-                              enterKeyHint="done"
                               value={editNameDraft}
                               onChange={(e) => setEditNameDraft(e.target.value)}
-                              onPointerDown={(e) => e.stopPropagation()}
-                              onTouchStart={(e) => e.stopPropagation()}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                e.currentTarget.focus();
-                              }}
                               aria-label="Editar nombre del grupo"
                               className={`flex-1 min-w-[120px] min-h-[38px] select-text bg-white border border-slate-300 rounded-lg px-2.5 py-1 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/25 ${
                                 device.isTouch ? 'text-base' : 'text-xs'

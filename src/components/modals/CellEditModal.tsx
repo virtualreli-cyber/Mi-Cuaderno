@@ -94,7 +94,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing || e.keyCode === 229) return;
-      const dialogEl = formRef.current?.closest('dialog');
+      const dialogEl = formRef.current?.closest('dialog, [data-modal-open="true"]') as HTMLElement | null;
       if (!dialogEl) return;
       const isModal = dialogEl.matches(':modal') || dialogEl.dataset.modalBlocking === 'true';
       const active = document.activeElement;

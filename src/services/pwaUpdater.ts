@@ -98,7 +98,7 @@ function canAutoReloadSafely(): boolean {
   ) {
     return false;
   }
-  if (document.querySelector('dialog[open]')) {
+  if (document.querySelector('dialog[open], [data-modal-open="true"]')) {
     return false;
   }
   return true;

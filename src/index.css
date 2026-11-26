@@ -188,13 +188,6 @@ dialog::backdrop {
 
 /* Touch-only ergonomic upgrades (strictly gated on pointer: coarse / hover: none — desktop untouched!) */
 @media (pointer: coarse), (hover: none) {
-  /* Prevent full-app double-tap & pinch zoom on shell without interfering with inputs or modal dialogs */
-  html,
-  body,
-  #root {
-    touch-action: pan-x pan-y;
-  }
-
   button,
   a,
   [role="button"] {

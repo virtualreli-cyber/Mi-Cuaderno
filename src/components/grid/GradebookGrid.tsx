@@ -2464,8 +2464,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         target?.tagName === 'TEXTAREA' ||
         target?.tagName === 'SELECT';
 
-      if (document.querySelector('dialog[open]:modal, dialog[open][data-modal-blocking="true"]')) return;
-      if (target?.closest('dialog')) return;
+      if (document.querySelector('dialog[open]:modal, [data-modal-blocking="true"]')) return;
+      if (target?.closest('dialog, [data-modal-open="true"]')) return;
 
       if (isMod && e.key.toLowerCase() === 'z' && !inInput) {
         e.preventDefault();
@@ -2786,8 +2786,8 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         target?.tagName === 'TEXTAREA' ||
         target?.tagName === 'SELECT';
       if (inInput || inlineEdit) return;
-      if (document.querySelector('dialog[open]:modal, dialog[open][data-modal-blocking="true"]')) return;
-      if (target?.closest('dialog')) return;
+      if (document.querySelector('dialog[open]:modal, [data-modal-blocking="true"]')) return;
+      if (target?.closest('dialog, [data-modal-open="true"]')) return;
       if (!selectedCoord && selectedTargets.length === 0) return;
 
       const text = e.clipboardData?.getData('text/plain') || lastCopiedTextRef.current || '';

@@ -280,7 +280,8 @@ export const Modal: React.FC<ModalProps> = ({
   const [floatingRect, setFloatingRect] = useState<FloatingRect | null>(null);
   const canDockRight = !isNested && (device.isDesktop || device.isTabletLandscape);
   const dockedRight = canDockRight && globalDockedRight;
-  // On touch / iPadOS standalone PWA, avoid native showModal() top-layer which can suppress the virtual keyboard for <input>s
+  // On touch / iPadOS standalone PWA, render a standard <div> dialog (never native <dialog>) to avoid WebKit virtual-keyboard bugs
+  const useTouchDivDialog = device.isTouch;
   const useTouchPortalOverlay = device.isTouch && !dockedRight;
   const dockWidth = device.isTabletLandscape
     ? Math.min(clampDockWidth(globalDockWidth), Math.max(300, Math.floor(device.viewportWidth * 0.48)))
@@ -341,8 +342,12 @@ export const Modal: React.FC<ModalProps> = ({
     setBlockingTouchModal(dockId, false);
   }, [open, useTouchPortalOverlay, dockId, setBlockingTouchModal]);
 
-  // Manage native <dialog> opening in modal vs non-modal mode
+  // Manage native <dialog> opening in modal vs non-modal mode (desktop only)
   useLayoutEffect(() => {
+    if (useTouchDivDialog) {
+      currentModeRef.current = null;
+      return;
+    }
     const dialog = ref.current;
     if (!dialog) return;
 
@@ -355,8 +360,7 @@ export const Modal: React.FC<ModalProps> = ({
       return;
     }
 
-    const desired: 'modal' | 'non-modal' =
-      dockedRight || useTouchPortalOverlay ? 'non-modal' : 'modal';
+    const desired: 'modal' | 'non-modal' = dockedRight ? 'non-modal' : 'modal';
     if (dialog.open && currentModeRef.current !== desired) {
       skipCloseCountRef.current += 1;
       dialog.close();
@@ -370,17 +374,18 @@ export const Modal: React.FC<ModalProps> = ({
       }
       currentModeRef.current = desired;
     }
-  }, [open, dockedRight, useTouchPortalOverlay]);
+  }, [open, dockedRight, useTouchDivDialog]);
 
   // Support Escape key dismissal in touch portal overlay mode (respecting topmost stacked/nested dialog)
   useEffect(() => {
     if (!open || !useTouchPortalOverlay) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      const blockingDialogs = document.querySelectorAll(
-        'dialog[open][data-modal-blocking="true"]'
-      );
-      if (blockingDialogs.length > 0 && blockingDialogs[blockingDialogs.length - 1] !== ref.current) {
+      const blockingDialogs = document.querySelectorAll('[data-modal-blocking="true"]');
+      if (
+        blockingDialogs.length > 0 &&
+        blockingDialogs[blockingDialogs.length - 1].getAttribute('data-modal-id') !== dockId
+      ) {
         return;
       }
       e.preventDefault();
@@ -388,7 +393,7 @@ export const Modal: React.FC<ModalProps> = ({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, useTouchPortalOverlay]);
+  }, [open, useTouchPortalOverlay, dockId]);
 
   // Fallback light-dismiss for desktop browsers without `closedBy` in HTMLDialogElement (only in floating modal mode)
   useEffect(() => {
@@ -645,19 +650,15 @@ export const Modal: React.FC<ModalProps> = ({
       ? isMobileSheet
         ? {
             position: 'relative',
-            inset: 'auto',
             width: '100dvw',
             maxWidth: '100dvw',
-            maxHeight: `${Math.max(260, Math.min(Math.round(device.viewportHeight * 0.92), device.visualViewportHeight - 12))}px`,
+            maxHeight: '92dvh',
             margin: 0,
           }
         : {
             position: 'relative',
-            inset: 'auto',
             maxWidth: `${maxVisibleFloatingW}px`,
-            maxHeight: isTabletPortraitSheet
-              ? `${Math.max(280, Math.min(Math.round(device.viewportHeight * 0.88), device.visualViewportHeight - 16))}px`
-              : `${maxVisibleFloatingH}px`,
+            maxHeight: isTabletPortraitSheet ? '88dvh' : '90dvh',
             margin: 0,
           }
       : isMobileSheet
@@ -695,53 +696,24 @@ export const Modal: React.FC<ModalProps> = ({
                 margin: 'auto',
               };
 
-  const dialogNode = (
-    <dialog
-      ref={ref}
-      {...(!dockedRight && !useTouchPortalOverlay && closedBy === 'any'
-        ? ({ closedby: 'any' } as Record<string, string>)
-        : !dockedRight && !useTouchPortalOverlay
-          ? ({ closedby: 'closerequest' } as Record<string, string>)
-          : {})}
-      aria-labelledby={titleId}
-      aria-modal={!dockedRight ? true : undefined}
-      data-modal-blocking={!dockedRight ? 'true' : undefined}
-      data-modal-layout={
-        dockedRight
-          ? 'docked-right'
-          : isMobileSheet
-            ? 'mobile-sheet'
-            : isTabletPortraitSheet
-              ? 'tablet-sheet'
-              : 'floating'
-      }
-      onCancel={(e) => {
-        if (dockedRight || useTouchPortalOverlay) {
-          e.preventDefault();
-        }
-      }}
-      onClose={(e) => {
-        const d = e.currentTarget;
-        d.returnValue = '';
-        if (skipCloseCountRef.current > 0) {
-          skipCloseCountRef.current -= 1;
-          return;
-        }
-        // If dialog was already re-opened (e.g. transitioning modal <-> docked), ignore stale close
-        if (d.open) return;
-        onClose();
-      }}
-      style={dialogStyle}
-      className={
-        dockedRight
-          ? 'bg-white text-slate-900 border-0 border-l border-slate-300 shadow-2xl p-0 rounded-none overflow-visible'
-          : isMobileSheet
-            ? 'bg-white text-slate-900 border-t border-slate-200 shadow-2xl p-0 rounded-t-2xl rounded-b-none overflow-hidden'
-            : isTabletPortraitSheet
-              ? `w-[min(92dvw,640px)] ${useTouchPortalOverlay ? '' : 'm-auto'} rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 overflow-hidden`
-              : `${floatingRect ? '' : `${maxWidthClass} ${useTouchPortalOverlay ? '' : 'm-auto'}`} rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 overflow-hidden`
-      }
-    >
+  const dialogClassName = dockedRight
+    ? 'bg-white text-slate-900 border-0 border-l border-slate-300 shadow-2xl p-0 rounded-none overflow-visible'
+    : isMobileSheet
+      ? 'bg-white text-slate-900 border-t border-slate-200 shadow-2xl p-0 rounded-t-2xl rounded-b-none overflow-hidden'
+      : isTabletPortraitSheet
+        ? `w-[min(92dvw,640px)] ${useTouchPortalOverlay ? '' : 'm-auto'} rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 overflow-hidden`
+        : `${floatingRect ? '' : `${maxWidthClass} ${useTouchPortalOverlay ? '' : 'm-auto'}`} rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 overflow-hidden`;
+
+  const dialogLayoutName = dockedRight
+    ? 'docked-right'
+    : isMobileSheet
+      ? 'mobile-sheet'
+      : isTabletPortraitSheet
+        ? 'tablet-sheet'
+        : 'floating';
+
+  const modalInnerContent = (
+    <>
       {/* Accessibility live status region */}
       <div className="sr-only" aria-live="polite">
         {liveAnnouncement}
@@ -990,42 +962,94 @@ export const Modal: React.FC<ModalProps> = ({
           </div>
         )}
       </div>
-    </dialog>
+    </>
   );
 
-  if (useTouchPortalOverlay && typeof document !== 'undefined') {
-    return createPortal(
+  if (useTouchDivDialog) {
+    const touchPanel = (
       <div
-        data-modal-touch-backdrop="true"
-        onPointerDown={(e) => {
-          if (closedBy !== 'any') return;
-          pressedOutsideRef.current = e.target === e.currentTarget;
-        }}
-        onPointerUp={(e) => {
-          if (closedBy !== 'any') return;
-          if (pressedOutsideRef.current && e.target === e.currentTarget) {
-            onCloseRef.current();
-          }
-          pressedOutsideRef.current = false;
-        }}
-        style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          height:
-            device.visualViewportHeight > 0 ? `${device.visualViewportHeight}px` : '100dvh',
-          zIndex: isNested ? 80 : 70,
-        }}
-        className={`bg-slate-900/40 backdrop-blur-[2px] flex overscroll-contain ${
-          isMobileSheet ? 'items-end justify-center p-0' : 'items-center justify-center p-2 sm:p-4'
-        }`}
+        role="dialog"
+        aria-labelledby={titleId}
+        aria-modal={!dockedRight ? true : undefined}
+        data-modal-open="true"
+        data-modal-id={dockId}
+        data-modal-blocking={!dockedRight ? 'true' : undefined}
+        data-modal-layout={dialogLayoutName}
+        style={dialogStyle}
+        className={dialogClassName}
       >
-        {dialogNode}
-      </div>,
-      document.body
+        {modalInnerContent}
+      </div>
     );
+
+    if (useTouchPortalOverlay && typeof document !== 'undefined') {
+      return createPortal(
+        <div
+          data-modal-touch-backdrop="true"
+          onPointerDown={(e) => {
+            if (closedBy !== 'any') return;
+            pressedOutsideRef.current = e.target === e.currentTarget;
+          }}
+          onPointerUp={(e) => {
+            if (closedBy !== 'any') return;
+            if (pressedOutsideRef.current && e.target === e.currentTarget) {
+              onCloseRef.current();
+            }
+            pressedOutsideRef.current = false;
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: isNested ? 80 : 70,
+          }}
+          className={`bg-slate-900/40 backdrop-blur-[2px] flex overflow-y-auto overscroll-contain ${
+            isMobileSheet
+              ? 'items-end justify-center p-0'
+              : 'items-center justify-center p-2 sm:p-4'
+          }`}
+        >
+          {touchPanel}
+        </div>,
+        document.body
+      );
+    }
+
+    return touchPanel;
   }
 
-  return dialogNode;
+  return (
+    <dialog
+      ref={ref}
+      {...(!dockedRight && closedBy === 'any'
+        ? ({ closedby: 'any' } as Record<string, string>)
+        : !dockedRight
+          ? ({ closedby: 'closerequest' } as Record<string, string>)
+          : {})}
+      aria-labelledby={titleId}
+      data-modal-open="true"
+      data-modal-id={dockId}
+      data-modal-blocking={!dockedRight ? 'true' : undefined}
+      data-modal-layout={dialogLayoutName}
+      onCancel={(e) => {
+        if (dockedRight) {
+          e.preventDefault();
+        }
+      }}
+      onClose={(e) => {
+        const d = e.currentTarget;
+        d.returnValue = '';
+        if (skipCloseCountRef.current > 0) {
+          skipCloseCountRef.current -= 1;
+          return;
+        }
+        // If dialog was already re-opened (e.g. transitioning modal <-> docked), ignore stale close
+        if (d.open) return;
+        onClose();
+      }}
+      style={dialogStyle}
+      className={dialogClassName}
+    >
+      {modalInnerContent}
+    </dialog>
+  );
 };
