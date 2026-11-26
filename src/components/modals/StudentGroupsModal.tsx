@@ -506,10 +506,13 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   type="text"
+                  inputMode="search"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Buscar alumno..."
-                  className="w-full pl-8 pr-2.5 py-1.5 rounded-xl border border-slate-200 bg-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  className={`w-full pl-8 pr-2.5 py-1.5 rounded-xl border border-slate-200 bg-white select-text focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
+                    device.isTouch ? 'text-base' : 'text-xs'
+                  }`}
                 />
               </div>
               <button

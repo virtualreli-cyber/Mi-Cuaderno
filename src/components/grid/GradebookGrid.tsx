@@ -2464,7 +2464,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         target?.tagName === 'TEXTAREA' ||
         target?.tagName === 'SELECT';
 
-      if (document.querySelector('dialog[open]:modal')) return;
+      if (document.querySelector('dialog[open]:modal, dialog[open][data-modal-blocking="true"]')) return;
       if (target?.closest('dialog')) return;
 
       if (isMod && e.key.toLowerCase() === 'z' && !inInput) {
@@ -2786,7 +2786,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
         target?.tagName === 'TEXTAREA' ||
         target?.tagName === 'SELECT';
       if (inInput || inlineEdit) return;
-      if (document.querySelector('dialog[open]:modal')) return;
+      if (document.querySelector('dialog[open]:modal, dialog[open][data-modal-blocking="true"]')) return;
       if (target?.closest('dialog')) return;
       if (!selectedCoord && selectedTargets.length === 0) return;
 
@@ -5441,6 +5441,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                               type="button"
                               onMouseDown={(e) => e.preventDefault()}
                               onPointerDown={(e) => e.preventDefault()}
+                              onTouchStart={(e) => e.stopPropagation()}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 const nextName = editingGroup.draft.trim();
@@ -5464,6 +5465,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                               type="button"
                               onMouseDown={(e) => e.preventDefault()}
                               onPointerDown={(e) => e.preventDefault()}
+                              onTouchStart={(e) => e.stopPropagation()}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setEditingGroup(null);

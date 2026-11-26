@@ -9,6 +9,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
   GripHorizontal,
   Maximize2,
@@ -57,22 +58,26 @@ function saveDockPrefs(prefs: ModalDockPrefs): void {
 
 interface ModalDockContextValue {
   dockedWidth: number;
+  hasBlockingTouchModal: boolean;
   globalDockedRight: boolean;
   globalDockWidth: number;
   setGlobalDockedRight: (docked: boolean) => void;
   setGlobalDockWidth: (width: number) => void;
   setDockEntry: (id: string, width: number | null) => void;
+  setBlockingTouchModal: (id: string, blocking: boolean) => void;
   claimActiveModal: (id: string, onClose: () => void) => void;
   releaseActiveModal: (id: string) => void;
 }
 
 const ModalDockContext = createContext<ModalDockContextValue>({
   dockedWidth: 0,
+  hasBlockingTouchModal: false,
   globalDockedRight: false,
   globalDockWidth: 450,
   setGlobalDockedRight: () => {},
   setGlobalDockWidth: () => {},
   setDockEntry: () => {},
+  setBlockingTouchModal: () => {},
   claimActiveModal: () => {},
   releaseActiveModal: () => {},
 });
@@ -83,6 +88,7 @@ export const ModalDockProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     initialPrefs.current = loadDockPrefs();
   }
   const [entries, setEntries] = useState<Record<string, number>>({});
+  const [blockingTouchEntries, setBlockingTouchEntries] = useState<Record<string, true>>({});
   const [globalDockedRight, setGlobalDockedRightState] = useState<boolean>(
     initialPrefs.current.dockedRight
   );
@@ -131,29 +137,48 @@ export const ModalDockProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     });
   }, []);
 
+  const setBlockingTouchModal = useCallback((id: string, blocking: boolean) => {
+    setBlockingTouchEntries((prev) => {
+      if (!blocking) {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      }
+      if (prev[id]) return prev;
+      return { ...prev, [id]: true };
+    });
+  }, []);
+
   const dockedWidth = useMemo(() => {
     const vals = Object.values(entries);
     return vals.length > 0 ? Math.max(...vals) : 0;
   }, [entries]);
 
+  const hasBlockingTouchModal = Object.keys(blockingTouchEntries).length > 0;
+
   const value = useMemo(
     () => ({
       dockedWidth,
+      hasBlockingTouchModal,
       globalDockedRight,
       globalDockWidth,
       setGlobalDockedRight,
       setGlobalDockWidth,
       setDockEntry,
+      setBlockingTouchModal,
       claimActiveModal,
       releaseActiveModal,
     }),
     [
       dockedWidth,
+      hasBlockingTouchModal,
       globalDockedRight,
       globalDockWidth,
       setGlobalDockedRight,
       setGlobalDockWidth,
       setDockEntry,
+      setBlockingTouchModal,
       claimActiveModal,
       releaseActiveModal,
     ]
@@ -164,6 +189,10 @@ export const ModalDockProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
 export function useModalDockWidth(): number {
   return useContext(ModalDockContext).dockedWidth;
+}
+
+export function useHasBlockingTouchModal(): boolean {
+  return useContext(ModalDockContext).hasBlockingTouchModal;
 }
 
 interface FloatingRect {
@@ -238,6 +267,7 @@ export const Modal: React.FC<ModalProps> = ({
     setGlobalDockedRight,
     setGlobalDockWidth,
     setDockEntry,
+    setBlockingTouchModal,
     claimActiveModal,
     releaseActiveModal,
   } = useContext(ModalDockContext);
@@ -250,6 +280,8 @@ export const Modal: React.FC<ModalProps> = ({
   const [floatingRect, setFloatingRect] = useState<FloatingRect | null>(null);
   const canDockRight = !isNested && (device.isDesktop || device.isTabletLandscape);
   const dockedRight = canDockRight && globalDockedRight;
+  // On touch / iPadOS standalone PWA, avoid native showModal() top-layer which can suppress the virtual keyboard for <input>s
+  const useTouchPortalOverlay = device.isTouch && !dockedRight;
   const dockWidth = device.isTabletLandscape
     ? Math.min(clampDockWidth(globalDockWidth), Math.max(300, Math.floor(device.viewportWidth * 0.48)))
     : clampDockWidth(globalDockWidth);
@@ -300,6 +332,15 @@ export const Modal: React.FC<ModalProps> = ({
     return () => setDockEntry(dockId, null);
   }, [open, dockedRight, dockWidth, dockId, setDockEntry]);
 
+  // Mark underlying app shell inert while a touch portal blocking modal is open
+  useLayoutEffect(() => {
+    if (open && useTouchPortalOverlay) {
+      setBlockingTouchModal(dockId, true);
+      return () => setBlockingTouchModal(dockId, false);
+    }
+    setBlockingTouchModal(dockId, false);
+  }, [open, useTouchPortalOverlay, dockId, setBlockingTouchModal]);
+
   // Manage native <dialog> opening in modal vs non-modal mode
   useLayoutEffect(() => {
     const dialog = ref.current;
@@ -314,7 +355,8 @@ export const Modal: React.FC<ModalProps> = ({
       return;
     }
 
-    const desired: 'modal' | 'non-modal' = dockedRight ? 'non-modal' : 'modal';
+    const desired: 'modal' | 'non-modal' =
+      dockedRight || useTouchPortalOverlay ? 'non-modal' : 'modal';
     if (dialog.open && currentModeRef.current !== desired) {
       skipCloseCountRef.current += 1;
       dialog.close();
@@ -328,12 +370,30 @@ export const Modal: React.FC<ModalProps> = ({
       }
       currentModeRef.current = desired;
     }
-  }, [open, dockedRight]);
+  }, [open, dockedRight, useTouchPortalOverlay]);
 
-  // Fallback light-dismiss for browsers without `closedBy` in HTMLDialogElement (only in floating modal mode)
+  // Support Escape key dismissal in touch portal overlay mode (respecting topmost stacked/nested dialog)
+  useEffect(() => {
+    if (!open || !useTouchPortalOverlay) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const blockingDialogs = document.querySelectorAll(
+        'dialog[open][data-modal-blocking="true"]'
+      );
+      if (blockingDialogs.length > 0 && blockingDialogs[blockingDialogs.length - 1] !== ref.current) {
+        return;
+      }
+      e.preventDefault();
+      onCloseRef.current();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, useTouchPortalOverlay]);
+
+  // Fallback light-dismiss for desktop browsers without `closedBy` in HTMLDialogElement (only in floating modal mode)
   useEffect(() => {
     const dialog = ref.current;
-    if (!dialog || !open || dockedRight || closedBy !== 'any') return;
+    if (!dialog || !open || dockedRight || useTouchPortalOverlay || closedBy !== 'any') return;
     if ('closedBy' in HTMLDialogElement.prototype) return;
 
     const isOutside = (e: PointerEvent) => {
@@ -581,50 +641,71 @@ export const Modal: React.FC<ModalProps> = ({
         margin: 0,
         zIndex: 45,
       }
-    : isMobileSheet
-      ? {
-          position: 'fixed',
-          left: 0,
-          right: 0,
-          bottom: 0,
-          top: 'auto',
-          width: '100dvw',
-          maxWidth: '100dvw',
-          maxHeight: `${Math.max(300, Math.min(Math.round(device.viewportHeight * 0.92), device.visualViewportHeight - 12))}px`,
-          margin: 0,
-        }
-      : isTabletPortraitSheet
+    : useTouchPortalOverlay
+      ? isMobileSheet
         ? {
-            maxWidth: `${maxVisibleFloatingW}px`,
-            maxHeight: `${Math.max(320, Math.min(Math.round(device.viewportHeight * 0.88), device.visualViewportHeight - 16))}px`,
-            margin: 'auto',
+            position: 'relative',
+            inset: 'auto',
+            width: '100dvw',
+            maxWidth: '100dvw',
+            maxHeight: `${Math.max(260, Math.min(Math.round(device.viewportHeight * 0.92), device.visualViewportHeight - 12))}px`,
+            margin: 0,
           }
-        : floatingRect
+        : {
+            position: 'relative',
+            inset: 'auto',
+            maxWidth: `${maxVisibleFloatingW}px`,
+            maxHeight: isTabletPortraitSheet
+              ? `${Math.max(280, Math.min(Math.round(device.viewportHeight * 0.88), device.visualViewportHeight - 16))}px`
+              : `${maxVisibleFloatingH}px`,
+            margin: 0,
+          }
+      : isMobileSheet
+        ? {
+            position: 'fixed',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            top: 'auto',
+            width: '100dvw',
+            maxWidth: '100dvw',
+            maxHeight: `${Math.max(300, Math.min(Math.round(device.viewportHeight * 0.92), device.visualViewportHeight - 12))}px`,
+            margin: 0,
+          }
+        : isTabletPortraitSheet
           ? {
-              position: 'fixed',
-              left: floatingRect.x,
-              top: floatingRect.y,
-              width: floatingRect.width,
-              height: floatingRect.height,
               maxWidth: `${maxVisibleFloatingW}px`,
-              maxHeight: `${maxVisibleFloatingH}px`,
-              margin: 0,
-            }
-          : {
-              maxWidth: `${maxVisibleFloatingW}px`,
-              maxHeight: `${maxVisibleFloatingH}px`,
+              maxHeight: `${Math.max(320, Math.min(Math.round(device.viewportHeight * 0.88), device.visualViewportHeight - 16))}px`,
               margin: 'auto',
-            };
+            }
+          : floatingRect
+            ? {
+                position: 'fixed',
+                left: floatingRect.x,
+                top: floatingRect.y,
+                width: floatingRect.width,
+                height: floatingRect.height,
+                maxWidth: `${maxVisibleFloatingW}px`,
+                maxHeight: `${maxVisibleFloatingH}px`,
+                margin: 0,
+              }
+            : {
+                maxWidth: `${maxVisibleFloatingW}px`,
+                maxHeight: `${maxVisibleFloatingH}px`,
+                margin: 'auto',
+              };
 
-  return (
+  const dialogNode = (
     <dialog
       ref={ref}
-      {...(!dockedRight && closedBy === 'any'
+      {...(!dockedRight && !useTouchPortalOverlay && closedBy === 'any'
         ? ({ closedby: 'any' } as Record<string, string>)
-        : !dockedRight
+        : !dockedRight && !useTouchPortalOverlay
           ? ({ closedby: 'closerequest' } as Record<string, string>)
           : {})}
       aria-labelledby={titleId}
+      aria-modal={!dockedRight ? true : undefined}
+      data-modal-blocking={!dockedRight ? 'true' : undefined}
       data-modal-layout={
         dockedRight
           ? 'docked-right'
@@ -635,7 +716,7 @@ export const Modal: React.FC<ModalProps> = ({
               : 'floating'
       }
       onCancel={(e) => {
-        if (dockedRight) {
+        if (dockedRight || useTouchPortalOverlay) {
           e.preventDefault();
         }
       }}
@@ -657,8 +738,8 @@ export const Modal: React.FC<ModalProps> = ({
           : isMobileSheet
             ? 'bg-white text-slate-900 border-t border-slate-200 shadow-2xl p-0 rounded-t-2xl rounded-b-none overflow-hidden'
             : isTabletPortraitSheet
-              ? 'w-[min(92dvw,640px)] m-auto rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 overflow-hidden'
-              : `${floatingRect ? '' : `${maxWidthClass} m-auto`} rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 overflow-hidden`
+              ? `w-[min(92dvw,640px)] ${useTouchPortalOverlay ? '' : 'm-auto'} rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 overflow-hidden`
+              : `${floatingRect ? '' : `${maxWidthClass} ${useTouchPortalOverlay ? '' : 'm-auto'}`} rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 overflow-hidden`
       }
     >
       {/* Accessibility live status region */}
@@ -911,4 +992,40 @@ export const Modal: React.FC<ModalProps> = ({
       </div>
     </dialog>
   );
+
+  if (useTouchPortalOverlay && typeof document !== 'undefined') {
+    return createPortal(
+      <div
+        data-modal-touch-backdrop="true"
+        onPointerDown={(e) => {
+          if (closedBy !== 'any') return;
+          pressedOutsideRef.current = e.target === e.currentTarget;
+        }}
+        onPointerUp={(e) => {
+          if (closedBy !== 'any') return;
+          if (pressedOutsideRef.current && e.target === e.currentTarget) {
+            onCloseRef.current();
+          }
+          pressedOutsideRef.current = false;
+        }}
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          height:
+            device.visualViewportHeight > 0 ? `${device.visualViewportHeight}px` : '100dvh',
+          zIndex: isNested ? 80 : 70,
+        }}
+        className={`bg-slate-900/40 backdrop-blur-[2px] flex overscroll-contain ${
+          isMobileSheet ? 'items-end justify-center p-0' : 'items-center justify-center p-2 sm:p-4'
+        }`}
+      >
+        {dialogNode}
+      </div>,
+      document.body
+    );
+  }
+
+  return dialogNode;
 };

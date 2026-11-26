@@ -188,19 +188,15 @@ dialog::backdrop {
 
 /* Touch-only ergonomic upgrades (strictly gated on pointer: coarse / hover: none — desktop untouched!) */
 @media (pointer: coarse), (hover: none) {
-  /* Prevent full-app double-tap & pinch zoom on iPad/mobile while preserving native 1-finger panning */
+  /* Prevent full-app double-tap & pinch zoom on shell without interfering with inputs or modal dialogs */
   html,
   body,
-  #root,
-  dialog {
+  #root {
     touch-action: pan-x pan-y;
   }
 
   button,
   a,
-  input,
-  select,
-  textarea,
   [role="button"] {
     touch-action: manipulation;
   }
@@ -218,11 +214,12 @@ dialog::backdrop {
     -webkit-touch-callout: none;
   }
 
-  /* Critical for iPadOS / iOS WebKit: never let a `user-select: none` ancestor block keyboard focus/typing in inputs */
+  /* Critical for iPadOS / iOS WebKit: keep native touch & text selection unrestricted on inputs so the virtual keyboard always opens */
   input,
   textarea,
   select,
   [contenteditable="true"] {
+    touch-action: auto !important;
     -webkit-user-select: text !important;
     user-select: text !important;
     -webkit-touch-callout: default !important;

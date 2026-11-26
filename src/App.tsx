@@ -1,5 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ModalDockProvider, useModalDockWidth } from './components/common/Modal';
+import {
+  ModalDockProvider,
+  useHasBlockingTouchModal,
+  useModalDockWidth,
+} from './components/common/Modal';
 import { usePreventGlobalBrowserZoom } from './components/common/ZoomControls';
 import { GradebookGrid } from './components/grid/GradebookGrid';
 import { Sidebar } from './components/layout/Sidebar';
@@ -36,6 +40,7 @@ const CuadernoShell: React.FC = () => {
   const device = useDeviceProfile();
   const { activeBook, activeTab } = useGradebook();
   const dockedWidth = useModalDockWidth();
+  const hasBlockingTouchModal = useHasBlockingTouchModal();
   const [searchQuery, setSearchQuery] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -123,8 +128,13 @@ const CuadernoShell: React.FC = () => {
       : null;
 
   return (
-    <div className="h-dvh w-dvw overflow-hidden flex flex-col bg-slate-50 text-slate-900">
-      <TopBar
+    <>
+      <div
+        inert={hasBlockingTouchModal || undefined}
+        aria-hidden={hasBlockingTouchModal || undefined}
+        className="h-dvh w-dvw overflow-hidden flex flex-col bg-slate-50 text-slate-900"
+      >
+        <TopBar
         searchQuery={searchQuery}
         onChangeSearch={setSearchQuery}
         drawerOpen={drawerOpen}
@@ -193,6 +203,7 @@ const CuadernoShell: React.FC = () => {
             />
           </main>
         </div>
+      </div>
       </div>
 
       {/* Modals */}
@@ -296,7 +307,7 @@ const CuadernoShell: React.FC = () => {
         onClose={() => setShowViewModal(false)}
         onOpenBackup={() => setShowBackupModal(true)}
       />
-    </div>
+    </>
   );
 };
 

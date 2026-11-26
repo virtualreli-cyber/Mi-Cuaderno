@@ -96,7 +96,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
       if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing || e.keyCode === 229) return;
       const dialogEl = formRef.current?.closest('dialog');
       if (!dialogEl) return;
-      const isModal = dialogEl.matches(':modal');
+      const isModal = dialogEl.matches(':modal') || dialogEl.dataset.modalBlocking === 'true';
       const active = document.activeElement;
       // When docked non-modal on the right, only capture keys if focus is inside this dialog
       if (!isModal && !dialogEl.contains(active)) return;
