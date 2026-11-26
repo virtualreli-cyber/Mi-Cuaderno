@@ -579,7 +579,7 @@ export const Modal: React.FC<ModalProps> = ({
         maxWidth: '100dvw',
         maxHeight: `calc(100dvh - ${TOPBAR_HEIGHT}px)`,
         margin: 0,
-        zIndex: 35,
+        zIndex: 45,
       }
     : isMobileSheet
       ? {

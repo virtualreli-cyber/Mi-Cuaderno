@@ -5366,37 +5366,39 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
                         {/* Center & right area: inline rename on double-click / double-tap */}
                         {editingGroup?.key === bucket.key ? (
-                          <input
-                            type="text"
-                            autoFocus
-                            value={editingGroup.draft}
-                            aria-label={`Nuevo nombre para el grupo ${bucket.name}`}
+                          <div
                             onMouseDown={(e) => e.stopPropagation()}
                             onPointerDown={(e) => e.stopPropagation()}
+                            onTouchStart={(e) => e.stopPropagation()}
+                            onTouchEnd={(e) => e.stopPropagation()}
                             onClick={(e) => e.stopPropagation()}
                             onDoubleClick={(e) => e.stopPropagation()}
-                            onFocus={(e) => e.currentTarget.select()}
-                            onChange={(e) =>
-                              setEditingGroup((prev) =>
-                                prev ? { ...prev, draft: e.target.value } : null
-                              )
-                            }
-                            onBlur={() => {
-                              const nextName = editingGroup.draft.trim();
-                              if (nextName && nextName !== editingGroup.originalName) {
-                                upsertStudentGroup(
-                                  nextName,
-                                  editingGroup.color,
-                                  editingGroup.originalName
-                                );
-                                showCopyToast(`Grupo renombrado a "${nextName}"`);
+                            className="flex-1 min-w-0 flex items-center gap-1 select-text"
+                          >
+                            <input
+                              type="text"
+                              autoFocus={!device.isTouch}
+                              inputMode="text"
+                              enterKeyHint="done"
+                              value={editingGroup.draft}
+                              aria-label={`Nuevo nombre para el grupo ${bucket.name}`}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onTouchStart={(e) => e.stopPropagation()}
+                              onTouchEnd={(e) => e.stopPropagation()}
+                              onClick={(e) => e.stopPropagation()}
+                              onDoubleClick={(e) => e.stopPropagation()}
+                              onFocus={(e) => {
+                                if (!device.isTouch) {
+                                  e.currentTarget.select();
+                                }
+                              }}
+                              onChange={(e) =>
+                                setEditingGroup((prev) =>
+                                  prev ? { ...prev, draft: e.target.value } : null
+                                )
                               }
-                              setEditingGroup(null);
-                            }}
-                            onKeyDown={(e) => {
-                              e.stopPropagation();
-                              if (e.key === 'Enter') {
-                                e.preventDefault();
+                              onBlur={() => {
                                 const nextName = editingGroup.draft.trim();
                                 if (nextName && nextName !== editingGroup.originalName) {
                                   upsertStudentGroup(
@@ -5407,13 +5409,69 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                                   showCopyToast(`Grupo renombrado a "${nextName}"`);
                                 }
                                 setEditingGroup(null);
-                              } else if (e.key === 'Escape') {
-                                e.preventDefault();
+                              }}
+                              onKeyDown={(e) => {
+                                e.stopPropagation();
+                                if (e.key === 'Enter') {
+                                  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                                  e.preventDefault();
+                                  const nextName = editingGroup.draft.trim();
+                                  if (nextName && nextName !== editingGroup.originalName) {
+                                    upsertStudentGroup(
+                                      nextName,
+                                      editingGroup.color,
+                                      editingGroup.originalName
+                                    );
+                                    showCopyToast(`Grupo renombrado a "${nextName}"`);
+                                  }
+                                  setEditingGroup(null);
+                                } else if (e.key === 'Escape') {
+                                  e.preventDefault();
+                                  setEditingGroup(null);
+                                }
+                              }}
+                              className={`flex-1 min-w-0 select-text rounded-lg border border-blue-500 bg-white text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/30 ${
+                                device.isTouch ? 'px-2.5 py-1 text-[14px]' : 'px-2 py-0.5 text-[0.95em]'
+                              }`}
+                            />
+                            <button
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onPointerDown={(e) => e.preventDefault()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const nextName = editingGroup.draft.trim();
+                                if (nextName && nextName !== editingGroup.originalName) {
+                                  upsertStudentGroup(
+                                    nextName,
+                                    editingGroup.color,
+                                    editingGroup.originalName
+                                  );
+                                  showCopyToast(`Grupo renombrado a "${nextName}"`);
+                                }
                                 setEditingGroup(null);
-                              }
-                            }}
-                            className="flex-1 min-w-0 px-2 py-0.5 rounded-lg border border-blue-500 bg-white text-slate-900 font-bold text-[0.95em] focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-                          />
+                              }}
+                              title="Guardar nombre del grupo"
+                              aria-label="Guardar nombre del grupo"
+                              className="p-1 rounded-lg bg-blue-600 text-white hover:bg-blue-700 shrink-0"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onPointerDown={(e) => e.preventDefault()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingGroup(null);
+                              }}
+                              title="Cancelar"
+                              aria-label="Cancelar edición"
+                              className="p-1 rounded-lg bg-white border border-slate-300 text-slate-600 hover:bg-slate-100 shrink-0"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         ) : (
                           <div
                             data-group-rename-area={bucket.key}

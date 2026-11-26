@@ -51,6 +51,8 @@ export const InlineNotesTextarea: React.FC<InlineNotesTextareaProps> = ({
       style={style}
       onMouseDown={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
+      onTouchEnd={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       onFocus={() => {
         isFocusedRef.current = true;
@@ -85,7 +87,7 @@ export const InlineNotesTextarea: React.FC<InlineNotesTextareaProps> = ({
           e.currentTarget.blur();
         }
       }}
-      className={`w-full h-full resize-none overflow-y-auto bg-transparent focus:bg-white/95 rounded-lg px-1.5 py-1 leading-snug focus:outline-none focus:ring-2 focus:ring-amber-400/70 transition-colors ${className}`}
+      className={`w-full h-full select-text resize-none overflow-y-auto bg-transparent focus:bg-white/95 rounded-lg px-1.5 py-1 leading-snug focus:outline-none focus:ring-2 focus:ring-amber-400/70 transition-colors ${className}`}
     />
   );
 };

@@ -23,6 +23,15 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Ensure form controls always allow text selection & virtual keyboard focus inside any `select-none` ancestor on WebKit */
+input,
+textarea,
+select,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 /* Prevent scroll chaining behind native modal dialogs */
 dialog:modal {
   overscroll-behavior: contain;
@@ -207,6 +216,16 @@ dialog::backdrop {
   .gradebook-touch-surface th {
     touch-action: manipulation;
     -webkit-touch-callout: none;
+  }
+
+  /* Critical for iPadOS / iOS WebKit: never let a `user-select: none` ancestor block keyboard focus/typing in inputs */
+  input,
+  textarea,
+  select,
+  [contenteditable="true"] {
+    -webkit-user-select: text !important;
+    user-select: text !important;
+    -webkit-touch-callout: default !important;
   }
 
   .touch-zoom-pill {

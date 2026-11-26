@@ -255,14 +255,17 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                       if (renameCatDraft.trim()) renameGroupCategory(cat.id, renameCatDraft.trim());
                       setRenamingCatId(null);
                     }}
-                    className="inline-flex items-center gap-1 bg-white rounded-xl px-1.5 py-0.5 border border-indigo-400"
+                    className="inline-flex items-center gap-1 bg-white rounded-xl px-2 py-1 border border-indigo-400"
                   >
                     <input
                       type="text"
                       autoFocus
                       value={renameCatDraft}
                       onChange={(e) => setRenameCatDraft(e.target.value)}
-                      className="w-32 text-xs font-semibold text-slate-900 focus:outline-none"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onTouchStart={(e) => e.stopPropagation()}
+                      aria-label="Nombre de la categoría"
+                      className="w-36 min-h-[28px] select-text text-sm sm:text-xs font-semibold text-slate-900 bg-transparent focus:outline-none"
                     />
                     <button
                       type="submit"
@@ -337,15 +340,18 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
             {creatingCat ? (
               <form
                 onSubmit={handleCreateCategory}
-                className="inline-flex items-center gap-1 bg-white rounded-xl px-2 py-0.5 border border-indigo-400"
+                className="inline-flex items-center gap-1.5 bg-white rounded-xl px-2 py-1 border border-indigo-400"
               >
                 <input
                   type="text"
                   autoFocus
                   value={newCatName}
                   onChange={(e) => setNewCatName(e.target.value)}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
                   placeholder="Ej: Proyecto, Mesas..."
-                  className="w-36 text-xs text-slate-900 focus:outline-none"
+                  aria-label="Nueva categoría"
+                  className="w-40 min-h-[28px] select-text text-sm sm:text-xs text-slate-900 bg-transparent focus:outline-none"
                 />
                 <button
                   type="submit"
@@ -580,12 +586,15 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                 type="text"
                 value={newGroupName}
                 onChange={(e) => setNewGroupName(e.target.value)}
+                onPointerDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
                 placeholder={
                   selectedCount > 0
                     ? `Crear grupo nuevo y meter a los ${selectedCount} seleccionados...`
                     : 'Nuevo grupo (ej: Grupo 1, Mesa A, Equipo Azul)...'
                 }
-                className="flex-1 min-w-[170px] border border-slate-300 rounded-xl px-2.5 py-1.5 bg-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/25"
+                aria-label="Nombre del nuevo grupo"
+                className="flex-1 min-w-[170px] min-h-[36px] select-text border border-slate-300 rounded-xl px-3 py-1.5 bg-white text-sm sm:text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/25"
               />
               <div className="flex items-center gap-1">
                 {GROUP_PASTEL_SWATCHES.slice(0, 6).map((sw) => (
@@ -696,6 +705,8 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                           <form
                             onSubmit={commitEditGroup}
                             onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onTouchStart={(e) => e.stopPropagation()}
                             className="flex-1 flex flex-wrap items-center gap-1.5"
                           >
                             <input
@@ -703,7 +714,10 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                               autoFocus
                               value={editNameDraft}
                               onChange={(e) => setEditNameDraft(e.target.value)}
-                              className="flex-1 min-w-[90px] bg-white border border-slate-300 rounded-lg px-2 py-0.5 text-xs font-bold text-slate-900"
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onTouchStart={(e) => e.stopPropagation()}
+                              aria-label="Editar nombre del grupo"
+                              className="flex-1 min-w-[110px] min-h-[34px] select-text bg-white border border-slate-300 rounded-lg px-2.5 py-1 text-sm sm:text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/25"
                             />
                             <div className="flex items-center gap-0.5">
                               {GROUP_PASTEL_SWATCHES.slice(0, 6).map((sw) => (
