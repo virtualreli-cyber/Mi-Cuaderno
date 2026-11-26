@@ -308,7 +308,6 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     applyCellsBatch,
     restoreOriginalGrades,
     setRubricCriterionForStudents,
-    toggleColumnRubricExpanded,
     clearCell,
     clearMultipleCells,
     fillEmptyGradesWithNP,
@@ -457,6 +456,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
   } | null>(null);
   const [batchAdjustState, setBatchAdjustState] = useState<BatchAdjustTargetState | null>(null);
   const [touchMultiSelect, setTouchMultiSelect] = useState(false);
+  const [expandedRubricIds, setExpandedRubricIds] = useState<Set<string>>(() => new Set());
+  const toggleRubricColumnExpanded = useCallback((columnId: string) => {
+    setExpandedRubricIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(columnId)) next.delete(columnId);
+      else next.add(columnId);
+      return next;
+    });
+  }, []);
   const [editingGroup, setEditingGroup] = useState<{
     key: string;
     originalName: string;
@@ -821,6 +829,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     setBatchAdjustState(null);
     setTouchMultiSelect(false);
     setEditingGroup(null);
+    setExpandedRubricIds(new Set());
   }, [activeBook?.id, activeTab?.id]);
 
   // Clear stale selectedColumnTarget if that column/folder was deleted & keep multi-column selection synced
@@ -1038,7 +1047,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     for (const item of topItems) {
       if (item.kind === 'COL') {
         visCols.push(item.col);
-        const rubric = item.col.rubricExpanded ? resolveColumnRubric(item.col) : null;
+        const rubric = expandedRubricIds.has(item.col.id) ? resolveColumnRubric(item.col) : null;
         if (rubric && rubric.criteria.length > 0) {
           const critWidth = CRIT_SUBCOL_WIDTH;
           const colSlot: DisplaySlot = {
@@ -1116,7 +1125,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
           childColSpan += 1;
           childWidthSum += c.width;
 
-          const childRubric = c.rubricExpanded ? resolveColumnRubric(c) : null;
+          const childRubric = expandedRubricIds.has(c.id) ? resolveColumnRubric(c) : null;
           if (childRubric && childRubric.criteria.length > 0) {
             expandedChildRubric = true;
             const critSlots = buildExpandedCriterionSlots(c, childRubric, true, folder);
@@ -1143,7 +1152,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
       row2Slots: r2,
       hasExpandedChildRubric: expandedChildRubric,
     };
-  }, [activeTab, resolveColumnRubric]);
+  }, [activeTab, resolveColumnRubric, expandedRubricIds]);
 
   // Helper to resolve drag payload safely from state or dataTransfer
   const readDragPayload = (e: React.DragEvent): DragItemPayload | null => {
@@ -3277,7 +3286,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     const isEducamosMenuOpen = educamosMenu?.colId === col.id;
     const colRubric = resolveColumnRubric(col);
     const canExpandRubric = Boolean(colRubric && colRubric.criteria.length > 0);
-    const isRubricExpanded = canExpandRubric && Boolean(col.rubricExpanded);
+    const isRubricExpanded = canExpandRubric && expandedRubricIds.has(col.id);
 
     return (
       <th
@@ -3561,7 +3570,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                       onDoubleClick={(e) => e.stopPropagation()}
                       onClick={(e) => {
                         e.stopPropagation();
-                        toggleColumnRubricExpanded(col.id);
+                        toggleRubricColumnExpanded(col.id);
                       }}
                       title={
                         isRubricExpanded
@@ -4325,7 +4334,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     onDoubleClick={(e) => {
                       if (justResizedRef.current) return;
                       e.stopPropagation();
-                      toggleColumnRubricExpanded(col.id);
+                      toggleRubricColumnExpanded(col.id);
                     }}
                     onContextMenu={(e) => {
                       if (justResizedRef.current) return;
@@ -4372,7 +4381,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          toggleColumnRubricExpanded(col.id);
+                          toggleRubricColumnExpanded(col.id);
                         }}
                         onDoubleClick={(e) => e.stopPropagation()}
                         title="Plegar subcolumnas de criterios"
@@ -4994,7 +5003,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
 
               // Expanded CHILD rubric inside an open folder renders its horizontal folder-style canopy in Row 2!
               const childExpandedRubric =
-                hasExpandedChildRubric && slot.isChild && slot.col.rubricExpanded
+                hasExpandedChildRubric && slot.isChild && expandedRubricIds.has(slot.col.id)
                   ? resolveColumnRubric(slot.col)
                   : null;
               if (childExpandedRubric && childExpandedRubric.criteria.length > 0) {
@@ -5020,7 +5029,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     onDoubleClick={(e) => {
                       if (justResizedRef.current) return;
                       e.stopPropagation();
-                      toggleColumnRubricExpanded(col.id);
+                      toggleRubricColumnExpanded(col.id);
                     }}
                     onContextMenu={(e) => {
                       if (justResizedRef.current) return;
@@ -5067,7 +5076,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          toggleColumnRubricExpanded(col.id);
+                          toggleRubricColumnExpanded(col.id);
                         }}
                         onDoubleClick={(e) => e.stopPropagation()}
                         title="Plegar subcolumnas de criterios"
@@ -5083,7 +5092,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               }
 
               const isStandaloneExpandedRubric =
-                !slot.isChild && slot.col.type === 'RUBRIC' && Boolean(slot.col.rubricExpanded);
+                !slot.isChild && slot.col.type === 'RUBRIC' && expandedRubricIds.has(slot.col.id);
               return renderColumnHeaderCell(
                 slot.col,
                 false,
@@ -5099,7 +5108,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               {row2Slots.map((slot) => {
                 if (slot.kind === 'FOLDER_SUMMARY') return null;
                 if (slot.kind === 'COL') {
-                  if (!slot.isChild || !slot.col.rubricExpanded) return null;
+                  if (!slot.isChild || !expandedRubricIds.has(slot.col.id)) return null;
                   const r = resolveColumnRubric(slot.col);
                   if (!r || r.criteria.length === 0) return null;
                   const subBodyBaseH = Math.max(36, baseHeaderH - subCanopyBaseH);
@@ -8488,15 +8497,15 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                 {col.type === 'RUBRIC' && colRubric && colRubric.criteria.length > 0 && (
                   <button
                     type="button"
-                    onClick={() => toggleColumnRubricExpanded(col.id)}
+                    onClick={() => toggleRubricColumnExpanded(col.id)}
                     className={`min-h-[38px] px-2.5 rounded-xl border flex items-center gap-1 shrink-0 ${
-                      col.rubricExpanded
+                      expandedRubricIds.has(col.id)
                         ? 'border-purple-700 bg-purple-600 text-white'
                         : 'border-purple-200 bg-purple-50 text-purple-900'
                     }`}
                   >
                     <LayoutGrid className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>{col.rubricExpanded ? 'Plegar criterios' : `Subcolumnas (${colRubric.criteria.length})`}</span>
+                    <span>{expandedRubricIds.has(col.id) ? 'Plegar criterios' : `Subcolumnas (${colRubric.criteria.length})`}</span>
                   </button>
                 )}
                 {col.type === 'RUBRIC' && effectiveGroups.length > 0 && firstGrpBucket && (
@@ -9785,16 +9794,16 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
               {col.type === 'RUBRIC' && colRubric && colRubric.criteria.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => toggleColumnRubricExpanded(col.id)}
+                  onClick={() => toggleRubricColumnExpanded(col.id)}
                   className={`px-2.5 py-1 rounded-xl border flex items-center gap-1 shrink-0 transition-colors ${
-                    col.rubricExpanded
+                    expandedRubricIds.has(col.id)
                       ? 'border-purple-700 bg-purple-600 hover:bg-purple-700 text-white'
                       : 'border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-900'
                   }`}
                 >
                   <LayoutGrid className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>
-                    {col.rubricExpanded
+                    {expandedRubricIds.has(col.id)
                       ? 'Plegar criterios'
                       : `Subcolumnas (${colRubric.criteria.length})`}
                   </span>

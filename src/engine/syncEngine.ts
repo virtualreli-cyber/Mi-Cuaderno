@@ -445,7 +445,6 @@ function mergeTab(
     return {
       ...c,
       width: localC.width,
-      ...(localC.rubricExpanded ? { rubricExpanded: true } : {}),
     };
   });
 
@@ -885,7 +884,6 @@ export function preserveDeviceLocalLayoutAndNav(
               ? {
                   ...rCol,
                   width: lCol.width,
-                  ...(lCol.rubricExpanded ? { rubricExpanded: true } : {}),
                 }
               : rCol;
           }),
