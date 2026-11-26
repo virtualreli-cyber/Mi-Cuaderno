@@ -5,6 +5,7 @@ import { useGradebook } from '../../context/GradebookContext';
 import { useDeviceProfile } from '../../hooks/useDeviceProfile';
 import type { ClassBook } from '../../types/gradebook';
 import { Modal } from '../common/Modal';
+import { NumericInput } from '../common/NumericInput';
 
 interface BookModalProps {
   open: boolean;
@@ -223,12 +224,11 @@ export const BookModal: React.FC<BookModalProps> = ({
 
           <div>
             <label className="block font-semibold text-slate-700 mb-1">Nota aprobado por defecto</label>
-            <input
-              type="number"
-              step="0.1"
+            <NumericInput
               value={passThreshold}
-              onChange={(e) => setPassThreshold(Number(e.target.value))}
-              className="w-full border border-slate-300 rounded-xl px-3 py-2 bg-white"
+              aria-label="Nota aprobado por defecto"
+              onChange={(val) => setPassThreshold(val)}
+              className="w-full border border-slate-300 rounded-xl px-3 py-2 bg-white tabular-nums"
             />
           </div>
         </div>

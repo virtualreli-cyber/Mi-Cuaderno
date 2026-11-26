@@ -936,12 +936,13 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
     el.style.height = 'auto';
     el.style.height = `${Math.min(200, Math.max(38, el.scrollHeight))}px`;
     el.focus({ preventScroll: true });
-    const pos =
-      typeof inlineEdit.cursorPos === 'number'
-        ? Math.max(0, Math.min(el.value.length, inlineEdit.cursorPos))
-        : el.value.length;
     try {
-      el.setSelectionRange(pos, pos);
+      if (typeof inlineEdit.cursorPos === 'number') {
+        const pos = Math.max(0, Math.min(el.value.length, inlineEdit.cursorPos));
+        el.setSelectionRange(pos, pos);
+      } else {
+        el.select();
+      }
     } catch {
       // ignore
     }
@@ -8093,6 +8094,9 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                     type="text"
                     autoFocus={colEntity.type !== 'RUBRIC'}
                     value={groupColGradeDraft}
+                    onFocus={(e) => {
+                      e.currentTarget.select();
+                    }}
                     onChange={(e) => setGroupColGradeDraft(e.target.value)}
                     placeholder="Ej: 8.5 buen trabajo"
                     className="flex-1 border border-slate-300 rounded-xl px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/25"

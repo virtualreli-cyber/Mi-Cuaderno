@@ -32,6 +32,7 @@ import type {
   ColumnType,
 } from '../../types/gradebook';
 import { Modal } from '../common/Modal';
+import { NumericInput } from '../common/NumericInput';
 import { TabColumnPicker } from '../common/TabColumnPicker';
 import { LomloeCompetenceBadge } from '../lomloe/LomloeCompetenceBadge';
 import { CopyConflictModal, type PendingCopyConflict } from './CopyConflictModal';
@@ -554,12 +555,12 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
                   <label className="font-semibold text-slate-700">
                     Puntos por pulsación:
                   </label>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={0.05}
-                    step="0.05"
+                    emptyValue={1}
                     value={counterStep}
-                    onChange={(e) => setCounterStep(Number(e.target.value))}
+                    aria-label="Puntos por pulsación"
+                    onChange={(val) => setCounterStep(val)}
                     className="w-20 border border-slate-300 rounded-lg px-2 py-1 bg-white font-bold tabular-nums text-center"
                   />
                   <div className="flex items-center gap-1">
@@ -697,22 +698,20 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             <div>
               <label className="block text-slate-600 mb-1">Mínimo</label>
-              <input
-                type="number"
-                step="0.5"
+              <NumericInput
                 value={minValue}
-                onChange={(e) => setMinValue(Number(e.target.value))}
-                className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white"
+                aria-label="Mínimo"
+                onChange={(val) => setMinValue(val)}
+                className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white tabular-nums"
               />
             </div>
             <div>
               <label className="block text-slate-600 mb-1">Máximo</label>
-              <input
-                type="number"
-                step="0.5"
+              <NumericInput
                 value={maxValue}
-                onChange={(e) => setMaxValue(Number(e.target.value))}
-                className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white"
+                aria-label="Máximo"
+                onChange={(val) => setMaxValue(val)}
+                className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white tabular-nums"
               />
             </div>
             <div>
@@ -730,12 +729,11 @@ export const ColumnModal: React.FC<ColumnModalProps> = ({
             </div>
             <div>
               <label className="block text-slate-600 mb-1">Aprobado en</label>
-              <input
-                type="number"
-                step="0.1"
+              <NumericInput
                 value={passThreshold}
-                onChange={(e) => setPassThreshold(Number(e.target.value))}
-                className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white"
+                aria-label="Aprobado en"
+                onChange={(val) => setPassThreshold(val)}
+                className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white tabular-nums"
               />
             </div>
           </div>

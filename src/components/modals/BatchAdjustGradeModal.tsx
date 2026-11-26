@@ -57,6 +57,7 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
   const [comment, setComment] = useState('');
   const [separator, setSeparator] = useState<CommentAppendSeparator>('NEWLINE');
   const [commentError, setCommentError] = useState(false);
+  const deltaSelectOnMouseUpRef = useRef(false);
   const commentRef = useRef<HTMLTextAreaElement>(null);
 
   const colMap = useMemo(() => new Map(columns.map((c) => [c.id, c])), [columns]);
@@ -195,6 +196,19 @@ export const BatchAdjustGradeModal: React.FC<BatchAdjustGradeModalProps> = ({
                 inputMode="decimal"
                 autoFocus
                 value={deltaDraft}
+                onFocus={(e) => {
+                  deltaSelectOnMouseUpRef.current = true;
+                  e.currentTarget.select();
+                }}
+                onMouseUp={(e) => {
+                  if (deltaSelectOnMouseUpRef.current) {
+                    e.preventDefault();
+                    deltaSelectOnMouseUpRef.current = false;
+                  }
+                }}
+                onKeyDown={() => {
+                  deltaSelectOnMouseUpRef.current = false;
+                }}
                 onChange={(e) => setDeltaDraft(e.target.value)}
                 placeholder="Ej: -1 o +0,5"
                 className="w-32 border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold text-slate-900 tabular-nums text-center bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"

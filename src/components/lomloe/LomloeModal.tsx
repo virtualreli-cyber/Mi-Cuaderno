@@ -32,6 +32,7 @@ import type {
   LomloeSpecificCompetence,
 } from '../../types/gradebook';
 import { Modal } from '../common/Modal';
+import { NumericInput } from '../common/NumericInput';
 import { LOMLOE_ICON_OPTIONS, LomloeCompetenceBadge } from './LomloeCompetenceBadge';
 
 interface LomloeModalProps {
@@ -696,17 +697,19 @@ export const LomloeModal: React.FC<LomloeModalProps> = ({ isOpen, onClose }) => 
                           <label className="block text-[10px] font-bold text-slate-400 uppercase">
                             Nº
                           </label>
-                          <input
-                            type="number"
+                          <NumericInput
+                            integer
                             min={1}
                             max={99}
+                            emptyValue={1}
                             value={kc.number}
-                            onChange={(e) =>
+                            aria-label={`Número de competencia ${kc.code}`}
+                            onChange={(val) =>
                               handleUpdateKeyCompetence(kc.id, {
-                                number: Number(e.target.value) || 1,
+                                number: val,
                               })
                             }
-                            className="w-full px-2 py-1 rounded-lg border border-slate-200 text-xs font-bold text-slate-900"
+                            className="w-full px-2 py-1 rounded-lg border border-slate-200 text-xs font-bold text-slate-900 tabular-nums"
                           />
                         </div>
                         <div className="col-span-3">

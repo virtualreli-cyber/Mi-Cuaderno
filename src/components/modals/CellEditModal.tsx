@@ -38,6 +38,7 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
   const [replaceOnFirstKey, setReplaceOnFirstKey] = useState(false);
   const [showTouchKeyboard, setShowTouchKeyboard] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const selectOnMouseUpRef = useRef(false);
   const commentRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -49,7 +50,15 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
     setComment(cell?.comment ?? '');
     setReplaceOnFirstKey(hasGrade);
     setShowTouchKeyboard(false);
-  }, [open, student, column, activeBook]);
+    if (!device.isTouch) {
+      requestAnimationFrame(() => {
+        const el = inputRef.current;
+        if (el && document.activeElement === el) {
+          el.select();
+        }
+      });
+    }
+  }, [open, student, column, activeBook, device.isTouch]);
 
   const focusDesktopInput = () => {
     if (!device.isTouch || showTouchKeyboard) {
@@ -424,6 +433,21 @@ export const CellEditModal: React.FC<CellEditModalProps> = ({
             readOnly={device.isTouch && !showTouchKeyboard}
             autoFocus={!device.isTouch}
             value={gradeStr}
+            onFocus={(e) => {
+              if (!device.isTouch || showTouchKeyboard) {
+                selectOnMouseUpRef.current = true;
+                e.currentTarget.select();
+              }
+            }}
+            onMouseUp={(e) => {
+              if (selectOnMouseUpRef.current) {
+                e.preventDefault();
+                selectOnMouseUpRef.current = false;
+              }
+            }}
+            onKeyDown={() => {
+              selectOnMouseUpRef.current = false;
+            }}
             onChange={(e) => {
               setReplaceOnFirstKey(false);
               setGradeStr(e.target.value);

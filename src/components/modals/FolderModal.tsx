@@ -21,6 +21,7 @@ import {
 import { getCanonicalItemOrder } from '../../engine/tabLayout';
 import type { ColorMode, FolderEntity, FolderSummaryMode } from '../../types/gradebook';
 import { Modal } from '../common/Modal';
+import { NumericInput } from '../common/NumericInput';
 import { CopyConflictModal, type PendingCopyConflict } from './CopyConflictModal';
 
 interface FolderModalProps {
@@ -343,18 +344,17 @@ export const FolderModal: React.FC<FolderModalProps> = ({ open, onClose, tabId, 
                     >
                       <span className="truncate font-medium text-slate-800">{c.title}</span>
                       <div className="flex items-center gap-1">
-                        <input
-                          type="number"
+                        <NumericInput
                           min={0}
-                          step="0.5"
                           value={weights[c.id] ?? 0}
-                          onChange={(e) =>
+                          aria-label={`Peso porcentual de ${c.title}`}
+                          onChange={(val) =>
                             setWeights((prev) => ({
                               ...prev,
-                              [c.id]: Math.max(0, Number(e.target.value)),
+                              [c.id]: val,
                             }))
                           }
-                          className="w-16 border border-slate-300 rounded px-2 py-1 text-right font-semibold"
+                          className="w-16 border border-slate-300 rounded px-2 py-1 text-right font-semibold tabular-nums"
                         />
                         <span>%</span>
                       </div>

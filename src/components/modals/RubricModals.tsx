@@ -1,5 +1,18 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronLeft, ChevronRight, Edit3, FileText, Plus, RotateCcw, Scale, Trash2, Users } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Edit3,
+  FileText,
+  GripVertical,
+  Plus,
+  RotateCcw,
+  Scale,
+  Trash2,
+  Users,
+} from 'lucide-react';
 import { getRubricLevelPastelColor } from '../../constants/colors';
 import { useGradebook } from '../../context/GradebookContext';
 import { getEducamosSnappedGrade, isCellOutdatedForEducamos } from '../../engine/educamos';
@@ -26,7 +39,9 @@ import {
   type RubricLevel,
   type StudentEntity,
 } from '../../types/gradebook';
+import { reorderArrayItem } from '../../utils/numericInput';
 import { Modal } from '../common/Modal';
+import { NumericInput } from '../common/NumericInput';
 import { usePinchZoom, ZoomControls } from '../common/ZoomControls';
 
 // ============================================================================
@@ -131,6 +146,7 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
   const [selectionModified, setSelectionModified] = useState(false);
   const [showManualInput, setShowManualInput] = useState(false);
   const [manualDraft, setManualDraft] = useState('');
+  const manualSelectOnMouseUpRef = useRef(false);
   const [touchedCriteriaIds, setTouchedCriteriaIds] = useState<Set<string>>(() => new Set());
   const [mixedCriteriaIds, setMixedCriteriaIds] = useState<Set<string>>(() => new Set());
   const [selectedBatchGroupName, setSelectedBatchGroupName] = useState<string>('');
@@ -578,8 +594,19 @@ export const RubricGraderModal: React.FC<RubricGraderModalProps> = ({
                 inputMode="decimal"
                 autoFocus
                 value={manualDraft}
+                onFocus={(e) => {
+                  manualSelectOnMouseUpRef.current = true;
+                  e.currentTarget.select();
+                }}
+                onMouseUp={(e) => {
+                  if (manualSelectOnMouseUpRef.current) {
+                    e.preventDefault();
+                    manualSelectOnMouseUpRef.current = false;
+                  }
+                }}
                 onChange={(e) => setManualDraft(e.target.value)}
                 onKeyDown={(e) => {
+                  manualSelectOnMouseUpRef.current = false;
                   if (e.key === 'Enter') {
                     e.preventDefault();
                     applyManualGrade();
@@ -819,7 +846,11 @@ export const RubricBuilderModal: React.FC<RubricBuilderModalProps> = ({ open, on
   const { workspace, saveRubric, deleteRubric, updateSettings } = useGradebook();
   const [editing, setEditing] = useState<RubricEntity | null>(null);
   const [showTextImport, setShowTextImport] = useState(false);
+  const [confirmDeleteRubric, setConfirmDeleteRubric] = useState<RubricEntity | null>(null);
+  const [draggingCritIdx, setDraggingCritIdx] = useState<number | null>(null);
+  const [dropTargetCritIdx, setDropTargetCritIdx] = useState<number | null>(null);
   const builderGridRef = useRef<HTMLDivElement>(null);
+  const criteriaTbodyRef = useRef<HTMLTableSectionElement>(null);
   const rubricZoom = workspace.settings.rubricZoom ?? 1;
   usePinchZoom(
     builderGridRef,
@@ -827,6 +858,85 @@ export const RubricBuilderModal: React.FC<RubricBuilderModalProps> = ({ open, on
     (z) => updateSettings({ rubricZoom: z }),
     { min: 0.6, max: 1.6, enabled: open && Boolean(editing) }
   );
+
+  useEffect(() => {
+    if (!open) {
+      setConfirmDeleteRubric(null);
+      setDraggingCritIdx(null);
+      setDropTargetCritIdx(null);
+    }
+  }, [open]);
+
+  const countRubricLinkedColumns = (rubricId: string): number => {
+    let count = 0;
+    const allBooks = [...workspace.classes, ...(workspace.templates ?? [])];
+    for (const book of allBooks) {
+      for (const tab of book.tabs) {
+        for (const col of tab.columns) {
+          if (col.type === 'RUBRIC' && col.rubricId === rubricId) {
+            count += 1;
+          }
+        }
+      }
+    }
+    return count;
+  };
+
+  const startCriterionDrag = (e: React.PointerEvent, fromIdx: number) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (!editing || editing.criteria.length <= 1) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    let currentTarget = fromIdx;
+    setDraggingCritIdx(fromIdx);
+    setDropTargetCritIdx(fromIdx);
+
+    const resolveTargetIndex = (clientY: number): number => {
+      const tbody = criteriaTbodyRef.current;
+      if (!tbody) return currentTarget;
+      const rows = Array.from(tbody.querySelectorAll<HTMLTableRowElement>('tr[data-rubric-crit-idx]'));
+      if (rows.length === 0) return currentTarget;
+      for (let i = 0; i < rows.length; i += 1) {
+        const rect = rows[i].getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        if (clientY < midY) {
+          return i;
+        }
+      }
+      return rows.length - 1;
+    };
+
+    const onPointerMove = (ev: PointerEvent) => {
+      const nextTarget = resolveTargetIndex(ev.clientY);
+      if (nextTarget !== currentTarget) {
+        currentTarget = nextTarget;
+        setDropTargetCritIdx(nextTarget);
+      }
+    };
+
+    const finishDrag = (commit: boolean) => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+      if (commit && currentTarget !== fromIdx) {
+        setEditing((prev) =>
+          prev
+            ? { ...prev, criteria: reorderArrayItem(prev.criteria, fromIdx, currentTarget) }
+            : null
+        );
+      }
+      setDraggingCritIdx(null);
+      setDropTargetCritIdx(null);
+    };
+
+    const onPointerUp = () => finishDrag(true);
+    const onPointerCancel = () => finishDrag(false);
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+  };
 
   const startNewRubric = () => {
     const l1 = makeId('lvl');
@@ -972,9 +1082,10 @@ export const RubricBuilderModal: React.FC<RubricBuilderModalProps> = ({ open, on
                 {workspace.rubrics.length > 1 && (
                   <button
                     type="button"
-                    onClick={() => deleteRubric(r.id)}
+                    onClick={() => setConfirmDeleteRubric(r)}
                     className="p-1.5 rounded-lg hover:bg-rose-50 text-rose-600"
-                    title="Eliminar"
+                    title="Eliminar rúbrica"
+                    aria-label={`Eliminar rúbrica ${r.title}`}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -997,20 +1108,18 @@ export const RubricBuilderModal: React.FC<RubricBuilderModalProps> = ({ open, on
             </div>
             <div>
               <label className="block font-semibold text-slate-700 mb-1">Nota Mín.</label>
-              <input
-                type="number"
+              <NumericInput
                 value={editing.minScore}
-                onChange={(e) => setEditing({ ...editing, minScore: Number(e.target.value) })}
-                className="w-full border border-slate-300 rounded-xl px-3 py-1.5 bg-white"
+                onChange={(val) => setEditing({ ...editing, minScore: val })}
+                className="w-full border border-slate-300 rounded-xl px-3 py-1.5 bg-white tabular-nums"
               />
             </div>
             <div>
               <label className="block font-semibold text-slate-700 mb-1">Nota Máx.</label>
-              <input
-                type="number"
+              <NumericInput
                 value={editing.maxScore}
-                onChange={(e) => setEditing({ ...editing, maxScore: Number(e.target.value) })}
-                className="w-full border border-slate-300 rounded-xl px-3 py-1.5 bg-white"
+                onChange={(val) => setEditing({ ...editing, maxScore: val })}
+                className="w-full border border-slate-300 rounded-xl px-3 py-1.5 bg-white tabular-nums"
               />
             </div>
           </div>
@@ -1111,14 +1220,14 @@ export const RubricBuilderModal: React.FC<RubricBuilderModalProps> = ({ open, on
                         className="w-full text-center font-bold bg-white/85 rounded px-1.5 py-0.5 mb-1 border border-black/10"
                       />
                       <div className="flex items-center justify-center gap-1">
-                        <input
-                          type="number"
+                        <NumericInput
                           min={0}
                           max={100}
                           value={lvl.percentage}
-                          onChange={(e) => {
+                          aria-label={`Porcentaje del nivel ${lvl.title}`}
+                          onChange={(val) => {
                             const levels = [...editing.levels];
-                            levels[lIdx] = { ...lvl, percentage: Number(e.target.value) };
+                            levels[lIdx] = { ...lvl, percentage: val };
                             setEditing({ ...editing, levels: recolorLevelsByRank(levels) });
                           }}
                           onBlur={() =>
@@ -1153,30 +1262,85 @@ export const RubricBuilderModal: React.FC<RubricBuilderModalProps> = ({ open, on
                   ))}
                 </tr>
               </thead>
-              <tbody>
-                {editing.criteria.map((crit, cIdx) => (
-                  <tr key={crit.id} className="border-b border-slate-200 last:border-b-0">
+              <tbody ref={criteriaTbodyRef}>
+                {editing.criteria.map((crit, cIdx) => {
+                  const isDraggingRow = draggingCritIdx === cIdx;
+                  const isDropTarget =
+                    draggingCritIdx !== null &&
+                    dropTargetCritIdx === cIdx &&
+                    dropTargetCritIdx !== draggingCritIdx;
+                  const dropEdgeClass = isDropTarget
+                    ? dropTargetCritIdx < draggingCritIdx
+                      ? 'shadow-[inset_0_3px_0_0_#2563eb]'
+                      : 'shadow-[inset_0_-3px_0_0_#2563eb]'
+                    : '';
+
+                  return (
+                  <tr
+                    key={crit.id}
+                    data-rubric-crit-idx={cIdx}
+                    className={`border-b border-slate-200 last:border-b-0 transition-opacity ${
+                      isDraggingRow ? 'opacity-50 bg-blue-50/60' : ''
+                    } ${dropEdgeClass}`}
+                  >
                     <td className="p-2 border-r border-slate-200 bg-slate-50/70 align-top space-y-1.5">
-                      <AutoGrowTextarea
-                        value={crit.title}
-                        onChange={(val) => {
-                          const criteria = [...editing.criteria];
-                          criteria[cIdx] = { ...crit, title: val };
-                          setEditing({ ...editing, criteria });
-                        }}
-                        placeholder="Nombre del criterio..."
-                        className="font-bold text-[1em] bg-white border border-slate-300 rounded px-2 py-1 focus:outline-none focus:border-blue-400"
-                      />
+                      <div className="flex items-start gap-1">
+                        {editing.criteria.length > 1 && (
+                          <button
+                            type="button"
+                            onPointerDown={(e) => startCriterionDrag(e, cIdx)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'ArrowUp' && cIdx > 0) {
+                                e.preventDefault();
+                                setEditing((prev) =>
+                                  prev
+                                    ? {
+                                        ...prev,
+                                        criteria: reorderArrayItem(prev.criteria, cIdx, cIdx - 1),
+                                      }
+                                    : null
+                                );
+                              } else if (e.key === 'ArrowDown' && cIdx < editing.criteria.length - 1) {
+                                e.preventDefault();
+                                setEditing((prev) =>
+                                  prev
+                                    ? {
+                                        ...prev,
+                                        criteria: reorderArrayItem(prev.criteria, cIdx, cIdx + 1),
+                                      }
+                                    : null
+                                );
+                              }
+                            }}
+                            style={{ touchAction: 'none' }}
+                            title="Arrastra para reordenar este criterio (o usa flechas ↑/↓)"
+                            aria-label={`Reordenar criterio ${crit.title || cIdx + 1}`}
+                            className="mt-1 p-1 -ml-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 cursor-grab active:cursor-grabbing shrink-0 select-none"
+                          >
+                            <GripVertical className="w-4 h-4" aria-hidden="true" />
+                          </button>
+                        )}
+                        <AutoGrowTextarea
+                          value={crit.title}
+                          onChange={(val) => {
+                            const criteria = [...editing.criteria];
+                            criteria[cIdx] = { ...crit, title: val };
+                            setEditing({ ...editing, criteria });
+                          }}
+                          placeholder="Nombre del criterio..."
+                          className="flex-1 min-w-0 font-bold text-[1em] bg-white border border-slate-300 rounded px-2 py-1 focus:outline-none focus:border-blue-400"
+                        />
+                      </div>
                       <div className="flex items-center justify-between gap-1">
                         <div className="flex items-center gap-1">
                           <span className="text-slate-500">Peso:</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             min={0}
                             value={crit.weight}
-                            onChange={(e) => {
+                            aria-label={`Peso porcentual de ${crit.title || `criterio ${cIdx + 1}`}`}
+                            onChange={(val) => {
                               const criteria = [...editing.criteria];
-                              criteria[cIdx] = { ...crit, weight: Number(e.target.value) };
+                              criteria[cIdx] = { ...crit, weight: val };
                               setEditing({ ...editing, criteria });
                             }}
                             className="w-14 bg-white border border-slate-300 rounded px-1.5 py-0.5 text-right tabular-nums"
@@ -1192,6 +1356,7 @@ export const RubricBuilderModal: React.FC<RubricBuilderModalProps> = ({ open, on
                                 criteria: editing.criteria.filter((x) => x.id !== crit.id),
                               })
                             }
+                            title="Eliminar criterio"
                             className="text-rose-600 p-1 hover:bg-rose-50 rounded"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -1221,7 +1386,8 @@ export const RubricBuilderModal: React.FC<RubricBuilderModalProps> = ({ open, on
                       );
                     })}
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1240,6 +1406,66 @@ export const RubricBuilderModal: React.FC<RubricBuilderModalProps> = ({ open, on
           setShowTextImport(false);
         }}
       />
+
+      <Modal
+        open={Boolean(confirmDeleteRubric)}
+        isNested
+        onClose={() => setConfirmDeleteRubric(null)}
+        title="Confirmar eliminación de rúbrica"
+        maxWidthClass="w-[min(460px,92vw)]"
+      >
+        {confirmDeleteRubric && (() => {
+          const linkedCols = countRubricLinkedColumns(confirmDeleteRubric.id);
+          return (
+            <div className="p-5 space-y-4 text-xs">
+              <div className="flex items-start gap-3">
+                <div className="p-2 rounded-xl bg-rose-100 text-rose-700 shrink-0">
+                  <AlertTriangle className="w-5 h-5" aria-hidden="true" />
+                </div>
+                <div className="space-y-1.5 min-w-0">
+                  <p className="text-sm font-bold text-slate-900 break-words">
+                    ¿Seguro que quieres eliminar la rúbrica «{confirmDeleteRubric.title}»?
+                  </p>
+                  <p className="text-slate-600 leading-relaxed">
+                    Contiene {confirmDeleteRubric.criteria.length}{' '}
+                    {confirmDeleteRubric.criteria.length === 1 ? 'criterio' : 'criterios'} y{' '}
+                    {confirmDeleteRubric.levels.length}{' '}
+                    {confirmDeleteRubric.levels.length === 1 ? 'nivel' : 'niveles'}. Esta acción no se puede deshacer.
+                  </p>
+                  {linkedCols > 0 && (
+                    <p className="px-2.5 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 font-semibold">
+                      Atención: esta rúbrica está vinculada actualmente a {linkedCols}{' '}
+                      {linkedCols === 1 ? 'columna' : 'columnas'} de tus clases o plantillas.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  autoFocus
+                  onClick={() => setConfirmDeleteRubric(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    deleteRubric(confirmDeleteRubric.id);
+                    setConfirmDeleteRubric(null);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Eliminar rúbrica</span>
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
     </Modal>
   );
 };

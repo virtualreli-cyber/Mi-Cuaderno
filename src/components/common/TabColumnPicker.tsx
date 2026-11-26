@@ -14,6 +14,7 @@ import {
 import { blendWithWhite } from '../../constants/colors';
 import { getCanonicalItemOrder } from '../../engine/tabLayout';
 import type { ColumnEntity, FolderEntity, TabEntity } from '../../types/gradebook';
+import { NumericInput } from './NumericInput';
 
 export interface TabColumnPickerProps {
   tabs: TabEntity[];
@@ -323,13 +324,11 @@ export const TabColumnPicker: React.FC<TabColumnPickerProps> = ({
 
         {checked && weights && onChangeWeight && (
           <div className="flex items-center gap-1 shrink-0">
-            <input
-              type="number"
+            <NumericInput
               min={0}
-              step="0.5"
               aria-label={`Peso porcentual de ${col.title}`}
               value={weights[col.id] ?? 0}
-              onChange={(e) => onChangeWeight(col.id, Math.max(0, Number(e.target.value)))}
+              onChange={(val) => onChangeWeight(col.id, val)}
               className="w-16 border border-blue-300 rounded-lg px-2 py-1 text-right font-bold text-slate-900 bg-white tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500/30"
             />
             <span className="text-slate-500 font-semibold">%</span>
@@ -589,15 +588,11 @@ export const TabColumnPicker: React.FC<TabColumnPickerProps> = ({
 
                           {allowFolders && folderChecked && weights && onChangeWeight && (
                             <div className="flex items-center gap-1 shrink-0">
-                              <input
-                                type="number"
+                              <NumericInput
                                 min={0}
-                                step="0.5"
                                 aria-label={`Peso porcentual de carpeta ${folder.title}`}
                                 value={weights[folder.id] ?? 0}
-                                onChange={(e) =>
-                                  onChangeWeight(folder.id, Math.max(0, Number(e.target.value)))
-                                }
+                                onChange={(val) => onChangeWeight(folder.id, val)}
                                 className="w-16 border border-blue-300 rounded-lg px-2 py-1 text-right font-bold text-slate-900 bg-white tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500/30"
                               />
                               <span className="text-slate-500 font-semibold">%</span>
