@@ -9,6 +9,7 @@ import {
   type StudentTagId,
 } from '../../constants/studentTags';
 import { useGradebook } from '../../context/GradebookContext';
+import { useDeviceProfile } from '../../hooks/useDeviceProfile';
 import { formatGrade, getEffectiveBookGroups, getStudentActiveGroup } from '../../engine/gradeMath';
 import { cellKey, type StudentEntity } from '../../types/gradebook';
 import { Modal } from '../common/Modal';
@@ -27,6 +28,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
   editingStudent,
   onOpenBulkStudents,
 }) => {
+  const device = useDeviceProfile();
   const { activeBook, addStudent, updateStudent, deleteStudent } = useGradebook();
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -106,7 +108,7 @@ export const StudentModal: React.FC<StudentModalProps> = ({
             <input
               type="text"
               required
-              autoFocus
+              autoFocus={!device.isTouch}
               value={firstName}
               onChange={(e) => setFirstName(e.target.value)}
               className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm bg-white"

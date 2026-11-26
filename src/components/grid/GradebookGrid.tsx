@@ -5386,7 +5386,10 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                               onPointerDown={(e) => e.stopPropagation()}
                               onTouchStart={(e) => e.stopPropagation()}
                               onTouchEnd={(e) => e.stopPropagation()}
-                              onClick={(e) => e.stopPropagation()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                e.currentTarget.focus();
+                              }}
                               onDoubleClick={(e) => e.stopPropagation()}
                               onFocus={(e) => {
                                 if (!device.isTouch) {
@@ -5431,7 +5434,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                                 }
                               }}
                               className={`flex-1 min-w-0 select-text rounded-lg border border-blue-500 bg-white text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/30 ${
-                                device.isTouch ? 'px-2.5 py-1 text-[14px]' : 'px-2 py-0.5 text-[0.95em]'
+                                device.isTouch ? 'px-2.5 py-1 text-base min-h-[30px]' : 'px-2 py-0.5 text-[0.95em]'
                               }`}
                             />
                             <button
@@ -5548,6 +5551,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                           </div>
                         )}
 
+                        {editingGroup?.key !== bucket.key && (
                         <div className="flex items-center gap-0.5 shrink-0">
                           {groupSummaryRows.length === 0 && (
                             <button
@@ -5585,6 +5589,7 @@ export const GradebookGrid: React.FC<GradebookGridProps> = ({
                             </button>
                           )}
                         </div>
+                        )}
                       </div>
                     </th>
 

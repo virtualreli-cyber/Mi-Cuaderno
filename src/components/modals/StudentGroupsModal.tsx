@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { GROUP_PASTEL_SWATCHES } from '../../constants/colors';
 import { useGradebook } from '../../context/GradebookContext';
+import { useDeviceProfile } from '../../hooks/useDeviceProfile';
 import {
   ensureGroupCategories,
   getEffectiveBookGroups,
@@ -29,6 +30,7 @@ interface StudentGroupsModalProps {
 }
 
 export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, onClose }) => {
+  const device = useDeviceProfile();
   const {
     activeBook,
     updateBook,
@@ -259,13 +261,21 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                   >
                     <input
                       type="text"
-                      autoFocus
+                      autoFocus={!device.isTouch}
+                      inputMode="text"
+                      enterKeyHint="done"
                       value={renameCatDraft}
                       onChange={(e) => setRenameCatDraft(e.target.value)}
                       onPointerDown={(e) => e.stopPropagation()}
                       onTouchStart={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.currentTarget.focus();
+                      }}
                       aria-label="Nombre de la categoría"
-                      className="w-36 min-h-[28px] select-text text-sm sm:text-xs font-semibold text-slate-900 bg-transparent focus:outline-none"
+                      className={`w-36 min-h-[34px] select-text font-semibold text-slate-900 bg-transparent focus:outline-none ${
+                        device.isTouch ? 'text-base' : 'text-xs'
+                      }`}
                     />
                     <button
                       type="submit"
@@ -344,14 +354,22 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
               >
                 <input
                   type="text"
-                  autoFocus
+                  autoFocus={!device.isTouch}
+                  inputMode="text"
+                  enterKeyHint="done"
                   value={newCatName}
                   onChange={(e) => setNewCatName(e.target.value)}
                   onPointerDown={(e) => e.stopPropagation()}
                   onTouchStart={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    e.currentTarget.focus();
+                  }}
                   placeholder="Ej: Proyecto, Mesas..."
                   aria-label="Nueva categoría"
-                  className="w-40 min-h-[28px] select-text text-sm sm:text-xs text-slate-900 bg-transparent focus:outline-none"
+                  className={`w-40 min-h-[34px] select-text text-slate-900 bg-transparent focus:outline-none ${
+                    device.isTouch ? 'text-base' : 'text-xs'
+                  }`}
                 />
                 <button
                   type="submit"
@@ -584,17 +602,25 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
             >
               <input
                 type="text"
+                inputMode="text"
+                enterKeyHint="done"
                 value={newGroupName}
                 onChange={(e) => setNewGroupName(e.target.value)}
                 onPointerDown={(e) => e.stopPropagation()}
                 onTouchStart={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.currentTarget.focus();
+                }}
                 placeholder={
                   selectedCount > 0
                     ? `Crear grupo nuevo y meter a los ${selectedCount} seleccionados...`
                     : 'Nuevo grupo (ej: Grupo 1, Mesa A, Equipo Azul)...'
                 }
                 aria-label="Nombre del nuevo grupo"
-                className="flex-1 min-w-[170px] min-h-[36px] select-text border border-slate-300 rounded-xl px-3 py-1.5 bg-white text-sm sm:text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/25"
+                className={`flex-1 min-w-[170px] min-h-[38px] select-text border border-slate-300 rounded-xl px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/25 ${
+                  device.isTouch ? 'text-base' : 'text-xs'
+                }`}
               />
               <div className="flex items-center gap-1">
                 {GROUP_PASTEL_SWATCHES.slice(0, 6).map((sw) => (
@@ -711,13 +737,21 @@ export const StudentGroupsModal: React.FC<StudentGroupsModalProps> = ({ open, on
                           >
                             <input
                               type="text"
-                              autoFocus
+                              autoFocus={!device.isTouch}
+                              inputMode="text"
+                              enterKeyHint="done"
                               value={editNameDraft}
                               onChange={(e) => setEditNameDraft(e.target.value)}
                               onPointerDown={(e) => e.stopPropagation()}
                               onTouchStart={(e) => e.stopPropagation()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                e.currentTarget.focus();
+                              }}
                               aria-label="Editar nombre del grupo"
-                              className="flex-1 min-w-[110px] min-h-[34px] select-text bg-white border border-slate-300 rounded-lg px-2.5 py-1 text-sm sm:text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/25"
+                              className={`flex-1 min-w-[120px] min-h-[38px] select-text bg-white border border-slate-300 rounded-lg px-2.5 py-1 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/25 ${
+                                device.isTouch ? 'text-base' : 'text-xs'
+                              }`}
                             />
                             <div className="flex items-center gap-0.5">
                               {GROUP_PASTEL_SWATCHES.slice(0, 6).map((sw) => (

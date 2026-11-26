@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Check, Copy, FolderPlus, Trash2 } from 'lucide-react';
 import { CLASS_ACCENT_SWATCHES, SCHOOL_DEFAULT_COLORS } from '../../constants/colors';
 import { useGradebook } from '../../context/GradebookContext';
+import { useDeviceProfile } from '../../hooks/useDeviceProfile';
 import type { ClassBook } from '../../types/gradebook';
 import { Modal } from '../common/Modal';
 
@@ -18,6 +19,7 @@ export const BookModal: React.FC<BookModalProps> = ({
   kind,
   editingBook,
 }) => {
+  const device = useDeviceProfile();
   const { createBook, updateBook, deleteBook, saveBookAsTemplate, workspace } = useGradebook();
   const [name, setName] = useState('');
   const [subject, setSubject] = useState('');
@@ -114,11 +116,13 @@ export const BookModal: React.FC<BookModalProps> = ({
           <input
             type="text"
             required
-            autoFocus
+            autoFocus={!device.isTouch}
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder={isTpl ? 'Ej: Evaluación Trimestral' : 'Ej: 2.º ESO B'}
-            className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+            className={`w-full border border-slate-300 rounded-xl px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 ${
+              device.isTouch ? 'text-base' : 'text-sm'
+            }`}
           />
         </div>
 
